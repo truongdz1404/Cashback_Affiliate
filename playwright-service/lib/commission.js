@@ -27,6 +27,22 @@ async function scrapeCommissionTable(page) {
 }
 
 /**
+ * The table paints from React state right after the API response lands, so
+ * a fixed sleep before scraping is usually much longer than needed. Poll
+ * instead - most calls find rows within one or two checks - but keep a cap
+ * as a safety net in case rendering is unusually slow.
+ */
+async function waitForCommissionTable(page, { pollMs = 150, maxMs = 1500 } = {}) {
+  const start = Date.now();
+  let table = await scrapeCommissionTable(page);
+  while (table.length === 0 && Date.now() - start < maxMs) {
+    await page.waitForTimeout(pollMs);
+    table = await scrapeCommissionTable(page);
+  }
+  return table;
+}
+
+/**
  * Loads the product offer page for `pid`, intercepts the
  * /api/v3/offer/product?item_id=<pid> XHR the page itself fires (so it's
  * always signed correctly by the site's own JS - no header spoofing needed),
@@ -46,8 +62,12 @@ async function getCommission(pid) {
       )
       .catch(() => null);
 
+    // 'commit' returns as soon as the (redirect-resolved) response headers
+    // arrive, instead of waiting for the SPA shell to finish parsing/painting
+    // - we don't need the DOM yet, just the URL (for the login check) and the
+    // XHR the app fires once its JS boots, which we're already awaiting below.
     await page.goto(`https://affiliate.shopee.vn/offer/product_offer/${pid}`, {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'commit',
       timeout: 30000,
     });
 
@@ -58,9 +78,7 @@ async function getCommission(pid) {
     const apiResponse = await apiResponsePromise;
     const productData = apiResponse ? await apiResponse.json().catch(() => null) : null;
 
-    // Give the client-rendered table a moment to paint after the API resolves.
-    await page.waitForTimeout(1000);
-    const commissionTable = await scrapeCommissionTable(page);
+    const commissionTable = await waitForCommissionTable(page);
 
     return { pid, product: productData, commissionTable };
   } finally {
