@@ -1,5 +1,7 @@
 const { getContext } = require('./browserManager');
 
+const ADDLIVETAG_API_URL = 'https://data.addlivetag.com/product-data/product-data.php';
+
 /**
  * Builds the "Mạng xã hội" commission row straight from the API response's
  * named commission_rate fields, instead of scraping the on-screen table by
@@ -28,6 +30,56 @@ function buildCommissionTable(productData) {
   ];
 }
 
+function formatPercent(n) {
+  if (n === null || n === undefined) return null;
+  const s = Number.isInteger(n) ? String(n) : String(n).replace('.', ',');
+  return `${s}%`;
+}
+
+function formatAmount(n) {
+  if (n === null || n === undefined) return null;
+  return `₫${Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+}
+
+/**
+ * data.addlivetag.com is a third-party service that holds its own
+ * authenticated Shopee affiliate session and re-exposes item_id ->
+ * commission lookups over a plain, unauthenticated JSON endpoint - no
+ * anti-fraud tokens needed on our side, no browser/page load required.
+ * Its numbers are cached up to 24h but matched our own Playwright-sourced
+ * numbers exactly on spot checks (same item_id, same rates/amounts).
+ *
+ * It's unofficial third-party infrastructure we don't control (could go
+ * down, change shape, or return stale data), so getCommissionViaBrowser
+ * below remains the fallback of record whenever this fails or returns
+ * unusable data.
+ */
+async function getCommissionViaApi(pid) {
+  const url = `${ADDLIVETAG_API_URL}?item_id=${encodeURIComponent(pid)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error(`addlivetag API status ${response.status}`);
+
+  const json = await response.json().catch(() => null);
+  const info = json && json.status === 'success' && json.productInfo;
+  if (!info) throw new Error('addlivetag API did not return productInfo');
+
+  const productData = {
+    code: 0,
+    msg: 'success',
+    data: {
+      item_id: String(info.itemId),
+      commission_rate: {
+        seller_commission_rate: formatPercent(info.sellerRatePercent),
+        seller_commission: formatAmount(info.sellerComFinal),
+        shopee_commission_rate: formatPercent(info.shopeeRatePercent),
+        shopee_commission: formatAmount(info.shopeeComFinal),
+      },
+    },
+  };
+
+  return { source: 'api', product: productData, commissionTable: buildCommissionTable(productData) };
+}
+
 /**
  * Loads the product offer page for `pid` and intercepts the
  * /api/v3/offer/product?item_id=<pid> XHR the page itself fires (so it's
@@ -39,9 +91,7 @@ function buildCommissionTable(productData) {
  * front-end JS computes fresh per page load, so a full navigation is
  * required here (confirmed empirically - see PR history).
  */
-async function getCommission(pid) {
-  if (!pid) throw new Error('pid is required');
-
+async function getCommissionViaBrowser(pid) {
   const context = await getContext();
   const page = await context.newPage();
 
@@ -69,10 +119,28 @@ async function getCommission(pid) {
     const apiResponse = await apiResponsePromise;
     const productData = apiResponse ? await apiResponse.json().catch(() => null) : null;
 
-    return { pid, product: productData, commissionTable: buildCommissionTable(productData) };
+    return { source: 'browser', product: productData, commissionTable: buildCommissionTable(productData) };
   } finally {
     await page.close();
   }
+}
+
+/**
+ * Looks up commission info for `pid`. Tries the fast third-party API first
+ * and only falls back to driving the real Shopee page if that fails (down,
+ * rate-limited, unrecognized pid, shape change, etc).
+ */
+async function getCommission(pid) {
+  if (!pid) throw new Error('pid is required');
+
+  let result;
+  try {
+    result = await getCommissionViaApi(pid);
+  } catch (err) {
+    result = await getCommissionViaBrowser(pid);
+  }
+
+  return { pid, ...result };
 }
 
 module.exports = { getCommission };
