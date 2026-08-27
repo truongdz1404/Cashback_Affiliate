@@ -1,4 +1,5 @@
 const db = require('../db');
+const { toCamel, toCamelList } = require('../camelize');
 
 function getOrCreateUserByZaloId(zaloUserId) {
   const existing = db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId);
@@ -39,16 +40,19 @@ function getPayment(zaloUserId) {
 }
 
 // Per-user commission_pct override (nullable). Null means "use the
-// system-wide default from lib/repositories/settings.js".
+// system-wide default from lib/repositories/settings.js". Admin-facing only
+// (unlike getById, which internal bot logic reads snake_case fields from) -
+// safe to camelize.
 function setCommissionPct(userId, pct) {
   db.prepare(
     "UPDATE users SET commission_pct = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(pct === null || pct === undefined ? null : Number(pct), userId);
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  return toCamel(db.prepare('SELECT * FROM users WHERE id = ?').get(userId));
 }
 
+// Admin-facing only - safe to camelize.
 function listAll() {
-  return db.prepare('SELECT * FROM users ORDER BY id DESC').all();
+  return toCamelList(db.prepare('SELECT * FROM users ORDER BY id DESC').all());
 }
 
 function getById(userId) {
@@ -56,7 +60,8 @@ function getById(userId) {
 }
 
 // Used by the admin dashboard's edit-in-place forms - any field left
-// undefined/null is left unchanged rather than cleared.
+// undefined/null is left unchanged rather than cleared. Admin-facing only -
+// safe to camelize.
 function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAccountHolder } = {}) {
   const current = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!current) return null;
@@ -69,7 +74,7 @@ function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAcc
        updated_at = datetime('now')
      WHERE id = ?`
   ).run(phone ?? null, bankName ?? null, bankAccountNumber ?? null, bankAccountHolder ?? null, userId);
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  return toCamel(db.prepare('SELECT * FROM users WHERE id = ?').get(userId));
 }
 
 module.exports = {

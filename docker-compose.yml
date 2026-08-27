@@ -19,6 +19,20 @@ services:
     networks:
       - shared_net
 
+  admin-web:
+    build: ./admin-web
+    container_name: shopee-affiliate-admin-web
+    restart: unless-stopped
+    ports:
+      - "4100:3000"
+    environment:
+      BACKEND_URL: http://shopee-affiliate:4000
+      BACKEND_API_KEY: ${SERVICE_API_KEY}
+    depends_on:
+      - shopee-affiliate
+    networks:
+      - shared_net
+
 networks:
   shared_net:
     external: true

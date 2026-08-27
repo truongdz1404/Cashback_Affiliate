@@ -1,4 +1,5 @@
 const db = require('../db');
+const { toCamel, toCamelList } = require('../camelize');
 
 function upsertOrder(order) {
   db.prepare(
@@ -25,7 +26,7 @@ function upsertOrder(order) {
     purchaseTime: order.purchaseTime ?? null,
     rawJson: order.rawJson ?? null,
   });
-  return db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order.orderSn);
+  return toCamel(db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order.orderSn));
 }
 
 function buildWhere({ payoutStatus, displayStatus } = {}) {
@@ -46,14 +47,16 @@ function buildWhere({ payoutStatus, displayStatus } = {}) {
 // show who an order belongs to without a second round trip per row.
 function listOrders({ limit = 50, offset = 0, payoutStatus, displayStatus } = {}) {
   const { where, params } = buildWhere({ payoutStatus, displayStatus });
-  return db
-    .prepare(
-      `SELECT o.*, u.zalo_user_id AS zaloUserId, u.phone AS userPhone
-       FROM orders o LEFT JOIN users u ON u.id = o.user_id
-       ${where}
-       ORDER BY o.id DESC LIMIT @limit OFFSET @offset`
-    )
-    .all({ ...params, limit, offset });
+  return toCamelList(
+    db
+      .prepare(
+        `SELECT o.*, u.zalo_user_id AS zaloUserId, u.phone AS userPhone
+         FROM orders o LEFT JOIN users u ON u.id = o.user_id
+         ${where}
+         ORDER BY o.id DESC LIMIT @limit OFFSET @offset`
+      )
+      .all({ ...params, limit, offset })
+  );
 }
 
 function countOrders({ payoutStatus, displayStatus } = {}) {
@@ -62,9 +65,9 @@ function countOrders({ payoutStatus, displayStatus } = {}) {
 }
 
 function listByUser(userId, { limit = 50, offset = 0 } = {}) {
-  return db
-    .prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?')
-    .all(userId, limit, offset);
+  return toCamelList(
+    db.prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?').all(userId, limit, offset)
+  );
 }
 
 // display_order_status: 1=Pending, 2=Completed, 3=Cancelled, 4=Unpaid.
@@ -121,7 +124,7 @@ function setPayoutStatus(orderId, paid) {
   db.prepare(
     "UPDATE orders SET payout_status = ?, paid_at = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(paid ? 'paid' : 'unpaid', paid ? new Date().toISOString() : null, orderId);
-  return db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+  return toCamel(db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId));
 }
 
 module.exports = {
