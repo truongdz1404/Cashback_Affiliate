@@ -84,6 +84,29 @@ app.use((req, res, next) => {
   next();
 });
 
+// One-off inspection endpoint used while building order reconciliation - hits
+// the report/list API with the already-logged-in session's cookies so the
+// real response shape (field names, pagination, order status codes) can be
+// confirmed before reconciliation.js is written against it.
+app.get('/debug/report-list', async (req, res) => {
+  try {
+    const context = await browserManager.getContext();
+    const cookies = await context.cookies();
+    const cookieHeader = cookies
+      .filter((c) => /shopee/i.test(c.domain))
+      .map((c) => `${c.name}=${c.value}`)
+      .join('; ');
+    const pageNum = req.query.page_num || 1;
+    const pageSize = req.query.page_size || 10;
+    const url = `https://affiliate.shopee.vn/api/v3/report/list?page_num=${pageNum}&page_size=${pageSize}`;
+    const response = await fetch(url, { headers: { cookie: cookieHeader, accept: 'application/json' } });
+    const json = await response.json().catch(() => null);
+    res.status(response.status).json(json);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.post('/login', async (req, res) => {
   try {
     const { cookies } = req.body;
