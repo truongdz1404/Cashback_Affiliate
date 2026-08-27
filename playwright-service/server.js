@@ -24,28 +24,15 @@ app.post('/zalo-webhook', (req, res) => {
 
   const secret = req.get('x-bot-api-secret-token');
   const expected = process.env.ZALO_WEBHOOK_SECRET;
-  console.log(
-    `zalo-webhook: hit, headers=${JSON.stringify(req.headers)}, secretMatch=${secret === expected}, ` +
-      `secretLen=${secret ? secret.length : 'none'}, expectedLen=${expected ? expected.length : 'none'}`
-  );
-  if (!expected || secret !== expected) {
-    console.log('zalo-webhook: rejected on secret check');
-    return;
-  }
+  if (!expected || secret !== expected) return;
 
-  const result = req.body && req.body.result;
-  console.log(`zalo-webhook: body=${JSON.stringify(req.body)}`);
-  if (!result || result.event_name !== 'message.text.received') {
-    console.log(`zalo-webhook: rejected on event_name check, got=${result && result.event_name}`);
-    return;
-  }
+  // Zalo posts the event at the top level of the body (no "result" wrapper).
+  const result = req.body;
+  if (!result || result.event_name !== 'message.text.received') return;
 
   const text = result.message && result.message.text;
   const chatId = result.message && result.message.chat && result.message.chat.id;
-  if (!chatId) {
-    console.log('zalo-webhook: rejected, missing chatId');
-    return;
-  }
+  if (!chatId) return;
 
   (async () => {
     const isNewUser = usersRepo.isNewUser(chatId);
