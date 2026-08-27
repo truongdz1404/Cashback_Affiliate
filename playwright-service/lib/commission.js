@@ -1,52 +1,37 @@
 const { getContext } = require('./browserManager');
 
 /**
- * Scrapes the visible commission table (Loại kênh / Hoa hồng Xtra /
- * Hoa hồng từ Shopee / Hoa hồng ước tính) as rendered on the page. This is a
- * supplement to the raw API payload - useful because the "ước tính" (₫)
- * column is already formatted/computed for the current price.
- *
- * NOTE: table markup has no stable class names on this dashboard. If this
- * stops returning rows, re-inspect with
- * `npx playwright codegen https://affiliate.shopee.vn/offer/product_offer/<pid>`
- * (logged in) and adjust the row/cell selector below.
+ * Builds the "Mạng xã hội" commission row straight from the API response's
+ * named commission_rate fields, instead of scraping the on-screen table by
+ * cell position. Verified against 3 live products (including two where Xtra
+ * and Shopee rates differ - 2%/7% and 8%/2,5%) that:
+ *   seller_commission_rate  -> "Hoa hồng Xtra" column
+ *   shopee_commission_rate  -> "Hoa hồng từ Shopee" column
+ * This also fixes a real bug the old DOM scrape had: when a product's Xtra
+ * rate is 0%, Shopee's UI drops that table column entirely, which shifted
+ * every cell after it and made the old positional read (cells[1]/cells[2])
+ * report the wrong number for the (common) 0%-Xtra case.
  */
-async function scrapeCommissionTable(page) {
-  return page.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll('table tr'));
-    return rows
-      .map((row) => Array.from(row.querySelectorAll('td')).map((td) => td.innerText.trim()))
-      .filter((cells) => cells.length >= 3)
-      .map((cells) => ({
-        channel: cells[0] || null,
-        xtraCommissionPct: cells[1] || null,
-        shopeeCommissionPct: cells[2] || null,
-        estimatedCommission: cells[3] || null,
-      }));
-  });
+function buildCommissionTable(productData) {
+  const cr = productData && productData.data && productData.data.commission_rate;
+  if (!cr) return [];
+
+  const combine = (pct, amount) => [pct, amount ? `(${amount})` : null].filter(Boolean).join(' ') || null;
+
+  return [
+    {
+      channel: 'Mạng xã hội',
+      xtraCommissionPct: combine(cr.seller_commission_rate, cr.seller_commission),
+      shopeeCommissionPct: combine(cr.shopee_commission_rate, cr.shopee_commission),
+      estimatedCommission: null,
+    },
+  ];
 }
 
 /**
- * The table paints from React state right after the API response lands, so
- * a fixed sleep before scraping is usually much longer than needed. Poll
- * instead - most calls find rows within one or two checks - but keep a cap
- * as a safety net in case rendering is unusually slow.
- */
-async function waitForCommissionTable(page, { pollMs = 150, maxMs = 1500 } = {}) {
-  const start = Date.now();
-  let table = await scrapeCommissionTable(page);
-  while (table.length === 0 && Date.now() - start < maxMs) {
-    await page.waitForTimeout(pollMs);
-    table = await scrapeCommissionTable(page);
-  }
-  return table;
-}
-
-/**
- * Loads the product offer page for `pid`, intercepts the
+ * Loads the product offer page for `pid` and intercepts the
  * /api/v3/offer/product?item_id=<pid> XHR the page itself fires (so it's
- * always signed correctly by the site's own JS - no header spoofing needed),
- * and combines it with the on-screen commission table.
+ * always signed correctly by the site's own JS - no header spoofing needed).
  */
 async function getCommission(pid) {
   if (!pid) throw new Error('pid is required');
@@ -78,9 +63,7 @@ async function getCommission(pid) {
     const apiResponse = await apiResponsePromise;
     const productData = apiResponse ? await apiResponse.json().catch(() => null) : null;
 
-    const commissionTable = await waitForCommissionTable(page);
-
-    return { pid, product: productData, commissionTable };
+    return { pid, product: productData, commissionTable: buildCommissionTable(productData) };
   } finally {
     await page.close();
   }
