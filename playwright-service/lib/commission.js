@@ -1,6 +1,4 @@
-const browserManager = require('./browserManager');
-
-const CLIENT_NAV_TIMEOUT = parseInt(process.env.COMMISSION_CLIENT_NAV_TIMEOUT_MS || '1500', 10);
+const { getContext } = require('./browserManager');
 
 /**
  * Scrapes the visible commission table (Loại kênh / Hoa hồng Xtra /
@@ -44,94 +42,47 @@ async function waitForCommissionTable(page, { pollMs = 150, maxMs = 1500 } = {})
   return table;
 }
 
-function waitForProductResponse(page, pid, timeout) {
-  return page
-    .waitForResponse(
-      (resp) => resp.url().includes(`/api/v3/offer/product`) && resp.url().includes(`item_id=${pid}`),
-      { timeout }
-    )
-    .catch(() => null);
-}
-
 /**
- * Fast path: grab an already-booted commission tab from the pool and ask
- * its client-side router to swap to this pid via pushState, skipping the
- * SPA boot (JS parse/execute + app-shell calls) a fresh page.goto always
- * pays. This isn't guaranteed to work - it depends on the dashboard's
- * router picking up a manually dispatched popstate - so it's bounded by a
- * short timeout and only trusted once we've actually seen the matching API
- * response come back, not just because the navigate call didn't throw.
+ * Loads the product offer page for `pid`, intercepts the
+ * /api/v3/offer/product?item_id=<pid> XHR the page itself fires (so it's
+ * always signed correctly by the site's own JS - no header spoofing needed),
+ * and combines it with the on-screen commission table.
  */
-async function tryClientSideNav(pid) {
-  let slot;
-  try {
-    slot = await browserManager.acquireCommissionSlot();
-  } catch {
-    return null;
-  }
-
-  const { page, release } = slot;
-  try {
-    const apiResponsePromise = waitForProductResponse(page, pid, CLIENT_NAV_TIMEOUT);
-    await page.evaluate((newPid) => {
-      window.history.pushState({}, '', `/offer/product_offer/${newPid}`);
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    }, pid);
-    const apiResponse = await apiResponsePromise;
-    if (!apiResponse) {
-      release();
-      return null;
-    }
-    return { page, apiResponse, release };
-  } catch {
-    release();
-    return null;
-  }
-}
-
-/**
- * Guaranteed-correct baseline: loads the product offer page for `pid` from
- * scratch and intercepts the /api/v3/offer/product?item_id=<pid> XHR the
- * page itself fires (so it's always signed correctly by the site's own JS -
- * no header spoofing needed).
- */
-async function loadViaFullNavigation(pid) {
-  const context = await browserManager.getContext();
-  const page = await context.newPage();
-
-  const apiResponsePromise = waitForProductResponse(page, pid, 20000);
-
-  // 'commit' returns as soon as the (redirect-resolved) response headers
-  // arrive, instead of waiting for the SPA shell to finish parsing/painting
-  // - we don't need the DOM yet, just the URL (for the login check) and the
-  // XHR the app fires once its JS boots, which we're already awaiting below.
-  await page.goto(`https://affiliate.shopee.vn/offer/product_offer/${pid}`, {
-    waitUntil: 'commit',
-    timeout: 30000,
-  });
-
-  const apiResponse = await apiResponsePromise;
-  return { page, apiResponse, release: null };
-}
-
 async function getCommission(pid) {
   if (!pid) throw new Error('pid is required');
 
-  const result = (await tryClientSideNav(pid)) || (await loadViaFullNavigation(pid));
-  const { page, apiResponse, release } = result;
+  const context = await getContext();
+  const page = await context.newPage();
 
   try {
+    const apiResponsePromise = page
+      .waitForResponse(
+        (resp) => resp.url().includes(`/api/v3/offer/product`) && resp.url().includes(`item_id=${pid}`),
+        { timeout: 20000 }
+      )
+      .catch(() => null);
+
+    // 'commit' returns as soon as the (redirect-resolved) response headers
+    // arrive, instead of waiting for the SPA shell to finish parsing/painting
+    // - we don't need the DOM yet, just the URL (for the login check) and the
+    // XHR the app fires once its JS boots, which we're already awaiting below.
+    await page.goto(`https://affiliate.shopee.vn/offer/product_offer/${pid}`, {
+      waitUntil: 'commit',
+      timeout: 30000,
+    });
+
     if (/passport|login/i.test(page.url())) {
       throw new Error('Not logged in - call POST /login with valid cookies first.');
     }
 
+    const apiResponse = await apiResponsePromise;
     const productData = apiResponse ? await apiResponse.json().catch(() => null) : null;
+
     const commissionTable = await waitForCommissionTable(page);
 
     return { pid, product: productData, commissionTable };
   } finally {
-    if (release) release();
-    else await page.close().catch(() => {});
+    await page.close();
   }
 }
 

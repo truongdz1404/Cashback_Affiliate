@@ -78,11 +78,10 @@ app.post('/link-and-commission', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Shopee affiliate Playwright service listening on http://localhost:${PORT}`);
-  // Pre-warm the custom-link and commission tab pools on boot if a session
-  // is already persisted on disk, so the very first request doesn't pay the
-  // cold-page cost either.
+  // Pre-warm the custom-link tab pool on boot if a session is already
+  // persisted on disk, so the very first request doesn't pay the cold-page
+  // cost either.
   browserManager.refillCustomLinkPool();
-  browserManager.warmCommissionSlots();
 });
 
 process.on('SIGTERM', async () => {
