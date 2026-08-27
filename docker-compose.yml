@@ -12,6 +12,8 @@ services:
       STORAGE_STATE_PATH: ./storage/storageState.json
       ZALO_BOT_TOKEN: ${ZALO_BOT_TOKEN}
       ZALO_WEBHOOK_SECRET: ${ZALO_WEBHOOK_SECRET}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
     volumes:
       - ./playwright-service/storage:/app/storage
     networks:
