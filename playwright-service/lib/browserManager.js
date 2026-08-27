@@ -180,51 +180,8 @@ async function checkStatus() {
   }
 }
 
-// EXPERIMENTAL: a single tab kept open+hydrated on the SPA so commission
-// lookups can be done via page.evaluate(fetch(...)) instead of page.goto(),
-// paying the SPA-boot navigation cost once instead of on every request. See
-// lib/commission.js#getCommissionViaFetch. Not wired into the main
-// /commission/:pid route yet - exposed only via the /debug endpoint for
-// side-by-side comparison against the goto-based implementation.
-let commissionFetchPage = null;
-
-async function getCommissionFetchPage() {
-  if (commissionFetchPage && !commissionFetchPage.isClosed()) return commissionFetchPage;
-  const c = await getContext();
-  commissionFetchPage = await c.newPage();
-  await commissionFetchPage.goto('https://affiliate.shopee.vn/offer/custom_link', {
-    waitUntil: 'domcontentloaded',
-    timeout: 30000,
-  });
-  return commissionFetchPage;
-}
-
-// EXPERIMENTAL: a single custom_link tab that is never closed/reopened -
-// every call re-fills the same textarea and clicks the same button, instead
-// of the pool's close-after-use + background-rewarm pattern. Tests whether
-// skipping even the background page.goto() (which the pool already hides
-// from the caller, but which still costs a real navigation somewhere) beats
-// the pool approach. See lib/customLink.js#getCustomLinksViaPersistentTab.
-let persistentCustomLinkPage = null;
-
-async function getPersistentCustomLinkPage() {
-  if (persistentCustomLinkPage && !persistentCustomLinkPage.isClosed()) return persistentCustomLinkPage;
-  const c = await getContext();
-  persistentCustomLinkPage = await c.newPage();
-  await persistentCustomLinkPage.goto(CUSTOM_LINK_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  return persistentCustomLinkPage;
-}
-
 async function shutdown() {
   await clearCustomLinkPool();
-  if (commissionFetchPage && !commissionFetchPage.isClosed()) {
-    await commissionFetchPage.close().catch(() => {});
-  }
-  commissionFetchPage = null;
-  if (persistentCustomLinkPage && !persistentCustomLinkPage.isClosed()) {
-    await persistentCustomLinkPage.close().catch(() => {});
-  }
-  persistentCustomLinkPage = null;
   if (context) await context.close().catch(() => {});
   if (browser) await browser.close().catch(() => {});
   context = null;
@@ -239,6 +196,4 @@ module.exports = {
   shutdown,
   acquireCustomLinkPage,
   refillCustomLinkPool,
-  getCommissionFetchPage,
-  getPersistentCustomLinkPage,
 };

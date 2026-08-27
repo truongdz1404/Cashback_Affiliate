@@ -1,5 +1,16 @@
 const browserManager = require('./browserManager');
 
+const BATCH_CUSTOM_LINK_URL = 'https://affiliate.shopee.vn/api/v3/gql?q=batchCustomLink';
+const BATCH_CUSTOM_LINK_QUERY = `
+  query batchGetCustomLink($linkParams: [CustomLinkParam!], $sourceCaller: SourceCaller) {
+    batchCustomLink(linkParams: $linkParams, sourceCaller: $sourceCaller) {
+      shortLink
+      longLink
+      failCode
+    }
+  }
+`;
+
 /**
  * Best-effort fill of the Sub_id1..Sub_id5 inputs. The dashboard is a
  * dynamic React app without stable class names, so we locate each field by
@@ -40,18 +51,82 @@ function extractShopAndItemId(longLink) {
   return { shopId: m ? m[1] : null, itemId: m ? m[2] : null };
 }
 
-async function extractResult(page, apiResponse) {
+function toResults(entries) {
+  return entries.map((e) => ({
+    shortLink: e.shortLink || null,
+    longLink: e.longLink || null,
+    failCode: e.failCode ?? null,
+    ...extractShopAndItemId(e.longLink),
+  }));
+}
+
+function buildBatchCustomLinkPayload(links, subIds = {}) {
+  return {
+    operationName: 'batchGetCustomLink',
+    query: BATCH_CUSTOM_LINK_QUERY,
+    variables: {
+      linkParams: links.slice(0, 5).map((link) => ({
+        originalLink: link,
+        advancedLinkParams: {
+          subId1: subIds.sub_id1 || '',
+          subId2: subIds.sub_id2 || '',
+          subId3: subIds.sub_id3 || '',
+          subId4: subIds.sub_id4 || '',
+          subId5: subIds.sub_id5 || '',
+        },
+      })),
+      sourceCaller: 'CUSTOM_LINK_CALLER',
+    },
+  };
+}
+
+/**
+ * batchCustomLink turns out not to require the af-ac-enc-* / x-sap-ri
+ * anti-fraud tokens that lib/commission.js's product-offer lookup needs
+ * (confirmed empirically: a plain fetch with just the session cookies
+ * consistently returns 200) - so link generation can skip the browser
+ * entirely and hit the GraphQL endpoint directly. This takes ~100-450ms
+ * versus the ~2-6s the Playwright/pool path pays for a full page load +
+ * button click + DOM wait.
+ */
+async function getCustomLinksViaFetch(links, subIds) {
+  const context = await browserManager.getContext();
+  const cookies = await context.cookies();
+  const cookieHeader = cookies
+    .filter((c) => /shopee/i.test(c.domain))
+    .map((c) => `${c.name}=${c.value}`)
+    .join('; ');
+
+  const response = await fetch(BATCH_CUSTOM_LINK_URL, {
+    method: 'POST',
+    headers: {
+      accept: '*/*',
+      'content-type': 'application/json',
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-site': 'same-origin',
+      'sec-ch-ua': '"Google Chrome";v="133", "Chromium";v="133", "Not)A;Brand";v="24"',
+      cookie: cookieHeader,
+    },
+    body: JSON.stringify(buildBatchCustomLinkPayload(links, subIds)),
+  });
+
+  const json = await response.json().catch(() => null);
+  const entries = json && json.data && json.data.batchCustomLink;
+  if (!Array.isArray(entries)) {
+    throw new Error(`batchCustomLink fetch did not return usable data (status ${response.status})`);
+  }
+
+  return { source: 'fetch', results: toResults(entries) };
+}
+
+async function extractResultFromPage(page, apiResponse) {
   if (apiResponse) {
     const json = await apiResponse.json().catch(() => null);
     const entries = json && json.data && json.data.batchCustomLink;
     if (Array.isArray(entries)) {
-      const results = entries.map((e) => ({
-        shortLink: e.shortLink || null,
-        longLink: e.longLink || null,
-        failCode: e.failCode ?? null,
-        ...extractShopAndItemId(e.longLink),
-      }));
-      return { source: 'api', results };
+      return { source: 'api', results: toResults(entries) };
     }
   }
 
@@ -74,15 +149,12 @@ async function extractResult(page, apiResponse) {
 }
 
 /**
- * Generates custom affiliate links for up to 5 product URLs.
- * @param {string[]} links product URLs, max 5 (matches the page's own limit)
- * @param {object} [subIds] e.g. { sub_id1: 'campaign_a' }
+ * Fallback path: drives the real custom_link page like a user would. Used
+ * only when getCustomLinksViaFetch() fails (e.g. Shopee starts requiring
+ * anti-fraud headers here too, or the session cookies are stale) so a
+ * transient issue with the fast path doesn't take the feature down.
  */
-async function getCustomLinks(links, subIds) {
-  if (!Array.isArray(links) || links.length === 0) {
-    throw new Error('links must be a non-empty array of product URLs (max 5)');
-  }
-
+async function getCustomLinksViaBrowser(links, subIds) {
   const page = await browserManager.acquireCustomLinkPage();
 
   try {
@@ -104,9 +176,7 @@ async function getCustomLinks(links, subIds) {
     await page.getByRole('button', { name: /Lấy link/i }).click();
 
     const apiResponse = await responsePromise;
-    const result = await extractResult(page, apiResponse);
-
-    return { links, subIds: subIds || null, ...result };
+    return await extractResultFromPage(page, apiResponse);
   } finally {
     // Single-use tab: pooled pages are meant to be consumed once (the
     // textarea/result state doesn't reset cleanly for reuse). Closing it and
@@ -118,51 +188,25 @@ async function getCustomLinks(links, subIds) {
 }
 
 /**
- * EXPERIMENTAL alternative to getCustomLinks(): reuses one never-closed
- * custom_link tab across every call instead of the pool's close-after-use +
- * background-rewarm pattern. `.fill()` clears an input before typing so the
- * stale textarea content isn't an issue; what's untested is whether the
- * page's *result* state (rendered under the button after a previous click)
- * interferes with the next run. Not wired into the main route; exposed only
- * via /debug for side-by-side timing/correctness comparison.
+ * Generates custom affiliate links for up to 5 product URLs. Tries the fast
+ * direct-fetch path first and only falls back to driving the real page if
+ * that fails.
+ * @param {string[]} links product URLs, max 5 (matches the page's own limit)
+ * @param {object} [subIds] e.g. { sub_id1: 'campaign_a' }
  */
-async function getCustomLinksViaPersistentTab(links, subIds) {
+async function getCustomLinks(links, subIds) {
   if (!Array.isArray(links) || links.length === 0) {
     throw new Error('links must be a non-empty array of product URLs (max 5)');
   }
 
-  const page = await browserManager.getPersistentCustomLinkPage();
-
-  if (/passport|login/i.test(page.url())) {
-    throw new Error('Not logged in - call POST /login with valid cookies first.');
+  let result;
+  try {
+    result = await getCustomLinksViaFetch(links, subIds);
+  } catch (err) {
+    result = await getCustomLinksViaBrowser(links, subIds);
   }
-
-  const textarea = page.locator('textarea').first();
-  await textarea.fill(links.slice(0, 5).join('\n'));
-
-  if (subIds) {
-    await fillSubIds(page, subIds);
-  }
-
-  const responsePromise = page
-    .waitForResponse((resp) => resp.url().includes('q=batchCustomLink'), { timeout: 15000 })
-    .catch(() => null);
-
-  await page.getByRole('button', { name: /Lấy link/i }).click();
-
-  const apiResponse = await responsePromise;
-  const result = await extractResult(page, apiResponse);
-
-  // The click above opens an ant-design result modal that overlays the page
-  // and intercepts pointer events; without closing it the *next* call's
-  // click on "Lấy link" times out waiting for the button to become clickable
-  // again (confirmed by an earlier test run). Escape first (cheapest), then
-  // fall back to the modal's own close button.
-  await page.keyboard.press('Escape').catch(() => {});
-  await page.locator('.ant-modal-close').first().click({ timeout: 2000 }).catch(() => {});
-  await page.locator('.ant-modal-wrap').first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
 
   return { links, subIds: subIds || null, ...result };
 }
 
-module.exports = { getCustomLinks, getCustomLinksViaPersistentTab };
+module.exports = { getCustomLinks };
