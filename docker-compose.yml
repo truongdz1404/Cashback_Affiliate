@@ -10,6 +10,8 @@ services:
       HEADLESS: "false"
       SERVICE_API_KEY: ${SERVICE_API_KEY}
       STORAGE_STATE_PATH: ./storage/storageState.json
+      ZALO_BOT_TOKEN: ${ZALO_BOT_TOKEN}
+      ZALO_WEBHOOK_SECRET: ${ZALO_WEBHOOK_SECRET}
     volumes:
       - ./playwright-service/storage:/app/storage
     networks:

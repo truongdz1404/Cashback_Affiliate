@@ -8,6 +8,14 @@ function getOrCreateUserByZaloId(zaloUserId) {
   return db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId);
 }
 
+// Used to decide whether to send the one-time welcome message - checked
+// (and the row created via getOrCreateUserByZaloId) before any command
+// handling runs, so a user's very first message is always caught regardless
+// of what it says (invalid command, plain text, etc).
+function isNewUser(zaloUserId) {
+  return !db.prepare('SELECT id FROM users WHERE zalo_user_id = ?').get(zaloUserId);
+}
+
 function updatePhone(zaloUserId, phone) {
   const user = getOrCreateUserByZaloId(zaloUserId);
   db.prepare(
@@ -30,4 +38,4 @@ function getPayment(zaloUserId) {
   return db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId) || null;
 }
 
-module.exports = { getOrCreateUserByZaloId, updatePhone, updatePayment, getPayment };
+module.exports = { getOrCreateUserByZaloId, updatePhone, updatePayment, getPayment, isNewUser };

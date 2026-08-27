@@ -6,6 +6,8 @@ const { getCommission } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
 const linkTracking = require('./lib/linkTracking');
 const usersRepo = require('./lib/repositories/users');
+const zaloBot = require('./lib/zaloBot');
+const zaloMessageHandler = require('./lib/zaloMessageHandler');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -13,8 +15,43 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 4000;
 const API_KEY = process.env.SERVICE_API_KEY;
 
-// Simple shared-secret auth so this service isn't wide open - n8n sends the
-// same key back on every HTTP Request node call (see n8n/shopee-affiliate-workflow.json).
+// Zalo calls this directly (its own secret token, not our x-api-key), so it
+// must be registered before the x-api-key middleware below. Ack immediately
+// (mirrors the old n8n webhook's responseMode "onReceived") and do the real
+// work after responding - Zalo doesn't wait around for a slow reply.
+app.post('/zalo-webhook', (req, res) => {
+  res.sendStatus(200);
+
+  const secret = req.get('x-bot-api-secret-token');
+  if (!process.env.ZALO_WEBHOOK_SECRET || secret !== process.env.ZALO_WEBHOOK_SECRET) return;
+
+  const result = req.body && req.body.result;
+  if (!result || result.event_name !== 'message.text.received') return;
+
+  const text = result.message && result.message.text;
+  const chatId = result.message && result.message.chat && result.message.chat.id;
+  if (!chatId) return;
+
+  (async () => {
+    const isNewUser = usersRepo.isNewUser(chatId);
+    usersRepo.getOrCreateUserByZaloId(chatId);
+    if (isNewUser) {
+      await zaloBot.sendMessage(chatId, zaloMessageHandler.WELCOME_TEXT).catch((err) => {
+        console.error('zalo-webhook: welcome send failed', err.message);
+      });
+    }
+
+    const replyText = await zaloMessageHandler.handleIncomingMessage(text, chatId);
+    await zaloBot.sendMessage(chatId, replyText);
+  })().catch((err) => {
+    console.error('zalo-webhook error', err.message);
+  });
+});
+
+// Simple shared-secret auth so this service isn't wide open to the rest of
+// the internet - every route below (aside from /zalo-webhook above, which
+// Zalo calls directly and authenticates via its own secret token) requires
+// this header.
 app.use((req, res, next) => {
   if (!API_KEY || API_KEY === 'change-me') {
     return res.status(500).json({ error: 'SERVICE_API_KEY is not configured on the server (.env)' });
