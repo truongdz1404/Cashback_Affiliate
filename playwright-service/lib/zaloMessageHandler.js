@@ -57,8 +57,11 @@ async function resolveFinalUrl(link) {
   }
 }
 
+// Shopee has used two URL shapes for the shop/item id pair: the older
+// "...-i.{shopId}.{itemId}" slug suffix, and the newer "/product/{shopId}/{itemId}"
+// path (what shortlinks like shp.ee currently redirect to).
 function extractItemId(url) {
-  const m = url.match(/i\.(\d+)\.(\d+)/);
+  const m = url.match(/i\.(\d+)\.(\d+)/) || url.match(/\/product\/(\d+)\/(\d+)(?:[/?]|$)/);
   return m ? m[2] : null;
 }
 
