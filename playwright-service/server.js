@@ -3,6 +3,7 @@ const express = require('express');
 const browserManager = require('./lib/browserManager');
 const { getCustomLinks } = require('./lib/customLink');
 const { getCommission } = require('./lib/commission');
+const { getLinkAndCommission } = require('./lib/linkAndCommission');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -61,8 +62,26 @@ app.get('/commission/:pid', async (req, res) => {
   }
 });
 
+// Custom link + commission in one call: the itemId used for the commission
+// lookup is read straight out of the custom-link response (see
+// lib/customLink.js), so the caller doesn't need to resolve a short link
+// into an itemId itself before calling this.
+app.post('/link-and-commission', async (req, res) => {
+  try {
+    const { links, subIds } = req.body;
+    const result = await getLinkAndCommission(links, subIds);
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Shopee affiliate Playwright service listening on http://localhost:${PORT}`);
+  // Pre-warm the custom-link tab pool on boot if a session is already
+  // persisted on disk, so the very first request doesn't pay the cold-page
+  // cost either.
+  browserManager.refillCustomLinkPool();
 });
 
 process.on('SIGTERM', async () => {

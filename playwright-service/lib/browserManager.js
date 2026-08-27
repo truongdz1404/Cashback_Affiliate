@@ -1,12 +1,67 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
+const { CUSTOM_LINK_URL } = require('./constants');
 
 const STORAGE_STATE_PATH = process.env.STORAGE_STATE_PATH || './storage/storageState.json';
 const HEADLESS = process.env.HEADLESS !== 'false';
+const CUSTOM_LINK_POOL_SIZE = parseInt(process.env.CUSTOM_LINK_POOL_SIZE || '2', 10);
 
 let browser = null;
 let context = null;
+
+// Pool of tabs already navigated (and hydrated) to the custom-link page, kept
+// logged in and idle. Popping one skips the ~5-8s SPA boot sequence (app
+// shell + user/profile/config calls) that a cold `page.goto()` pays every
+// time. Entries are Promises so concurrent acquires don't race on a
+// half-created page.
+let customLinkPagePool = [];
+
+function warmCustomLinkPage() {
+  return (async () => {
+    const c = await getContext();
+    const page = await c.newPage();
+    await page.goto(CUSTOM_LINK_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    return page;
+  })();
+}
+
+function refillCustomLinkPool() {
+  while (customLinkPagePool.length < CUSTOM_LINK_POOL_SIZE) {
+    const p = warmCustomLinkPage().catch((err) => {
+      console.error('[pool] failed to warm a custom-link page:', err.message);
+      return null;
+    });
+    customLinkPagePool.push(p);
+  }
+}
+
+async function clearCustomLinkPool() {
+  const pending = customLinkPagePool;
+  customLinkPagePool = [];
+  for (const p of pending) {
+    const page = await p.catch(() => null);
+    if (page && !page.isClosed()) await page.close().catch(() => {});
+  }
+}
+
+/**
+ * Hands the caller an already-loaded, already-authenticated custom-link tab.
+ * Falls back to a cold page if the pool is empty (e.g. right after startup
+ * or a login). The pool is topped back up in the background so it doesn't
+ * add latency to the caller.
+ */
+async function acquireCustomLinkPage() {
+  let page = null;
+  if (customLinkPagePool.length > 0) {
+    const p = customLinkPagePool.shift();
+    page = await p.catch(() => null);
+    if (page && page.isClosed()) page = null;
+  }
+  refillCustomLinkPool();
+  if (!page) page = await warmCustomLinkPage();
+  return page;
+}
 
 /**
  * Normalizes cookies coming from common browser-export formats
@@ -82,6 +137,7 @@ async function loginWithCookies(cookies) {
   const b = await getBrowser();
 
   // Start clean so stale/expired cookies from a previous session don't linger.
+  await clearCustomLinkPool();
   if (context) {
     await context.close().catch(() => {});
   }
@@ -105,6 +161,7 @@ async function loginWithCookies(cookies) {
 
   await page.close();
   await persistStorageState();
+  refillCustomLinkPool();
   return { loggedIn: true, url };
 }
 
@@ -124,6 +181,7 @@ async function checkStatus() {
 }
 
 async function shutdown() {
+  await clearCustomLinkPool();
   if (context) await context.close().catch(() => {});
   if (browser) await browser.close().catch(() => {});
   context = null;
@@ -136,4 +194,6 @@ module.exports = {
   checkStatus,
   persistStorageState,
   shutdown,
+  acquireCustomLinkPage,
+  refillCustomLinkPool,
 };

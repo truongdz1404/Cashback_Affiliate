@@ -1,6 +1,4 @@
-const { getContext } = require('./browserManager');
-
-const CUSTOM_LINK_URL = 'https://affiliate.shopee.vn/offer/custom_link';
+const browserManager = require('./browserManager');
 
 /**
  * Best-effort fill of the Sub_id1..Sub_id5 inputs. The dashboard is a
@@ -27,16 +25,35 @@ async function fillSubIds(page, subIds = {}) {
 }
 
 /**
- * Extracts generated links from the result area. Primary source is whatever
- * API response the "Lấy link" click triggers (robust to DOM changes);
- * fallback is scraping visible shortened-link text/anchors from the page.
+ * The "Lấy link" button fires `GET /api/v3/gql?q=batchCustomLink`, whose
+ * response embeds each result's `longLink` - a `.../universal-link/...-i.<shopId>.<itemId>?...`
+ * URL. That's the one place a shop/item id can be read straight out of the
+ * link-generation call, for short links (s.shopee.vn/shope.ee) included -
+ * no separate redirect-following step needed.
  */
+function extractShopAndItemId(longLink) {
+  if (!longLink) return { shopId: null, itemId: null };
+  const m = longLink.match(/i\.(\d+)\.(\d+)/);
+  return { shopId: m ? m[1] : null, itemId: m ? m[2] : null };
+}
+
 async function extractResult(page, apiResponse) {
   if (apiResponse) {
     const json = await apiResponse.json().catch(() => null);
-    if (json) return { source: 'api', data: json };
+    const entries = json && json.data && json.data.batchCustomLink;
+    if (Array.isArray(entries)) {
+      const results = entries.map((e) => ({
+        shortLink: e.shortLink || null,
+        longLink: e.longLink || null,
+        failCode: e.failCode ?? null,
+        ...extractShopAndItemId(e.longLink),
+      }));
+      return { source: 'api', results };
+    }
   }
 
+  // Fallback: scrape whatever shortened links are visible on screen. No
+  // itemId is recoverable this way, but at least the link itself isn't lost.
   await page.waitForTimeout(1500);
   const scraped = await page.evaluate(() => {
     const anchors = Array.from(document.querySelectorAll('a[href*="s.shopee"], a[href*="shope.ee"]'))
@@ -47,7 +64,10 @@ async function extractResult(page, apiResponse) {
     return Array.from(new Set([...anchors, ...texts]));
   });
 
-  return { source: 'dom', data: scraped };
+  return {
+    source: 'dom',
+    results: scraped.map((shortLink) => ({ shortLink, longLink: null, shopId: null, itemId: null, failCode: null })),
+  };
 }
 
 /**
@@ -60,12 +80,9 @@ async function getCustomLinks(links, subIds) {
     throw new Error('links must be a non-empty array of product URLs (max 5)');
   }
 
-  const context = await getContext();
-  const page = await context.newPage();
+  const page = await browserManager.acquireCustomLinkPage();
 
   try {
-    await page.goto(CUSTOM_LINK_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
     if (/passport|login/i.test(page.url())) {
       throw new Error('Not logged in - call POST /login with valid cookies first.');
     }
@@ -78,10 +95,7 @@ async function getCustomLinks(links, subIds) {
     }
 
     const responsePromise = page
-      .waitForResponse(
-        (resp) => resp.request().method() === 'POST' && /custom_link|short_link|generate/i.test(resp.url()),
-        { timeout: 15000 }
-      )
+      .waitForResponse((resp) => resp.url().includes('q=batchCustomLink'), { timeout: 15000 })
       .catch(() => null);
 
     await page.getByRole('button', { name: /Lấy link/i }).click();
@@ -91,7 +105,12 @@ async function getCustomLinks(links, subIds) {
 
     return { links, subIds: subIds || null, ...result };
   } finally {
-    await page.close();
+    // Single-use tab: pooled pages are meant to be consumed once (the
+    // textarea/result state doesn't reset cleanly for reuse). Closing it and
+    // letting the pool top itself back up in the background keeps the next
+    // caller fast too.
+    await page.close().catch(() => {});
+    browserManager.refillCustomLinkPool();
   }
 }
 
