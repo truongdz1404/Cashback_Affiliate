@@ -33,38 +33,6 @@ function findShopeeLink(text) {
   );
 }
 
-function isShortLink(link) {
-  let host;
-  try {
-    host = new URL(link).hostname.toLowerCase();
-  } catch (err) {
-    return false;
-  }
-  return /(?:^|\.)(?:shp\.ee|shope\.ee)$/.test(host) || /^s\.shopee\./.test(host);
-}
-
-// Short links (s.shopee.vn/shope.ee) redirect to the full product URL, which
-// is where the shop/item id lives - follow the redirect manually instead of
-// letting fetch chase it, so we can read the Location header directly.
-async function resolveFinalUrl(link) {
-  if (!isShortLink(link)) return link;
-  try {
-    const res = await fetch(link, { redirect: 'manual', signal: AbortSignal.timeout(10000) });
-    const loc = res.headers.get('location');
-    return loc || link;
-  } catch (err) {
-    return link;
-  }
-}
-
-// Shopee has used two URL shapes for the shop/item id pair: the older
-// "...-i.{shopId}.{itemId}" slug suffix, and the newer "/product/{shopId}/{itemId}"
-// path (what shortlinks like shp.ee currently redirect to).
-function extractItemId(url) {
-  const m = url.match(/i\.(\d+)\.(\d+)/) || url.match(/\/product\/(\d+)\/(\d+)(?:[/?]|$)/);
-  return m ? m[2] : null;
-}
-
 function formatProductReply(result) {
   const first = (result.results && result.results[0]) || null;
   const link = first ? first.shortLink || first.longLink : null;
@@ -87,14 +55,14 @@ async function handleProductLink(text, zaloUserId) {
   const foundLink = findShopeeLink(text);
   if (!foundLink) return NO_LINK_TEXT;
 
-  const finalUrl = await resolveFinalUrl(foundLink);
-  const itemId = extractItemId(finalUrl);
-  if (!itemId) return CANNOT_PARSE_TEXT;
-
+  // getLinkAndCommission resolves short links and extracts the itemId itself
+  // (see customLink.js) - no need to pre-resolve the redirect here.
   const tracking = linkTracking.prepareSubId(zaloUserId, null);
-  const result = await getLinkAndCommission([finalUrl], tracking.finalSubIds);
+  const result = await getLinkAndCommission([foundLink], tracking.finalSubIds);
+  if (!result.pid) return CANNOT_PARSE_TEXT;
+
   if (tracking.userId) {
-    linkTracking.recordLink(tracking.userId, tracking.subId, [finalUrl], result, result.pid);
+    linkTracking.recordLink(tracking.userId, tracking.subId, [foundLink], result, result.pid);
   }
   return formatProductReply(result);
 }

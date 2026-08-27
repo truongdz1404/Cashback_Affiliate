@@ -39,15 +39,16 @@ async function fillSubIds(page, subIds = {}) {
  * The "Lấy link" button fires `GET /api/v3/gql?q=batchCustomLink`, whose
  * response embeds each result's `longLink` - a URL that carries a shop/item
  * id straight out of the link-generation call, for short links
- * (s.shopee.vn/shope.ee) included - no separate redirect-following step
- * needed. Shopee renders that id in one of two shapes depending on the
- * product/link type:
+ * (s.shopee.vn/shope.ee/shp.ee) included - no separate redirect-following
+ * step needed. Shopee renders that id in one of a few shapes depending on
+ * the product/link type:
  *   .../universal-link/<slug>-i.<shopId>.<itemId>?...
  *   .../universal-link/product/<shopId>/<itemId>?...
+ *   .../universal-link/<any-slug>/<shopId>/<itemId>?...
  */
 function extractShopAndItemId(longLink) {
   if (!longLink) return { shopId: null, itemId: null };
-  const m = longLink.match(/i\.(\d+)\.(\d+)/) || longLink.match(/\/product\/(\d+)\/(\d+)/);
+  const m = longLink.match(/i\.(\d+)\.(\d+)/) || longLink.match(/\/(\d+)\/(\d+)(?:[/?]|$)/);
   return { shopId: m ? m[1] : null, itemId: m ? m[2] : null };
 }
 
