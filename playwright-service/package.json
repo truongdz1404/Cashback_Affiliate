@@ -1,0 +1,17 @@
+{
+  "name": "shopee-affiliate-playwright-service",
+  "version": "1.0.0",
+  "description": "Playwright microservice that logs into affiliate.shopee.vn via injected cookies, generates custom affiliate links, and scrapes commission data. Called from n8n over HTTP.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:xvfb": "bash scripts/start-xvfb.sh",
+    "postinstall": "playwright install chromium",
+    "seed-login": "node scripts/login-from-file.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.47.0"
+  }
+}

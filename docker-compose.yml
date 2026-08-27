@@ -1,0 +1,14 @@
+services:
+  shopee-affiliate:
+    build: ./playwright-service
+    container_name: shopee-affiliate
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      HEADLESS: "false"
+      SERVICE_API_KEY: ${SERVICE_API_KEY}
+      STORAGE_STATE_PATH: ./storage/storageState.json
+    volumes:
+      - ./playwright-service/storage:/app/storage
