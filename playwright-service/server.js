@@ -4,6 +4,8 @@ const browserManager = require('./lib/browserManager');
 const { getCustomLinks } = require('./lib/customLink');
 const { getCommission } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
+const linkTracking = require('./lib/linkTracking');
+const usersRepo = require('./lib/repositories/users');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -45,8 +47,12 @@ app.get('/status', async (_req, res) => {
 
 app.post('/custom-link', async (req, res) => {
   try {
-    const { links, subIds } = req.body;
-    const result = await getCustomLinks(links, subIds);
+    const { links, subIds, zaloUserId, itemId } = req.body;
+    const tracking = linkTracking.prepareSubId(zaloUserId, subIds);
+    const result = await getCustomLinks(links, tracking.finalSubIds);
+    if (tracking.userId) {
+      linkTracking.recordLink(tracking.userId, tracking.subId, links, result, itemId);
+    }
     res.json(result);
   } catch (err) {
     res.status(502).json({ error: err.message });
@@ -68,11 +74,50 @@ app.get('/commission/:pid', async (req, res) => {
 // into an itemId itself before calling this.
 app.post('/link-and-commission', async (req, res) => {
   try {
-    const { links, subIds } = req.body;
-    const result = await getLinkAndCommission(links, subIds);
+    const { links, subIds, zaloUserId } = req.body;
+    const tracking = linkTracking.prepareSubId(zaloUserId, subIds);
+    const result = await getLinkAndCommission(links, tracking.finalSubIds);
+    if (tracking.userId) {
+      linkTracking.recordLink(tracking.userId, tracking.subId, links, result, result.pid);
+    }
     res.json(result);
   } catch (err) {
     res.status(502).json({ error: err.message });
+  }
+});
+
+// --- User profile: phone (for refunds) + payment info (for payouts) ---
+
+app.post('/users/:zaloUserId/phone', (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'body.phone is required' });
+    const user = usersRepo.updatePhone(req.params.zaloUserId, phone);
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/users/:zaloUserId/payment', (req, res) => {
+  try {
+    const user = usersRepo.getPayment(req.params.zaloUserId);
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/users/:zaloUserId/payment', (req, res) => {
+  try {
+    const { bankName, accountNumber, accountHolder } = req.body;
+    if (!bankName || !accountNumber || !accountHolder) {
+      return res.status(400).json({ error: 'bankName, accountNumber, accountHolder are all required' });
+    }
+    const user = usersRepo.updatePayment(req.params.zaloUserId, { bankName, accountNumber, accountHolder });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

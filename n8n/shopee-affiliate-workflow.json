@@ -86,7 +86,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { \"links\": $('Webhook').item.json.body.links, \"subIds\": $('Webhook').item.json.body.subIds } }}",
+        "jsonBody": "={{ { \"links\": $('Webhook').item.json.body.links, \"subIds\": $('Webhook').item.json.body.subIds, \"zaloUserId\": $('Webhook').item.json.body.zaloUserId, \"itemId\": $('Webhook').item.json.body.pid } }}",
         "options": {}
       }
     },
@@ -129,6 +129,180 @@
         "responseBody": "={{$json}}",
         "options": {}
       }
+    },
+    {
+      "id": "n9",
+      "name": "User Profile Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 700],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "shopee-user-profile",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "n10",
+      "name": "Config (Profile)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [250, 700],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "serviceUrl", "value": "http://localhost:4000", "type": "string" },
+            { "id": "a2", "name": "apiKey", "value": "change-me", "type": "string" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n11",
+      "name": "Route Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [500, 700],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{$('User Profile Webhook').item.json.body.action}}",
+                    "rightValue": "set_phone",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "set_phone"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "r2",
+                    "leftValue": "={{$('User Profile Webhook').item.json.body.action}}",
+                    "rightValue": "set_payment",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "set_payment"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "r3",
+                    "leftValue": "={{$('User Profile Webhook').item.json.body.action}}",
+                    "rightValue": "get_payment",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "get_payment"
+            }
+          ]
+        },
+        "fallbackOutput": "extra",
+        "options": {}
+      }
+    },
+    {
+      "id": "n12",
+      "name": "Set Phone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config (Profile)').item.json.serviceUrl}}/users/{{$('User Profile Webhook').item.json.body.zaloUserId}}/phone",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "x-api-key", "value": "={{$('Config (Profile)').item.json.apiKey}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"phone\": $('User Profile Webhook').item.json.body.phone } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "n13",
+      "name": "Set Payment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 650],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config (Profile)').item.json.serviceUrl}}/users/{{$('User Profile Webhook').item.json.body.zaloUserId}}/payment",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "x-api-key", "value": "={{$('Config (Profile)').item.json.apiKey}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"bankName\": $('User Profile Webhook').item.json.body.bankName, \"accountNumber\": $('User Profile Webhook').item.json.body.accountNumber, \"accountHolder\": $('User Profile Webhook').item.json.body.accountHolder } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "n14",
+      "name": "Get Payment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 800],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$('Config (Profile)').item.json.serviceUrl}}/users/{{$('User Profile Webhook').item.json.body.zaloUserId}}/payment",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "x-api-key", "value": "={{$('Config (Profile)').item.json.apiKey}}" }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n15",
+      "name": "Unknown Action",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [750, 950],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "error", "value": "unknown action, expected set_phone|set_payment|get_payment", "type": "string" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n16",
+      "name": "Respond (Profile)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1000, 700],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      }
     }
   ],
   "connections": {
@@ -153,7 +327,21 @@
     },
     "Get Custom Link": { "main": [[{ "node": "Merge", "type": "main", "index": 0 }]] },
     "Get Commission": { "main": [[{ "node": "Merge", "type": "main", "index": 1 }]] },
-    "Merge": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+    "Merge": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] },
+    "User Profile Webhook": { "main": [[{ "node": "Config (Profile)", "type": "main", "index": 0 }]] },
+    "Config (Profile)": { "main": [[{ "node": "Route Action", "type": "main", "index": 0 }]] },
+    "Route Action": {
+      "main": [
+        [{ "node": "Set Phone", "type": "main", "index": 0 }],
+        [{ "node": "Set Payment", "type": "main", "index": 0 }],
+        [{ "node": "Get Payment", "type": "main", "index": 0 }],
+        [{ "node": "Unknown Action", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Phone": { "main": [[{ "node": "Respond (Profile)", "type": "main", "index": 0 }]] },
+    "Set Payment": { "main": [[{ "node": "Respond (Profile)", "type": "main", "index": 0 }]] },
+    "Get Payment": { "main": [[{ "node": "Respond (Profile)", "type": "main", "index": 0 }]] },
+    "Unknown Action": { "main": [[{ "node": "Respond (Profile)", "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": { "executionOrder": "v1" },

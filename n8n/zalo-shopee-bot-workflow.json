@@ -27,7 +27,8 @@
           "assignments": [
             { "id": "b1", "name": "botApiBase", "value": "https://bot-api.zaloplatforms.com/bot__REPLACE_BOT_TOKEN__", "type": "string" },
             { "id": "b2", "name": "webhookSecret", "value": "__REPLACE_WEBHOOK_SECRET__", "type": "string" },
-            { "id": "b3", "name": "shopeeWebhookUrl", "value": "https://n8n.tro247.online/webhook/shopee-affiliate", "type": "string" }
+            { "id": "b3", "name": "shopeeWebhookUrl", "value": "https://n8n.tro247.online/webhook/shopee-affiliate", "type": "string" },
+            { "id": "b4", "name": "userProfileWebhookUrl", "value": "https://n8n.tro247.online/webhook/shopee-user-profile", "type": "string" }
           ]
         },
         "options": {}
@@ -94,11 +95,33 @@
       }
     },
     {
+      "id": "z15",
+      "name": "Is Slash Command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1250, 220],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ ($json.text || '').startsWith('/') }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
       "id": "z6",
       "name": "Find Shopee Link",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1250, 220],
+      "position": [1500, 220],
       "parameters": {
         "jsCode": "const text = $json.text || '';\nconst m = text.match(/https?:\\/\\/(?:s\\.shopee\\.vn|shope\\.ee|shopee\\.vn)\\/[^\\s]+/i);\nconst foundLink = m ? m[0] : null;\nconst isShortLink = foundLink ? /s\\.shopee\\.vn|shope\\.ee/i.test(foundLink) : false;\nreturn [{ json: { ...$json, foundLink, isShortLink } }];"
       }
@@ -108,7 +131,7 @@
       "name": "Has Link?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [1500, 220],
+      "position": [1750, 220],
       "parameters": {
         "conditions": {
           "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
@@ -130,7 +153,7 @@
       "name": "Reply No Link",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1750, 60],
+      "position": [2000, 60],
       "parameters": {
         "method": "POST",
         "url": "={{$('Config').item.json.botApiBase}}/sendMessage",
@@ -145,7 +168,7 @@
       "name": "Resolve & Extract IDs",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1750, 300],
+      "position": [2000, 300],
       "parameters": {
         "jsCode": "const foundLink = $json.foundLink;\nlet finalUrl = foundLink;\n\nif (/s\\.shopee\\.vn|shope\\.ee/i.test(foundLink)) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'GET',\n      url: foundLink,\n      maxRedirects: 0,\n      returnFullResponse: true,\n    });\n    const loc = resp.headers && (resp.headers.location || resp.headers.Location);\n    if (loc) finalUrl = loc;\n  } catch (e) {\n    const loc = e.response && e.response.headers && (e.response.headers.location || e.response.headers.Location);\n    if (loc) finalUrl = loc;\n  }\n}\n\nconst m = finalUrl.match(/i\\.(\\d+)\\.(\\d+)/);\nreturn [{ json: { ...$json, finalUrl, shopId: m ? m[1] : null, itemId: m ? m[2] : null } }];"
       }
@@ -155,7 +178,7 @@
       "name": "Has ItemId?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [2000, 300],
+      "position": [2250, 300],
       "parameters": {
         "conditions": {
           "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
@@ -177,7 +200,7 @@
       "name": "Reply Cannot Parse",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2250, 460],
+      "position": [2500, 460],
       "parameters": {
         "method": "POST",
         "url": "={{$('Config').item.json.botApiBase}}/sendMessage",
@@ -192,13 +215,13 @@
       "name": "Call Shopee Affiliate",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2250, 220],
+      "position": [2500, 220],
       "parameters": {
         "method": "POST",
         "url": "={{$('Config').item.json.shopeeWebhookUrl}}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { \"links\": [ $json.finalUrl ], \"pid\": $json.itemId } }}",
+        "jsonBody": "={{ { \"links\": [ $json.finalUrl ], \"pid\": $json.itemId, \"zaloUserId\": $('Extract Message').item.json.chatId } }}",
         "options": {}
       }
     },
@@ -207,7 +230,7 @@
       "name": "Format Reply",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2500, 220],
+      "position": [2750, 220],
       "parameters": {
         "jsCode": "const data = $json;\nconst link = Array.isArray(data.data) ? data.data[0] : null;\nconst table = data.commissionTable || [];\nconst social = table.find(r => (r.channel || '').includes('Mạng xã hội')) || table[0] || {};\nconst lines = [];\nlines.push(link ? `🔗 Link Affiliate: ${link}` : '⚠️ Không tạo được link affiliate.');\nlines.push('');\nlines.push(`💰 Hoa hồng (Mạng xã hội): ${social.xtraCommissionPct || 'N/A'}`);\nlines.push(`📌 Tối đa: ${social.shopeeCommissionPct || 'N/A'}`);\nreturn [{ json: { replyText: lines.join('\\n') } }];"
       }
@@ -217,7 +240,7 @@
       "name": "Send Reply",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2750, 220],
+      "position": [3000, 300],
       "parameters": {
         "method": "POST",
         "url": "={{$('Config').item.json.botApiBase}}/sendMessage",
@@ -226,6 +249,63 @@
         "jsonBody": "={{ { \"chat_id\": $('Extract Message').item.json.chatId, \"text\": $json.replyText } }}",
         "options": {}
       }
+    },
+    {
+      "id": "z16",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 500],
+      "parameters": {
+        "jsCode": "const text = ($json.text || '').trim();\nconst zaloUserId = $json.chatId;\n\nfunction invalid(reason) {\n  return [{ json: { action: 'invalid', zaloUserId, invalidReason: reason } }];\n}\n\nif (/^\\/sdt\\b/i.test(text)) {\n  const parts = text.split(/\\s+/);\n  const phone = parts[1];\n  if (!phone || !/^0\\d{9,10}$/.test(phone)) {\n    return invalid('Cú pháp: /sdt 0901234567 (số điện thoại Việt Nam, bắt đầu bằng 0)');\n  }\n  return [{ json: { action: 'set_phone', zaloUserId, phone } }];\n}\n\nif (/^\\/thanhtoan\\b/i.test(text)) {\n  const rest = text.replace(/^\\/thanhtoan\\s*/i, '').trim();\n  if (!rest) {\n    return [{ json: { action: 'get_payment', zaloUserId } }];\n  }\n  const parts = rest.split(/\\s+/);\n  if (parts.length < 3) {\n    return invalid('Cú pháp: /thanhtoan <ngân hàng> <số tài khoản> <tên chủ tài khoản>\\nVí dụ: /thanhtoan Vietcombank 0071000123456 NGUYEN VAN A');\n  }\n  const bankName = parts[0];\n  const accountNumber = parts[1];\n  const accountHolder = parts.slice(2).join(' ');\n  return [{ json: { action: 'set_payment', zaloUserId, bankName, accountNumber, accountHolder } }];\n}\n\nreturn invalid('Lệnh không hợp lệ. Các lệnh hỗ trợ:\\n/sdt <số điện thoại>\\n/thanhtoan <ngân hàng> <số tài khoản> <tên chủ tài khoản>\\n/thanhtoan (xem thông tin đã lưu)');"
+      }
+    },
+    {
+      "id": "z17",
+      "name": "Command Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1750, 500],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.action !== 'invalid' }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "z18",
+      "name": "Call User Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 460],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.userProfileWebhookUrl}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "z20",
+      "name": "Format Profile Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 500],
+      "parameters": {
+        "jsCode": "const parseResult = $('Parse Command').item.json;\n\nif (parseResult.action === 'invalid') {\n  return [{ json: { replyText: parseResult.invalidReason } }];\n}\n\nconst data = $json;\n\nif (data.error) {\n  return [{ json: { replyText: `⚠️ Có lỗi xảy ra: ${data.error}` } }];\n}\n\nif (parseResult.action === 'set_phone') {\n  return [{ json: { replyText: `✅ Đã lưu số điện thoại ${data.phone} để hoàn tiền sau này.` } }];\n}\n\nif (parseResult.action === 'set_payment') {\n  return [{ json: { replyText: `✅ Đã lưu thông tin thanh toán:\\nNgân hàng: ${data.bank_name}\\nSố tài khoản: ${data.bank_account_number}\\nChủ tài khoản: ${data.bank_account_holder}` } }];\n}\n\nif (parseResult.action === 'get_payment') {\n  if (!data || (!data.bank_name && !data.bank_account_number)) {\n    return [{ json: { replyText: 'Bạn chưa cấu hình thông tin thanh toán.\\nDùng lệnh: /thanhtoan <ngân hàng> <số tài khoản> <tên chủ tài khoản>' } }];\n  }\n  return [{ json: { replyText: `💳 Thông tin thanh toán hiện tại:\\nNgân hàng: ${data.bank_name || 'N/A'}\\nSố tài khoản: ${data.bank_account_number || 'N/A'}\\nChủ tài khoản: ${data.bank_account_holder || 'N/A'}` } }];\n}\n\nreturn [{ json: { replyText: 'Đã xử lý lệnh.' } }];"
+      }
     }
   ],
   "connections": {
@@ -233,7 +313,13 @@
     "Config": { "main": [[{ "node": "Verify Secret", "type": "main", "index": 0 }]] },
     "Verify Secret": { "main": [[{ "node": "Is Text Message?", "type": "main", "index": 0 }], []] },
     "Is Text Message?": { "main": [[{ "node": "Extract Message", "type": "main", "index": 0 }], []] },
-    "Extract Message": { "main": [[{ "node": "Find Shopee Link", "type": "main", "index": 0 }]] },
+    "Extract Message": { "main": [[{ "node": "Is Slash Command?", "type": "main", "index": 0 }]] },
+    "Is Slash Command?": {
+      "main": [
+        [{ "node": "Parse Command", "type": "main", "index": 0 }],
+        [{ "node": "Find Shopee Link", "type": "main", "index": 0 }]
+      ]
+    },
     "Find Shopee Link": { "main": [[{ "node": "Has Link?", "type": "main", "index": 0 }]] },
     "Has Link?": {
       "main": [
@@ -249,7 +335,16 @@
       ]
     },
     "Call Shopee Affiliate": { "main": [[{ "node": "Format Reply", "type": "main", "index": 0 }]] },
-    "Format Reply": { "main": [[{ "node": "Send Reply", "type": "main", "index": 0 }]] }
+    "Format Reply": { "main": [[{ "node": "Send Reply", "type": "main", "index": 0 }]] },
+    "Parse Command": { "main": [[{ "node": "Command Valid?", "type": "main", "index": 0 }]] },
+    "Command Valid?": {
+      "main": [
+        [{ "node": "Call User Profile", "type": "main", "index": 0 }],
+        [{ "node": "Format Profile Reply", "type": "main", "index": 0 }]
+      ]
+    },
+    "Call User Profile": { "main": [[{ "node": "Format Profile Reply", "type": "main", "index": 0 }]] },
+    "Format Profile Reply": { "main": [[{ "node": "Send Reply", "type": "main", "index": 0 }]] }
   },
   "active": false,
   "settings": { "executionOrder": "v1" },
