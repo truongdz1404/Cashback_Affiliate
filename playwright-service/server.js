@@ -96,9 +96,8 @@ app.get('/debug/report-list', async (req, res) => {
       .filter((c) => /shopee/i.test(c.domain))
       .map((c) => `${c.name}=${c.value}`)
       .join('; ');
-    const pageNum = req.query.page_num || 1;
-    const pageSize = req.query.page_size || 10;
-    const url = `https://affiliate.shopee.vn/api/v3/report/list?page_num=${pageNum}&page_size=${pageSize}`;
+    const qs = new URLSearchParams({ page_num: 1, page_size: 10, ...req.query }).toString();
+    const url = `https://affiliate.shopee.vn/api/v3/report/list?${qs}`;
     const response = await fetch(url, { headers: { cookie: cookieHeader, accept: 'application/json' } });
     const json = await response.json().catch(() => null);
     res.status(response.status).json(json);
