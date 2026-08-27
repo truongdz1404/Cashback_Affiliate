@@ -1,6 +1,8 @@
 const { getLinkAndCommission } = require('./linkAndCommission');
 const { handleCommand } = require('./commands');
 const linkTracking = require('./linkTracking');
+const usersRepo = require('./repositories/users');
+const { getEffectivePct, splitAmount } = require('./commissionSplit');
 
 const WELCOME_TEXT =
   '👋 Chào bạn! Mình là bot tạo link mua hàng hoàn tiền Shopee.\n\n' +
@@ -59,7 +61,7 @@ function formatPct(n) {
   return `${s}%`;
 }
 
-function formatProductReply(result) {
+function formatProductReply(result, effectivePct) {
   const first = (result.results && result.results[0]) || null;
   const link = first ? first.shortLink || first.longLink : null;
   const table = (result.commission && result.commission.commissionTable) || [];
@@ -71,7 +73,16 @@ function formatProductReply(result) {
   if ((result.commission && result.commission.error) || social.totalAmount === null || social.totalAmount === undefined) {
     lines.push('⚠️ Không tra được số tiền hoàn cho sản phẩm này.');
   } else {
-    lines.push(`💰 Số tiền hoàn ước tính: ${formatAmount(social.totalAmount)} (${formatPct(social.totalPct)})`);
+    // Only the user's share (effectivePct% of the total commission Shopee
+    // pays) is ever shown to the end user - the rest is kept as the
+    // operator's cut, tracked separately once the order is reconciled.
+    const { userAmount } = splitAmount(social.totalAmount, effectivePct);
+    const userPct = social.totalPct === null || social.totalPct === undefined ? null : (social.totalPct * effectivePct) / 100;
+    lines.push(
+      userPct === null
+        ? `💰 Số tiền hoàn ước tính: ${formatAmount(userAmount)}`
+        : `💰 Số tiền hoàn ước tính: ${formatAmount(userAmount)} (${formatPct(userPct)})`
+    );
   }
   return lines.join('\n');
 }
@@ -89,7 +100,8 @@ async function handleProductLink(text, zaloUserId) {
   if (tracking.userId) {
     linkTracking.recordLink(tracking.userId, tracking.subId, [foundLink], result, result.pid);
   }
-  return formatProductReply(result);
+  const user = tracking.userId ? usersRepo.getById(tracking.userId) : null;
+  return formatProductReply(result, getEffectivePct(user));
 }
 
 // Returns the reply text for one incoming text message. Slash commands are

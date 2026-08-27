@@ -16,8 +16,14 @@ db.exec(`
     bank_name TEXT,
     bank_account_number TEXT,
     bank_account_holder TEXT,
+    commission_pct REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS links (
@@ -49,5 +55,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_orders_sub_id ON orders(sub_id);
   CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
 `);
+
+// CREATE TABLE IF NOT EXISTS doesn't add columns to a table that already
+// exists from before this column was introduced (e.g. the users table on
+// already-deployed installs) - patch it in by hand, once, if missing.
+const userColumns = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+if (!userColumns.includes('commission_pct')) {
+  db.exec('ALTER TABLE users ADD COLUMN commission_pct REAL');
+}
 
 module.exports = db;

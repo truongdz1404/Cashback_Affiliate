@@ -1,13 +1,18 @@
 require('dotenv').config();
 const express = require('express');
+const cron = require('node-cron');
 const browserManager = require('./lib/browserManager');
 const { getCustomLinks } = require('./lib/customLink');
 const { getCommission } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
 const linkTracking = require('./lib/linkTracking');
 const usersRepo = require('./lib/repositories/users');
+const ordersRepo = require('./lib/repositories/orders');
+const settingsRepo = require('./lib/repositories/settings');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
+const adminAuth = require('./lib/adminAuth');
+const { reconcileOrders } = require('./lib/reconciliation');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -202,12 +207,87 @@ app.post('/users/:zaloUserId/payment', (req, res) => {
   }
 });
 
+// --- Admin dashboard API: JWT-protected (see lib/adminAuth.js), sits behind
+// the shared x-api-key middleware above like everything else in this file -
+// the future admin-web app is expected to hold the api key server-side and
+// only hand the browser the short-lived JWT. ---
+
+app.post('/admin/login', (req, res) => {
+  try {
+    const { password } = req.body;
+    const expected = process.env.ADMIN_PASSWORD;
+    if (!expected || expected === 'change-me') {
+      return res.status(500).json({ error: 'ADMIN_PASSWORD is not configured on the server (.env)' });
+    }
+    if (password !== expected) {
+      return res.status(401).json({ error: 'invalid password' });
+    }
+    res.json({ token: adminAuth.issueToken() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/settings', adminAuth.requireAdmin, (_req, res) => {
+  res.json({ commissionPct: settingsRepo.getCommissionPct() });
+});
+
+app.put('/admin/settings', adminAuth.requireAdmin, (req, res) => {
+  const pct = Number(req.body.commissionPct);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return res.status(400).json({ error: 'body.commissionPct must be a number between 0 and 100' });
+  }
+  res.json({ commissionPct: settingsRepo.setCommissionPct(pct) });
+});
+
+app.get('/admin/users', adminAuth.requireAdmin, (_req, res) => {
+  res.json(usersRepo.listAll());
+});
+
+app.put('/admin/users/:id/commission-pct', adminAuth.requireAdmin, (req, res) => {
+  const { commissionPct } = req.body;
+  if (commissionPct !== null && commissionPct !== undefined) {
+    const pct = Number(commissionPct);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      return res.status(400).json({ error: 'body.commissionPct must be a number between 0 and 100, or null to clear the override' });
+    }
+  }
+  res.json(usersRepo.setCommissionPct(req.params.id, commissionPct));
+});
+
+app.get('/admin/orders', adminAuth.requireAdmin, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const offset = Number(req.query.offset) || 0;
+  res.json({ orders: ordersRepo.listOrders({ limit, offset }), total: ordersRepo.countOrders() });
+});
+
+app.get('/admin/stats', adminAuth.requireAdmin, (_req, res) => {
+  res.json(ordersRepo.statsSummary());
+});
+
+app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
+  try {
+    const result = await reconcileOrders();
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Shopee affiliate Playwright service listening on http://localhost:${PORT}`);
   // Pre-warm the custom-link tab pool on boot if a session is already
   // persisted on disk, so the very first request doesn't pay the cold-page
   // cost either.
   browserManager.refillCustomLinkPool();
+});
+
+// Order reconciliation, every 6 hours - also triggerable on demand via
+// POST /admin/reconcile.
+cron.schedule('0 */6 * * *', () => {
+  reconcileOrders()
+    .then((result) => console.log(`cron reconcile: ${JSON.stringify(result)}`))
+    .catch((err) => console.error('cron reconcile failed', err.message));
 });
 
 process.on('SIGTERM', async () => {

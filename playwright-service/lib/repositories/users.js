@@ -38,4 +38,30 @@ function getPayment(zaloUserId) {
   return db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId) || null;
 }
 
-module.exports = { getOrCreateUserByZaloId, updatePhone, updatePayment, getPayment, isNewUser };
+// Per-user commission_pct override (nullable). Null means "use the
+// system-wide default from lib/repositories/settings.js".
+function setCommissionPct(userId, pct) {
+  db.prepare(
+    "UPDATE users SET commission_pct = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(pct === null || pct === undefined ? null : Number(pct), userId);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+}
+
+function listAll() {
+  return db.prepare('SELECT * FROM users ORDER BY id DESC').all();
+}
+
+function getById(userId) {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId) || null;
+}
+
+module.exports = {
+  getOrCreateUserByZaloId,
+  updatePhone,
+  updatePayment,
+  getPayment,
+  isNewUser,
+  setCommissionPct,
+  listAll,
+  getById,
+};
