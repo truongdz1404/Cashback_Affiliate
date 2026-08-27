@@ -5,12 +5,20 @@ const linkTracking = require('./linkTracking');
 const WELCOME_TEXT =
   '👋 Chào bạn! Mình là bot tạo link mua hàng hoàn tiền Shopee.\n\n' +
   '📎 Gửi link sản phẩm Shopee bất kỳ để nhận link mua hàng hoàn tiền kèm số tiền hoàn ước tính.\n\n' +
+  '⚠️ Lưu ý khi dán link: Zalo hay tự tạo 1 thẻ xem trước (có hình ảnh, tên sản phẩm) ngay bên dưới link bạn vừa dán. ' +
+  'Trước khi bấm Gửi, bạn bấm dấu ✕ ở góc thẻ xem trước đó để xoá nó đi (chỉ xoá thẻ preview thôi, link chữ vẫn còn nguyên), ' +
+  'rồi mới gửi tin nhắn - nếu không, tin nhắn có thể bị lỗi và mình sẽ không nhận được link.\n\n' +
   'Các lệnh hỗ trợ:\n' +
   '/sdt <số điện thoại> - lưu SĐT để hoàn tiền khi cần\n' +
+  '   Ví dụ: /sdt 0901234567\n' +
   '/thanhtoan <ngân hàng> <số tài khoản> <tên chủ tài khoản> - lưu thông tin nhận hoa hồng\n' +
+  '   Ví dụ: /thanhtoan Vietcombank 0071000123456 NGUYEN VAN A\n' +
   '/thanhtoan - xem lại thông tin thanh toán đã lưu';
 
-const NO_LINK_TEXT = 'Vui lòng gửi link sản phẩm Shopee để mình tạo link mua hàng hoàn tiền nhé 🙂';
+const NO_LINK_TEXT =
+  'Vui lòng gửi link sản phẩm Shopee để mình tạo link mua hàng hoàn tiền nhé 🙂\n\n' +
+  '⚠️ Nếu bạn vừa dán link mà không thấy mình phản hồi đúng, có thể do Zalo đã tự tạo thẻ xem trước cho link đó - ' +
+  'bạn thử bấm dấu ✕ để xoá thẻ xem trước rồi gửi lại nhé.';
 const CANNOT_PARSE_TEXT =
   'Mình chưa nhận diện được sản phẩm từ link này, bạn thử gửi link đầy đủ (không phải link rút gọn) xem sao 🙏';
 

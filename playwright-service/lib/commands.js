@@ -3,7 +3,9 @@ const usersRepo = require('./repositories/users');
 const HELP_TEXT =
   'Lệnh không hợp lệ. Các lệnh hỗ trợ:\n' +
   '/sdt <số điện thoại>\n' +
+  '   Ví dụ: /sdt 0901234567\n' +
   '/thanhtoan <ngân hàng> <số tài khoản> <tên chủ tài khoản>\n' +
+  '   Ví dụ: /thanhtoan Vietcombank 0071000123456 NGUYEN VAN A\n' +
   '/thanhtoan (xem thông tin đã lưu)';
 
 function formatPaymentInfo(user) {
