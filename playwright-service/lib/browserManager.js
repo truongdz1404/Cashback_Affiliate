@@ -1,11 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
-const { CUSTOM_LINK_URL } = require('./constants');
+const { CUSTOM_LINK_URL, COMMISSION_BOOTSTRAP_URL } = require('./constants');
 
 const STORAGE_STATE_PATH = process.env.STORAGE_STATE_PATH || './storage/storageState.json';
 const HEADLESS = process.env.HEADLESS !== 'false';
 const CUSTOM_LINK_POOL_SIZE = parseInt(process.env.CUSTOM_LINK_POOL_SIZE || '2', 10);
+const COMMISSION_POOL_SIZE = parseInt(process.env.COMMISSION_POOL_SIZE || '2', 10);
 
 let browser = null;
 let context = null;
@@ -41,6 +42,83 @@ async function clearCustomLinkPool() {
   customLinkPagePool = [];
   for (const p of pending) {
     const page = await p.catch(() => null);
+    if (page && !page.isClosed()) await page.close().catch(() => {});
+  }
+}
+
+// A small set of tabs kept alive (not single-use) and already booted on the
+// product_offer SPA route, so a commission lookup can try swapping pid via
+// client-side routing instead of paying a full page reload's JS boot cost.
+// Each slot is guarded by a lock chain so concurrent lookups round-robin
+// across slots without ever fighting over the same tab.
+let commissionSlots = null;
+let commissionRoundRobin = -1;
+
+function initCommissionSlots() {
+  if (!commissionSlots) {
+    commissionSlots = Array.from({ length: COMMISSION_POOL_SIZE }, () => ({
+      pageP: null,
+      lock: Promise.resolve(),
+    }));
+  }
+  return commissionSlots;
+}
+
+async function bootCommissionPage() {
+  const c = await getContext();
+  const page = await c.newPage();
+  await page.goto(COMMISSION_BOOTSTRAP_URL, { waitUntil: 'commit', timeout: 30000 }).catch(() => {});
+  return page;
+}
+
+/**
+ * Hands the caller exclusive use of one already-booted commission tab.
+ * Always call the returned `release()` when done (even on error) to free
+ * the slot for the next waiter.
+ */
+function acquireCommissionSlot() {
+  const slots = initCommissionSlots();
+  if (slots.length === 0) return Promise.reject(new Error('commission pool disabled'));
+
+  commissionRoundRobin = (commissionRoundRobin + 1) % slots.length;
+  const slot = slots[commissionRoundRobin];
+
+  let releaseFn;
+  const prevLock = slot.lock;
+  slot.lock = new Promise((resolve) => {
+    releaseFn = resolve;
+  });
+
+  return prevLock.then(async () => {
+    if (!slot.pageP) slot.pageP = bootCommissionPage();
+    let page = await slot.pageP.catch(() => null);
+    if (!page || page.isClosed()) {
+      slot.pageP = bootCommissionPage();
+      page = await slot.pageP;
+    }
+    return { page, release: releaseFn };
+  });
+}
+
+/**
+ * Fires off the boot navigation for every commission slot up front (e.g. on
+ * process start) so the first live request doesn't pay that cost. Safe to
+ * call repeatedly - a slot that's already booted or booting is left alone.
+ */
+function warmCommissionSlots() {
+  const slots = initCommissionSlots();
+  for (const slot of slots) {
+    if (!slot.pageP) slot.pageP = bootCommissionPage();
+  }
+}
+
+async function clearCommissionSlots() {
+  const slots = commissionSlots;
+  commissionSlots = null;
+  if (!slots) return;
+  for (const slot of slots) {
+    if (!slot.pageP) continue;
+    const page = await slot.pageP.catch(() => null);
     if (page && !page.isClosed()) await page.close().catch(() => {});
   }
 }
@@ -138,6 +216,7 @@ async function loginWithCookies(cookies) {
 
   // Start clean so stale/expired cookies from a previous session don't linger.
   await clearCustomLinkPool();
+  await clearCommissionSlots();
   if (context) {
     await context.close().catch(() => {});
   }
@@ -162,6 +241,7 @@ async function loginWithCookies(cookies) {
   await page.close();
   await persistStorageState();
   refillCustomLinkPool();
+  warmCommissionSlots();
   return { loggedIn: true, url };
 }
 
@@ -182,6 +262,7 @@ async function checkStatus() {
 
 async function shutdown() {
   await clearCustomLinkPool();
+  await clearCommissionSlots();
   if (context) await context.close().catch(() => {});
   if (browser) await browser.close().catch(() => {});
   context = null;
@@ -196,4 +277,6 @@ module.exports = {
   shutdown,
   acquireCustomLinkPage,
   refillCustomLinkPool,
+  acquireCommissionSlot,
+  warmCommissionSlots,
 };
