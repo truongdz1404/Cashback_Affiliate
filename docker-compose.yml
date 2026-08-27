@@ -12,3 +12,9 @@ services:
       STORAGE_STATE_PATH: ./storage/storageState.json
     volumes:
       - ./playwright-service/storage:/app/storage
+    networks:
+      - shared_net
+
+networks:
+  shared_net:
+    external: true
