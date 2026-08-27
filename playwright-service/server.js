@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const browserManager = require('./lib/browserManager');
 const { getCustomLinks, getCustomLinksViaPersistentTab } = require('./lib/customLink');
-const { getCommission, getCommissionViaFetch } = require('./lib/commission');
+const { getCommission, getCommissionViaFetch, getCommissionRequestHeaders } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
 
 const app = express();
@@ -83,6 +83,15 @@ app.get('/debug/commission-fetch/:pid', async (req, res) => {
     const t0 = Date.now();
     const result = await getCommissionViaFetch(req.params.pid);
     res.json({ ...result, ms: Date.now() - t0 });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.get('/debug/commission-headers/:pid', async (req, res) => {
+  try {
+    const result = await getCommissionRequestHeaders(req.params.pid);
+    res.json(result);
   } catch (err) {
     res.status(502).json({ error: err.message });
   }

@@ -153,6 +153,15 @@ async function getCustomLinksViaPersistentTab(links, subIds) {
   const apiResponse = await responsePromise;
   const result = await extractResult(page, apiResponse);
 
+  // The click above opens an ant-design result modal that overlays the page
+  // and intercepts pointer events; without closing it the *next* call's
+  // click on "Lấy link" times out waiting for the button to become clickable
+  // again (confirmed by an earlier test run). Escape first (cheapest), then
+  // fall back to the modal's own close button.
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.locator('.ant-modal-close').first().click({ timeout: 2000 }).catch(() => {});
+  await page.locator('.ant-modal-wrap').first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+
   return { links, subIds: subIds || null, ...result };
 }
 
