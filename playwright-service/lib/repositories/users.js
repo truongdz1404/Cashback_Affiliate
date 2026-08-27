@@ -55,6 +55,23 @@ function getById(userId) {
   return db.prepare('SELECT * FROM users WHERE id = ?').get(userId) || null;
 }
 
+// Used by the admin dashboard's edit-in-place forms - any field left
+// undefined/null is left unchanged rather than cleared.
+function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAccountHolder } = {}) {
+  const current = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!current) return null;
+  db.prepare(
+    `UPDATE users SET
+       phone = COALESCE(?, phone),
+       bank_name = COALESCE(?, bank_name),
+       bank_account_number = COALESCE(?, bank_account_number),
+       bank_account_holder = COALESCE(?, bank_account_holder),
+       updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(phone ?? null, bankName ?? null, bankAccountNumber ?? null, bankAccountHolder ?? null, userId);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+}
+
 module.exports = {
   getOrCreateUserByZaloId,
   updatePhone,
@@ -64,4 +81,5 @@ module.exports = {
   setCommissionPct,
   listAll,
   getById,
+  updateProfileById,
 };

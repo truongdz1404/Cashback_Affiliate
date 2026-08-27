@@ -45,6 +45,8 @@ db.exec(`
     user_commission REAL,
     operator_commission REAL,
     display_order_status INTEGER,
+    payout_status TEXT NOT NULL DEFAULT 'unpaid',
+    paid_at TEXT,
     purchase_time TEXT,
     raw_json TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -62,6 +64,14 @@ db.exec(`
 const userColumns = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
 if (!userColumns.includes('commission_pct')) {
   db.exec('ALTER TABLE users ADD COLUMN commission_pct REAL');
+}
+
+const orderColumns = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
+if (!orderColumns.includes('payout_status')) {
+  db.exec("ALTER TABLE orders ADD COLUMN payout_status TEXT NOT NULL DEFAULT 'unpaid'");
+}
+if (!orderColumns.includes('paid_at')) {
+  db.exec('ALTER TABLE orders ADD COLUMN paid_at TEXT');
 }
 
 module.exports = db;

@@ -1,10 +1,11 @@
-const BOT_TOKEN = process.env.ZALO_BOT_TOKEN;
+const configStore = require('./configStore');
 
 function apiBase() {
-  if (!BOT_TOKEN || BOT_TOKEN === 'change-me') {
-    throw new Error('ZALO_BOT_TOKEN is not configured on the server (.env)');
+  const token = configStore.get('zaloBotToken');
+  if (!token) {
+    throw new Error('ZALO_BOT_TOKEN is not configured (.env or admin dashboard)');
   }
-  return `https://bot-api.zaloplatforms.com/bot${BOT_TOKEN}`;
+  return `https://bot-api.zaloplatforms.com/bot${token}`;
 }
 
 async function sendMessage(chatId, text) {

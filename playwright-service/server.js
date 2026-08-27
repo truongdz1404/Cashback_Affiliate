@@ -12,6 +12,7 @@ const settingsRepo = require('./lib/repositories/settings');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
 const adminAuth = require('./lib/adminAuth');
+const configStore = require('./lib/configStore');
 const { reconcileOrders } = require('./lib/reconciliation');
 
 const app = express();
@@ -28,7 +29,7 @@ app.post('/zalo-webhook', (req, res) => {
   res.sendStatus(200);
 
   const secret = req.get('x-bot-api-secret-token');
-  const expected = process.env.ZALO_WEBHOOK_SECRET;
+  const expected = configStore.get('zaloWebhookSecret');
   if (!expected || secret !== expected) return;
 
   // Zalo posts the event at the top level of the body (no "result" wrapper).
@@ -215,16 +216,74 @@ app.post('/users/:zaloUserId/payment', (req, res) => {
 app.post('/admin/login', (req, res) => {
   try {
     const { password } = req.body;
-    const expected = process.env.ADMIN_PASSWORD;
-    if (!expected || expected === 'change-me') {
-      return res.status(500).json({ error: 'ADMIN_PASSWORD is not configured on the server (.env)' });
-    }
-    if (password !== expected) {
+    if (!password) return res.status(400).json({ error: 'body.password is required' });
+    if (!adminAuth.checkAdminPassword(password)) {
       return res.status(401).json({ error: 'invalid password' });
     }
     res.json({ token: adminAuth.issueToken() });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/admin/password', adminAuth.requireAdmin, (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || String(newPassword).length < 8) {
+    return res.status(400).json({ error: 'body.newPassword is required and must be at least 8 characters' });
+  }
+  adminAuth.setAdminPassword(newPassword);
+  // Changing the password doesn't itself invalidate the JWT the caller is
+  // using right now, but re-issue one anyway for a consistent response shape
+  // with the other rotation endpoints below.
+  res.json({ ok: true, token: adminAuth.issueToken() });
+});
+
+// Live-editable secrets (Zalo bot token, Zalo webhook secret, admin JWT
+// secret) - see lib/configStore.js for why SERVICE_API_KEY is excluded.
+// Values are never returned in full, only masked, so the dashboard can show
+// "is this set" / "last 4 chars" without round-tripping the real secret.
+app.get('/admin/config', adminAuth.requireAdmin, (_req, res) => {
+  const out = {};
+  for (const key of Object.keys(configStore.KEYS)) {
+    out[key] = configStore.mask(configStore.get(key));
+  }
+  res.json(out);
+});
+
+app.put('/admin/config/:key', adminAuth.requireAdmin, (req, res) => {
+  const { key } = req.params;
+  const { value } = req.body;
+  if (!configStore.KEYS[key]) return res.status(400).json({ error: `unknown config key: ${key}` });
+  if (!value || typeof value !== 'string') return res.status(400).json({ error: 'body.value is required (string)' });
+
+  configStore.set(key, value);
+
+  const response = { ok: true, masked: configStore.mask(value) };
+  // Rotating the JWT secret invalidates the token the caller just used to
+  // authenticate this very request - hand back a fresh one so the dashboard
+  // can swap it in without forcing an immediate re-login.
+  if (key === 'jwtSecret') response.token = adminAuth.issueToken();
+  res.json(response);
+});
+
+// Shopee affiliate session (the cookie backing browserManager's logged-in
+// context) - wraps the existing /login and /status routes behind admin JWT
+// auth so the dashboard's browser side never needs the raw x-api-key.
+app.get('/admin/session-status', adminAuth.requireAdmin, async (_req, res) => {
+  try {
+    res.json(await browserManager.checkStatus());
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.post('/admin/session-cookie', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const { cookies } = req.body;
+    if (!cookies) return res.status(400).json({ error: 'body.cookies is required (string or array)' });
+    res.json(await browserManager.loginWithCookies(cookies));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
   }
 });
 
@@ -255,10 +314,35 @@ app.put('/admin/users/:id/commission-pct', adminAuth.requireAdmin, (req, res) =>
   res.json(usersRepo.setCommissionPct(req.params.id, commissionPct));
 });
 
+app.put('/admin/users/:id', adminAuth.requireAdmin, (req, res) => {
+  const { phone, bankName, bankAccountNumber, bankAccountHolder } = req.body;
+  const user = usersRepo.updateProfileById(req.params.id, { phone, bankName, bankAccountNumber, bankAccountHolder });
+  if (!user) return res.status(404).json({ error: 'user not found' });
+  res.json(user);
+});
+
+app.get('/admin/users/:id/orders', adminAuth.requireAdmin, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const offset = Number(req.query.offset) || 0;
+  res.json(ordersRepo.listByUser(req.params.id, { limit, offset }));
+});
+
+// Per-customer breakdown: paid vs unpaid completed orders/amounts, plus
+// orders still pending Shopee's own confirmation.
+app.get('/admin/customers', adminAuth.requireAdmin, (_req, res) => {
+  res.json(ordersRepo.customerSummary());
+});
+
 app.get('/admin/orders', adminAuth.requireAdmin, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
-  res.json({ orders: ordersRepo.listOrders({ limit, offset }), total: ordersRepo.countOrders() });
+  const { payoutStatus, displayStatus } = req.query;
+  const opts = { limit, offset, payoutStatus, displayStatus };
+  res.json({ orders: ordersRepo.listOrders(opts), total: ordersRepo.countOrders(opts) });
+});
+
+app.put('/admin/orders/:id/payout', adminAuth.requireAdmin, (req, res) => {
+  res.json(ordersRepo.setPayoutStatus(req.params.id, !!req.body.paid));
 });
 
 app.get('/admin/stats', adminAuth.requireAdmin, (_req, res) => {
