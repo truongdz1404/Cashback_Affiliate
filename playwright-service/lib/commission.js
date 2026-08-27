@@ -14,11 +14,38 @@ const ADDLIVETAG_API_URL = 'https://data.addlivetag.com/product-data/product-dat
  * every cell after it and made the old positional read (cells[1]/cells[2])
  * report the wrong number for the (common) 0%-Xtra case.
  */
+// Handles both a raw number (browser path may hand back one directly) and a
+// formatted VN string like "2,5%" or "₫5.100" (the API path's formatPercent/
+// formatAmount output, and apparently also what Shopee's own API returns for
+// the browser path) - strips the unit, then undoes VN grouping (`.` = thousands,
+// `,` = decimal) before parsing.
+function parseNumber(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return v;
+  const cleaned = String(v).replace(/[^\d,.-]/g, '');
+  if (!cleaned) return null;
+  const n = Number(cleaned.replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Shopee pays the "Hoa hồng từ Shopee" (base) and "Hoa hồng Xtra" (seller
+ * top-up) rates for the same order as one combined commission, not as
+ * alternatives - confirmed via Shopee's own affiliate commission model help
+ * article, whose worked example sums both (RM1 base + RM10 Xtra = RM11
+ * total). totalPct/totalAmount below is that sum, used for the single
+ * "estimated cashback" figure shown to end users.
+ */
 function buildCommissionTable(productData) {
   const cr = productData && productData.data && productData.data.commission_rate;
   if (!cr) return [];
 
   const combine = (pct, amount) => [pct, amount ? `(${amount})` : null].filter(Boolean).join(' ') || null;
+
+  const xtraPct = parseNumber(cr.seller_commission_rate);
+  const xtraAmount = parseNumber(cr.seller_commission);
+  const shopeePct = parseNumber(cr.shopee_commission_rate);
+  const shopeeAmount = parseNumber(cr.shopee_commission);
 
   return [
     {
@@ -26,6 +53,8 @@ function buildCommissionTable(productData) {
       xtraCommissionPct: combine(cr.seller_commission_rate, cr.seller_commission),
       shopeeCommissionPct: combine(cr.shopee_commission_rate, cr.shopee_commission),
       estimatedCommission: null,
+      totalPct: xtraPct === null && shopeePct === null ? null : (xtraPct || 0) + (shopeePct || 0),
+      totalAmount: xtraAmount === null && shopeeAmount === null ? null : (xtraAmount || 0) + (shopeeAmount || 0),
     },
   ];
 }

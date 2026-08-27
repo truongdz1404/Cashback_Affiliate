@@ -3,14 +3,14 @@ const { handleCommand } = require('./commands');
 const linkTracking = require('./linkTracking');
 
 const WELCOME_TEXT =
-  '👋 Chào bạn! Mình là bot tạo link affiliate Shopee.\n\n' +
-  '📎 Gửi link sản phẩm Shopee bất kỳ để nhận link affiliate kèm hoa hồng.\n\n' +
+  '👋 Chào bạn! Mình là bot tạo link mua hàng hoàn tiền Shopee.\n\n' +
+  '📎 Gửi link sản phẩm Shopee bất kỳ để nhận link mua hàng hoàn tiền kèm số tiền hoàn ước tính.\n\n' +
   'Các lệnh hỗ trợ:\n' +
   '/sdt <số điện thoại> - lưu SĐT để hoàn tiền khi cần\n' +
   '/thanhtoan <ngân hàng> <số tài khoản> <tên chủ tài khoản> - lưu thông tin nhận hoa hồng\n' +
   '/thanhtoan - xem lại thông tin thanh toán đã lưu';
 
-const NO_LINK_TEXT = 'Vui lòng gửi link sản phẩm Shopee để mình tạo link affiliate nhé 🙂';
+const NO_LINK_TEXT = 'Vui lòng gửi link sản phẩm Shopee để mình tạo link mua hàng hoàn tiền nhé 🙂';
 const CANNOT_PARSE_TEXT =
   'Mình chưa nhận diện được sản phẩm từ link này, bạn thử gửi link đầy đủ (không phải link rút gọn) xem sao 🙏';
 
@@ -33,6 +33,15 @@ function findShopeeLink(text) {
   );
 }
 
+function formatAmount(n) {
+  return `₫${Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+}
+
+function formatPct(n) {
+  const s = Number.isInteger(n) ? String(n) : String(n).replace('.', ',');
+  return `${s}%`;
+}
+
 function formatProductReply(result) {
   const first = (result.results && result.results[0]) || null;
   const link = first ? first.shortLink || first.longLink : null;
@@ -40,13 +49,12 @@ function formatProductReply(result) {
   const social = table.find((r) => (r.channel || '').includes('Mạng xã hội')) || table[0] || {};
 
   const lines = [];
-  lines.push(link ? `🔗 Link Affiliate: ${link}` : '⚠️ Không tạo được link affiliate.');
+  lines.push(link ? `🔗 Link mua hàng hoàn tiền: ${link}` : '⚠️ Không tạo được link mua hàng hoàn tiền.');
   lines.push('');
-  if (result.commission && result.commission.error) {
-    lines.push('⚠️ Không tra được hoa hồng cho sản phẩm này.');
+  if ((result.commission && result.commission.error) || social.totalAmount === null || social.totalAmount === undefined) {
+    lines.push('⚠️ Không tra được số tiền hoàn cho sản phẩm này.');
   } else {
-    lines.push(`💰 Hoa hồng (Mạng xã hội): ${social.xtraCommissionPct || 'N/A'}`);
-    lines.push(`📌 Tối đa: ${social.shopeeCommissionPct || 'N/A'}`);
+    lines.push(`💰 Số tiền hoàn ước tính: ${formatAmount(social.totalAmount)} (${formatPct(social.totalPct)})`);
   }
   return lines.join('\n');
 }
