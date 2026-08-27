@@ -13,7 +13,10 @@ ENV PORT=4000
 ENV HEADLESS=false
 EXPOSE 4000
 
-# xvfb-run gives Chromium a virtual display so HEADLESS=false works with no
+# Xvfb gives Chromium a virtual display so HEADLESS=false works with no
 # physical screen - this runs a real "headed" browser, not the headless flag
 # that Shopee Shield's WAF fingerprints (see README > Deploying on Linux).
-CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1920x1080x24", "node", "server.js"]
+# scripts/start-xvfb.sh starts Xvfb directly rather than via the `xvfb-run`
+# wrapper, which hangs forever waiting on a readiness signal that never
+# arrives when running as PID 1 in a container.
+CMD ["bash", "scripts/start-xvfb.sh"]
