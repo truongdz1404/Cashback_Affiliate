@@ -127,6 +127,27 @@ function setPayoutStatus(orderId, paid) {
   return toCamel(db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId));
 }
 
+// Wallet tab summary for one app user: paid/unpaid totals for completed
+// orders, still-pending count, and this-calendar-month paid total (for the
+// "earned this month" headline number).
+function summaryForUser(userId) {
+  return db
+    .prepare(
+      `SELECT
+         COUNT(*) FILTER (WHERE display_order_status = 2 AND payout_status = 'paid') AS paidOrders,
+         COALESCE(SUM(user_commission) FILTER (WHERE display_order_status = 2 AND payout_status = 'paid'), 0) AS paidAmount,
+         COUNT(*) FILTER (WHERE display_order_status = 2 AND payout_status = 'unpaid') AS unpaidOrders,
+         COALESCE(SUM(user_commission) FILTER (WHERE display_order_status = 2 AND payout_status = 'unpaid'), 0) AS unpaidAmount,
+         COUNT(*) FILTER (WHERE display_order_status = 1) AS pendingOrders,
+         COALESCE(SUM(user_commission) FILTER (
+           WHERE display_order_status = 2 AND payout_status = 'paid'
+           AND strftime('%Y-%m', paid_at) = strftime('%Y-%m', 'now')
+         ), 0) AS paidThisMonth
+       FROM orders WHERE user_id = ?`
+    )
+    .get(userId);
+}
+
 module.exports = {
   upsertOrder,
   listOrders,
@@ -135,4 +156,5 @@ module.exports = {
   statsSummary,
   customerSummary,
   setPayoutStatus,
+  summaryForUser,
 };

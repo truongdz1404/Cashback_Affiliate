@@ -74,6 +74,63 @@ function CommissionSection() {
   );
 }
 
+function ReferralRewardSection() {
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get("/api/settings");
+      setAmount(String(data.referralRewardAmount ?? ""));
+    } catch (err) {
+      setMsg(err.message || "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      await clientApi.put("/api/settings", { referralRewardAmount: Number(amount) });
+      setMsg("Đã lưu.");
+    } catch (err) {
+      setMsg(err.message || "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Thưởng giới thiệu bạn bè"
+      description="Số tiền cộng cho người giới thiệu khi bạn được mời hoàn tất đơn hàng đầu tiên."
+    >
+      <div className="flex items-center gap-2">
+        <input
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          className="w-32 rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+          placeholder="10000"
+        />
+        <span className="text-sm text-slate-500">đ</span>
+        <button
+          onClick={save}
+          disabled={saving || amount === ""}
+          className="rounded-lg bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+        >
+          Lưu
+        </button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-slate-500">{msg}</p>}
+    </SectionCard>
+  );
+}
+
 function SecretsSection() {
   const [config, setConfig] = useState(null);
   const [drafts, setDrafts] = useState({});
@@ -273,6 +330,7 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <h1 className="text-lg font-semibold text-slate-900">Cài đặt</h1>
       <CommissionSection />
+      <ReferralRewardSection />
       <SecretsSection />
       <SessionSection />
       <PasswordSection />

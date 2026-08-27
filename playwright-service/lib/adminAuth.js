@@ -1,24 +1,9 @@
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
 const db = require('./db');
 const configStore = require('./configStore');
+const passwordHash = require('./passwordHash');
 
 const ADMIN_PASSWORD_HASH_KEY = 'admin_password_hash';
-
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, stored) {
-  const [salt, hash] = stored.split(':');
-  if (!salt || !hash) return false;
-  const check = crypto.scryptSync(password, salt, 64).toString('hex');
-  const a = Buffer.from(hash, 'hex');
-  const b = Buffer.from(check, 'hex');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
 
 function storeAdminPasswordHash(hash) {
   db.prepare(
@@ -38,17 +23,17 @@ function getAdminPasswordHash() {
   if (!envPassword || envPassword === 'change-me') {
     throw new Error('ADMIN_PASSWORD is not configured on the server (.env) and no password has been set yet');
   }
-  const hash = hashPassword(envPassword);
+  const hash = passwordHash.hashPassword(envPassword);
   storeAdminPasswordHash(hash);
   return hash;
 }
 
 function checkAdminPassword(password) {
-  return verifyPassword(password, getAdminPasswordHash());
+  return passwordHash.verifyPassword(password, getAdminPasswordHash());
 }
 
 function setAdminPassword(newPassword) {
-  storeAdminPasswordHash(hashPassword(newPassword));
+  storeAdminPasswordHash(passwordHash.hashPassword(newPassword));
 }
 
 function getJwtSecret() {
@@ -60,14 +45,18 @@ function issueToken() {
 }
 
 // Protects /admin/* routes: expects "Authorization: Bearer <token>" from a
-// prior POST /admin/login.
+// prior POST /admin/login. Also checks the `role` claim, not just the
+// signature - the app-user JWTs issued by lib/appAuth.js share this same
+// jwtSecret, so without this check a logged-in app user's token would also
+// pass as an admin token.
 function requireAdmin(req, res, next) {
   const header = req.get('authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'missing Authorization: Bearer <token> header' });
 
   try {
-    jwt.verify(token, getJwtSecret());
+    const decoded = jwt.verify(token, getJwtSecret());
+    if (decoded.role !== 'admin') return res.status(403).json({ error: 'admin token required' });
     next();
   } catch (err) {
     res.status(401).json({ error: 'invalid or expired admin token' });

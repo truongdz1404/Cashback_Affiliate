@@ -8,6 +8,7 @@ const LINKS = [
   { href: "/", label: "Tổng quan" },
   { href: "/orders", label: "Đơn hàng" },
   { href: "/customers", label: "Khách hàng" },
+  { href: "/campaigns", label: "Sự kiện" },
   { href: "/settings", label: "Cài đặt" },
 ];
 

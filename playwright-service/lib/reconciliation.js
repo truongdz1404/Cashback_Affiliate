@@ -2,6 +2,8 @@ const browserManager = require('./browserManager');
 const linksRepo = require('./repositories/links');
 const ordersRepo = require('./repositories/orders');
 const usersRepo = require('./repositories/users');
+const campaignsRepo = require('./repositories/campaigns');
+const referralsRepo = require('./repositories/referrals');
 const { getEffectivePct, splitAmount } = require('./commissionSplit');
 
 const REPORT_LIST_URL = 'https://affiliate.shopee.vn/api/v3/report/list';
@@ -83,7 +85,7 @@ async function reconcileOrders({ extraParams = {} } = {}) {
       const effectivePct = getEffectivePct(user);
       const { userAmount, operatorAmount } = splitAmount(mapped.totalCommission, effectivePct);
 
-      ordersRepo.upsertOrder({
+      const savedOrder = ordersRepo.upsertOrder({
         orderSn: mapped.orderSn,
         userId: link ? link.user_id : null,
         subId: mapped.subId,
@@ -95,6 +97,15 @@ async function reconcileOrders({ extraParams = {} } = {}) {
         rawJson: JSON.stringify(entry),
       });
       upserted += 1;
+
+      // Campaign tiers and referral qualification only care about orders
+      // that actually completed (display_order_status 2) - both calls are
+      // idempotent (UNIQUE constraint / pending-only guard) so re-processing
+      // the same order on a later reconcile run is safe.
+      if (savedOrder.displayOrderStatus === 2 && savedOrder.userId) {
+        campaignsRepo.grantRewardsForUser(savedOrder.userId);
+        referralsRepo.qualifyIfEligible(savedOrder.userId);
+      }
     }
 
     if (list.length < PAGE_SIZE) break;

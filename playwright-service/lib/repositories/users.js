@@ -1,5 +1,7 @@
+const crypto = require('crypto');
 const db = require('../db');
 const { toCamel, toCamelList } = require('../camelize');
+const passwordHash = require('../passwordHash');
 
 function getOrCreateUserByZaloId(zaloUserId) {
   const existing = db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId);
@@ -77,6 +79,89 @@ function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAcc
   return toCamel(db.prepare('SELECT * FROM users WHERE id = ?').get(userId));
 }
 
+function findByPhone(phone) {
+  return db.prepare('SELECT * FROM users WHERE phone = ?').get(phone) || null;
+}
+
+function findByReferralCode(code) {
+  if (!code) return null;
+  return db.prepare('SELECT * FROM users WHERE referral_code = ?').get(code) || null;
+}
+
+// referral_code is generated lazily (on first need) rather than at row
+// creation time, so bot-created rows (which never call this) don't carry
+// dead codes. Collision retry is essentially never hit at this scale but
+// costs nothing to guard.
+function generateReferralCode() {
+  return crypto.randomBytes(4).toString('hex');
+}
+
+function ensureReferralCode(userId) {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!user) return null;
+  if (user.referral_code) return user.referral_code;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = generateReferralCode();
+    try {
+      db.prepare("UPDATE users SET referral_code = ?, updated_at = datetime('now') WHERE id = ?").run(code, userId);
+      return code;
+    } catch (err) {
+      if (!/UNIQUE/.test(err.message)) throw err;
+    }
+  }
+  throw new Error('could not generate a unique referral code');
+}
+
+// Registers a brand-new app user. Callers must have already checked the
+// phone isn't taken (see server.js POST /app/register) - this always
+// inserts a fresh row rather than merging into an existing bot-created one
+// (see mergeIntoExistingByPhone for that case). zalo_user_id is a synthetic
+// "app:<hex>" placeholder so it satisfies the existing UNIQUE NOT NULL
+// constraint without colliding with a real numeric Zalo ID.
+function createAppUser(phone, password, referredByUserId) {
+  const zaloUserId = `app:${crypto.randomBytes(8).toString('hex')}`;
+  const hash = passwordHash.hashPassword(password);
+  const result = db
+    .prepare(
+      `INSERT INTO users (zalo_user_id, phone, password_hash, referred_by_user_id)
+       VALUES (?, ?, ?, ?)`
+    )
+    .run(zaloUserId, phone, hash, referredByUserId ?? null);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
+}
+
+// Attaches app login to an existing bot-created row found by phone, so the
+// user inherits their prior order history instead of starting a fresh row.
+function setPassword(userId, password) {
+  const hash = passwordHash.hashPassword(password);
+  db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?").run(hash, userId);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+}
+
+function setReferredBy(userId, referredByUserId) {
+  db.prepare("UPDATE users SET referred_by_user_id = ?, updated_at = datetime('now') WHERE id = ?").run(
+    referredByUserId,
+    userId
+  );
+}
+
+function verifyLogin(phone, password) {
+  const user = findByPhone(phone);
+  if (!user || !user.password_hash) return null;
+  if (!passwordHash.verifyPassword(password, user.password_hash)) return null;
+  return user;
+}
+
+// App-facing responses must never leak password_hash - strip it after
+// camelizing rather than remembering to omit it at every call site.
+function toPublicAppUser(user) {
+  if (!user) return null;
+  const camelized = toCamel(user);
+  delete camelized.passwordHash;
+  return camelized;
+}
+
 module.exports = {
   getOrCreateUserByZaloId,
   updatePhone,
@@ -87,4 +172,12 @@ module.exports = {
   listAll,
   getById,
   updateProfileById,
+  findByPhone,
+  findByReferralCode,
+  ensureReferralCode,
+  createAppUser,
+  setPassword,
+  setReferredBy,
+  verifyLogin,
+  toPublicAppUser,
 };

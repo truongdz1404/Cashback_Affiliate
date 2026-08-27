@@ -9,11 +9,15 @@ const linkTracking = require('./lib/linkTracking');
 const usersRepo = require('./lib/repositories/users');
 const ordersRepo = require('./lib/repositories/orders');
 const settingsRepo = require('./lib/repositories/settings');
+const campaignsRepo = require('./lib/repositories/campaigns');
+const referralsRepo = require('./lib/repositories/referrals');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
 const adminAuth = require('./lib/adminAuth');
+const appAuth = require('./lib/appAuth');
 const configStore = require('./lib/configStore');
 const { reconcileOrders } = require('./lib/reconciliation');
+const { rateLimit } = require('./lib/simpleRateLimit');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -76,10 +80,146 @@ app.post('/zalo-webhook', (req, res) => {
   });
 });
 
+// --- Mobile app API: JWT-per-user auth (see lib/appAuth.js), registered
+// before the shared x-api-key middleware below like /zalo-webhook above -
+// the app ships as a public APK that could be decompiled, so it can't hold
+// a static shared secret. Every route here is either register/login (no
+// auth yet) or protected by appAuth.requireAppUser. ---
+
+app.post('/app/register', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }), (req, res) => {
+  try {
+    const { phone, password, referralCode } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: 'phone and password are required' });
+    if (String(password).length < 6) {
+      return res.status(400).json({ error: 'password must be at least 6 characters' });
+    }
+
+    let referrer = null;
+    if (referralCode) {
+      referrer = usersRepo.findByReferralCode(referralCode);
+      if (!referrer) return res.status(400).json({ error: 'invalid referral code' });
+    }
+
+    let user = usersRepo.findByPhone(phone);
+    if (user && user.password_hash) {
+      return res.status(409).json({ error: 'phone already registered' });
+    }
+
+    if (user) {
+      // Existing bot-created row (from /sdt via Zalo) - attach app login to
+      // it instead of creating a duplicate row, so order history carries over.
+      user = usersRepo.setPassword(user.id, password);
+      if (referrer && referrer.id !== user.id && !user.referred_by_user_id) {
+        usersRepo.setReferredBy(user.id, referrer.id);
+        user = usersRepo.getById(user.id);
+      }
+    } else {
+      user = usersRepo.createAppUser(phone, password, referrer ? referrer.id : null);
+    }
+
+    if (referrer && referrer.id !== user.id && !referralsRepo.findByReferredUser(user.id)) {
+      referralsRepo.create(referrer.id, user.id);
+    }
+
+    res.json({ token: appAuth.issueAppToken(user.id), user: usersRepo.toPublicAppUser(user) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/app/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }), (req, res) => {
+  try {
+    const { phone, password } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: 'phone and password are required' });
+    const user = usersRepo.verifyLogin(phone, password);
+    if (!user) return res.status(401).json({ error: 'invalid phone or password' });
+    res.json({ token: appAuth.issueAppToken(user.id), user: usersRepo.toPublicAppUser(user) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/me', appAuth.requireAppUser, (req, res) => {
+  const user = usersRepo.getById(req.appUserId);
+  if (!user) return res.status(404).json({ error: 'user not found' });
+  res.json(usersRepo.toPublicAppUser(user));
+});
+
+app.put('/app/me', appAuth.requireAppUser, (req, res) => {
+  try {
+    const { phone, bankName, bankAccountNumber, bankAccountHolder } = req.body;
+    const updated = usersRepo.updateProfileById(req.appUserId, { phone, bankName, bankAccountNumber, bankAccountHolder });
+    if (!updated) return res.status(404).json({ error: 'user not found' });
+    res.json(usersRepo.toPublicAppUser(usersRepo.getById(req.appUserId)));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Shopee is the only platform actually wired to Playwright automation (see
+// lib/customLink.js) - other platforms in the app's picker respond
+// "coming_soon" rather than pretending to work.
+app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const { platform, productUrl } = req.body;
+    if (!productUrl) return res.status(400).json({ error: 'body.productUrl is required' });
+    if (platform && platform !== 'shopee') {
+      return res.status(501).json({ error: 'coming_soon' });
+    }
+    const user = usersRepo.getById(req.appUserId);
+    const tracking = linkTracking.prepareSubId(user.zalo_user_id, undefined);
+    const result = await getLinkAndCommission([productUrl], tracking.finalSubIds);
+    if (tracking.userId) {
+      linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.get('/app/orders', appAuth.requireAppUser, (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const offset = Number(req.query.offset) || 0;
+    res.json(ordersRepo.listByUser(req.appUserId, { limit, offset }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/wallet', appAuth.requireAppUser, (req, res) => {
+  try {
+    res.json(ordersRepo.summaryForUser(req.appUserId));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/campaigns', appAuth.requireAppUser, (req, res) => {
+  try {
+    res.json(campaignsRepo.viewForUser(req.appUserId));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/referral', appAuth.requireAppUser, (req, res) => {
+  try {
+    const referralCode = usersRepo.ensureReferralCode(req.appUserId);
+    res.json({
+      referralCode,
+      stats: referralsRepo.statsForReferrer(req.appUserId),
+      invited: referralsRepo.listForReferrer(req.appUserId),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Simple shared-secret auth so this service isn't wide open to the rest of
-// the internet - every route below (aside from /zalo-webhook above, which
-// Zalo calls directly and authenticates via its own secret token) requires
-// this header.
+// the internet - every route below (aside from /zalo-webhook and /app/*
+// above, which authenticate their own way) requires this header.
 app.use((req, res, next) => {
   if (!API_KEY || API_KEY === 'change-me') {
     return res.status(500).json({ error: 'SERVICE_API_KEY is not configured on the server (.env)' });
@@ -288,15 +428,29 @@ app.post('/admin/session-cookie', adminAuth.requireAdmin, async (req, res) => {
 });
 
 app.get('/admin/settings', adminAuth.requireAdmin, (_req, res) => {
-  res.json({ commissionPct: settingsRepo.getCommissionPct() });
+  res.json({
+    commissionPct: settingsRepo.getCommissionPct(),
+    referralRewardAmount: settingsRepo.getReferralReward(),
+  });
 });
 
 app.put('/admin/settings', adminAuth.requireAdmin, (req, res) => {
-  const pct = Number(req.body.commissionPct);
-  if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-    return res.status(400).json({ error: 'body.commissionPct must be a number between 0 and 100' });
+  const response = {};
+  if (req.body.commissionPct !== undefined) {
+    const pct = Number(req.body.commissionPct);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      return res.status(400).json({ error: 'body.commissionPct must be a number between 0 and 100' });
+    }
+    response.commissionPct = settingsRepo.setCommissionPct(pct);
   }
-  res.json({ commissionPct: settingsRepo.setCommissionPct(pct) });
+  if (req.body.referralRewardAmount !== undefined) {
+    const amount = Number(req.body.referralRewardAmount);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return res.status(400).json({ error: 'body.referralRewardAmount must be a non-negative number' });
+    }
+    response.referralRewardAmount = settingsRepo.setReferralReward(amount);
+  }
+  res.json(response);
 });
 
 app.get('/admin/users', adminAuth.requireAdmin, (_req, res) => {
@@ -356,6 +510,26 @@ app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
+});
+
+// Milestone/tier campaigns ("Su kien" tab in the app) - tiers is a simple
+// [{orders, reward}] array, edited as one JSON blob from the dashboard
+// rather than needing a dedicated tiers UI.
+app.get('/admin/campaigns', adminAuth.requireAdmin, (_req, res) => {
+  res.json(campaignsRepo.listAll());
+});
+
+app.post('/admin/campaigns', adminAuth.requireAdmin, (req, res) => {
+  const { title, description, startsAt, endsAt, tiers, isActive } = req.body;
+  if (!title) return res.status(400).json({ error: 'body.title is required' });
+  res.json(campaignsRepo.create({ title, description, startsAt, endsAt, tiers, isActive: isActive !== false }));
+});
+
+app.put('/admin/campaigns/:id', adminAuth.requireAdmin, (req, res) => {
+  const { title, description, startsAt, endsAt, tiers, isActive } = req.body;
+  const updated = campaignsRepo.update(req.params.id, { title, description, startsAt, endsAt, tiers, isActive });
+  if (!updated) return res.status(404).json({ error: 'campaign not found' });
+  res.json(updated);
 });
 
 app.listen(PORT, () => {
