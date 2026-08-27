@@ -28,7 +28,23 @@ app.post('/zalo-webhook', (req, res) => {
 
   // Zalo posts the event at the top level of the body (no "result" wrapper).
   const result = req.body;
-  if (!result || result.event_name !== 'message.text.received') return;
+  if (!result) return;
+
+  // Zalo auto-converts a bare link into a rich preview card client-side and,
+  // when that happens, delivers this event instead of message.text.received -
+  // with no text payload at all, so there's nothing to parse here, only a
+  // canned reply telling the user how to resend it.
+  if (result.event_name === 'message.unsupported.received') {
+    const unsupportedChatId = result.message && result.message.chat && result.message.chat.id;
+    if (!unsupportedChatId) return;
+    zaloBot
+      .sendMessage(unsupportedChatId, zaloMessageHandler.UNSUPPORTED_LINK_TEXT)
+      .then((r) => console.log(`zalo-webhook: unsupported-link reply result=${JSON.stringify(r)}`))
+      .catch((err) => console.error('zalo-webhook: unsupported-link reply failed', err.message));
+    return;
+  }
+
+  if (result.event_name !== 'message.text.received') return;
 
   const text = result.message && result.message.text;
   const chatId = result.message && result.message.chat && result.message.chat.id;

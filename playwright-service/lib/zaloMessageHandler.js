@@ -22,6 +22,15 @@ const NO_LINK_TEXT =
 const CANNOT_PARSE_TEXT =
   'Mình chưa nhận diện được sản phẩm từ link này, bạn thử gửi link đầy đủ (không phải link rút gọn) xem sao 🙏';
 
+// Sent when Zalo delivers a message.unsupported.received event: this happens
+// when Zalo auto-turns a bare link into a rich preview card - the webhook
+// payload carries no text at all in that case, so there's nothing to parse,
+// only guidance to send.
+const UNSUPPORTED_LINK_TEXT =
+  '😅 Mình không đọc được nội dung bạn vừa gửi. Đây là do Zalo đã tự tạo 1 thẻ xem trước (hình ảnh + tên sản phẩm) cho link bạn dán, ' +
+  'nên tin nhắn gửi đi không còn giữ link nữa.\n\n' +
+  'Bạn gửi lại giúp mình nhé: sau khi dán link, bấm dấu ✕ ở góc thẻ xem trước để xoá nó đi (link chữ vẫn còn), rồi mới bấm Gửi.';
+
 // Matches any host that is (or is a subdomain of) shopee.<tld>, shp.ee, or
 // shope.ee - covers full product links, the older s.shopee.vn/shope.ee short
 // links, and the newer shp.ee short links (e.g. vn.shp.ee), across regions.
@@ -94,4 +103,4 @@ async function handleIncomingMessage(text, zaloUserId) {
   return handleProductLink(trimmed, zaloUserId);
 }
 
-module.exports = { handleIncomingMessage, WELCOME_TEXT };
+module.exports = { handleIncomingMessage, WELCOME_TEXT, UNSUPPORTED_LINK_TEXT };
