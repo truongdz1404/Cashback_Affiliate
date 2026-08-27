@@ -39,13 +39,16 @@ app.post('/zalo-webhook', (req, res) => {
     const user = usersRepo.getOrCreateUserByZaloId(chatId);
     console.log(`zalo-webhook: chatId=${chatId} isNewUser=${isNewUser} userRowId=${user.id}`);
     if (isNewUser) {
-      await zaloBot.sendMessage(chatId, zaloMessageHandler.WELCOME_TEXT).catch((err) => {
+      const welcomeResult = await zaloBot.sendMessage(chatId, zaloMessageHandler.WELCOME_TEXT).catch((err) => {
         console.error('zalo-webhook: welcome send failed', err.message);
+        return null;
       });
+      console.log(`zalo-webhook: welcome sendMessage result=${JSON.stringify(welcomeResult)}`);
     }
 
     const replyText = await zaloMessageHandler.handleIncomingMessage(text, chatId);
-    await zaloBot.sendMessage(chatId, replyText);
+    const replyResult = await zaloBot.sendMessage(chatId, replyText);
+    console.log(`zalo-webhook: reply sendMessage result=${JSON.stringify(replyResult)}`);
   })().catch((err) => {
     console.error('zalo-webhook error', err.message);
   });
