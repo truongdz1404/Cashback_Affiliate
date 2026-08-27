@@ -117,4 +117,43 @@ async function getCustomLinks(links, subIds) {
   }
 }
 
-module.exports = { getCustomLinks };
+/**
+ * EXPERIMENTAL alternative to getCustomLinks(): reuses one never-closed
+ * custom_link tab across every call instead of the pool's close-after-use +
+ * background-rewarm pattern. `.fill()` clears an input before typing so the
+ * stale textarea content isn't an issue; what's untested is whether the
+ * page's *result* state (rendered under the button after a previous click)
+ * interferes with the next run. Not wired into the main route; exposed only
+ * via /debug for side-by-side timing/correctness comparison.
+ */
+async function getCustomLinksViaPersistentTab(links, subIds) {
+  if (!Array.isArray(links) || links.length === 0) {
+    throw new Error('links must be a non-empty array of product URLs (max 5)');
+  }
+
+  const page = await browserManager.getPersistentCustomLinkPage();
+
+  if (/passport|login/i.test(page.url())) {
+    throw new Error('Not logged in - call POST /login with valid cookies first.');
+  }
+
+  const textarea = page.locator('textarea').first();
+  await textarea.fill(links.slice(0, 5).join('\n'));
+
+  if (subIds) {
+    await fillSubIds(page, subIds);
+  }
+
+  const responsePromise = page
+    .waitForResponse((resp) => resp.url().includes('q=batchCustomLink'), { timeout: 15000 })
+    .catch(() => null);
+
+  await page.getByRole('button', { name: /Lấy link/i }).click();
+
+  const apiResponse = await responsePromise;
+  const result = await extractResult(page, apiResponse);
+
+  return { links, subIds: subIds || null, ...result };
+}
+
+module.exports = { getCustomLinks, getCustomLinksViaPersistentTab };

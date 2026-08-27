@@ -1,4 +1,4 @@
-const { getContext } = require('./browserManager');
+const { getContext, getCommissionFetchPage } = require('./browserManager');
 
 /**
  * Builds the "Mạng xã hội" commission row straight from the API response's
@@ -69,4 +69,38 @@ async function getCommission(pid) {
   }
 }
 
-module.exports = { getCommission };
+/**
+ * EXPERIMENTAL alternative to getCommission(): instead of page.goto()-ing to
+ * the product_offer page (the dominant remaining latency cost, ~4-5s), reuse
+ * an already-open, already-hydrated tab and call the API via
+ * page.evaluate(fetch(...)) - same cookies/session/JS engine as a real
+ * navigation, but skips the SPA boot + route render entirely. Not wired into
+ * the main /commission/:pid route; exposed only via /debug for comparison.
+ */
+async function getCommissionViaFetch(pid) {
+  if (!pid) throw new Error('pid is required');
+
+  const page = await getCommissionFetchPage();
+  const result = await page.evaluate(async (itemId) => {
+    const res = await fetch(`/api/v3/offer/product?item_id=${itemId}`, {
+      credentials: 'include',
+      headers: { accept: 'application/json' },
+    });
+    let body = null;
+    try {
+      body = await res.json();
+    } catch (e) {
+      body = null;
+    }
+    return { status: res.status, body };
+  }, pid);
+
+  return {
+    pid,
+    status: result.status,
+    product: result.body,
+    commissionTable: buildCommissionTable(result.body),
+  };
+}
+
+module.exports = { getCommission, getCommissionViaFetch };

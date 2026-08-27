@@ -1,8 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const browserManager = require('./lib/browserManager');
-const { getCustomLinks } = require('./lib/customLink');
-const { getCommission } = require('./lib/commission');
+const { getCustomLinks, getCustomLinksViaPersistentTab } = require('./lib/customLink');
+const { getCommission, getCommissionViaFetch } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
 
 const app = express();
@@ -71,6 +71,29 @@ app.post('/link-and-commission', async (req, res) => {
     const { links, subIds } = req.body;
     const result = await getLinkAndCommission(links, subIds);
     res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// EXPERIMENTAL - latency comparison endpoints, not used by the n8n workflow.
+// Safe to hit repeatedly; they don't touch the pooled/production tabs.
+app.get('/debug/commission-fetch/:pid', async (req, res) => {
+  try {
+    const t0 = Date.now();
+    const result = await getCommissionViaFetch(req.params.pid);
+    res.json({ ...result, ms: Date.now() - t0 });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.post('/debug/custom-link-persistent', async (req, res) => {
+  try {
+    const { links, subIds } = req.body;
+    const t0 = Date.now();
+    const result = await getCustomLinksViaPersistentTab(links, subIds);
+    res.json({ ...result, ms: Date.now() - t0 });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
