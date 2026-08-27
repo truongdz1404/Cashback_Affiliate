@@ -18,6 +18,7 @@ const appAuth = require('./lib/appAuth');
 const configStore = require('./lib/configStore');
 const { reconcileOrders } = require('./lib/reconciliation');
 const { rateLimit } = require('./lib/simpleRateLimit');
+const { getEffectivePct, splitAmount } = require('./lib/commissionSplit');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -84,7 +85,17 @@ app.post('/zalo-webhook', (req, res) => {
 // before the shared x-api-key middleware below like /zalo-webhook above -
 // the app ships as a public APK that could be decompiled, so it can't hold
 // a static shared secret. Every route here is either register/login (no
-// auth yet) or protected by appAuth.requireAppUser. ---
+// auth yet) or protected by appAuth.requireAppUser. CORS is wide open here
+// (safe: stateless Bearer-token auth, no cookies) so a web build of the app
+// can call it directly too. ---
+
+app.use('/app', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 app.post('/app/register', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }), (req, res) => {
   try {
@@ -156,6 +167,19 @@ app.put('/app/me', appAuth.requireAppUser, (req, res) => {
   }
 });
 
+app.put('/app/password', appAuth.requireAppUser, (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || String(newPassword).length < 6) {
+      return res.status(400).json({ error: 'newPassword must be at least 6 characters' });
+    }
+    usersRepo.setPassword(req.appUserId, newPassword);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Shopee is the only platform actually wired to Playwright automation (see
 // lib/customLink.js) - other platforms in the app's picker respond
 // "coming_soon" rather than pretending to work.
@@ -172,7 +196,22 @@ app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
     if (tracking.userId) {
       linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid);
     }
-    res.json(result);
+
+    // Same estimate shown by the Zalo bot (formatProductReply in
+    // zaloMessageHandler.js): pick the "Mạng xã hội" row from the commission
+    // table (falling back to the first row) and split it by this user's
+    // effective %, so the app never has to know the system default itself.
+    let estimate = null;
+    const table = (result.commission && result.commission.commissionTable) || [];
+    const social = table.find((r) => (r.channel || '').includes('Mạng xã hội')) || table[0] || null;
+    if (social && social.totalAmount !== null && social.totalAmount !== undefined) {
+      const pct = getEffectivePct(user);
+      const { userAmount } = splitAmount(social.totalAmount, pct);
+      const userPct = social.totalPct === null || social.totalPct === undefined ? null : (social.totalPct * pct) / 100;
+      estimate = { userAmount, userPct };
+    }
+
+    res.json({ ...result, estimate });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
