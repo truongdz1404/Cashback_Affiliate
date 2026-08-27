@@ -34,7 +34,8 @@ app.post('/zalo-webhook', (req, res) => {
 
   (async () => {
     const isNewUser = usersRepo.isNewUser(chatId);
-    usersRepo.getOrCreateUserByZaloId(chatId);
+    const user = usersRepo.getOrCreateUserByZaloId(chatId);
+    console.log(`zalo-webhook: chatId=${chatId} isNewUser=${isNewUser} userRowId=${user.id}`);
     if (isNewUser) {
       await zaloBot.sendMessage(chatId, zaloMessageHandler.WELCOME_TEXT).catch((err) => {
         console.error('zalo-webhook: welcome send failed', err.message);

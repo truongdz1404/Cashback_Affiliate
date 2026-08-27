@@ -14,13 +14,33 @@ const NO_LINK_TEXT = 'Vui lòng gửi link sản phẩm Shopee để mình tạo
 const CANNOT_PARSE_TEXT =
   'Mình chưa nhận diện được sản phẩm từ link này, bạn thử gửi link đầy đủ (không phải link rút gọn) xem sao 🙏';
 
+// Matches any host that is (or is a subdomain of) shopee.<tld>, shp.ee, or
+// shope.ee - covers full product links, the older s.shopee.vn/shope.ee short
+// links, and the newer shp.ee short links (e.g. vn.shp.ee), across regions.
+const SHOPEE_HOST_RE = /(?:^|\.)(?:shopee\.[a-z.]{2,12}|shp\.ee|shope\.ee)$/i;
+
 function findShopeeLink(text) {
-  const m = (text || '').match(/https?:\/\/(?:s\.shopee\.vn|shope\.ee|shopee\.vn)\/[^\s]+/i);
-  return m ? m[0] : null;
+  const candidates = (text || '').match(/https?:\/\/[^\s]+/g);
+  if (!candidates) return null;
+  return (
+    candidates.find((url) => {
+      try {
+        return SHOPEE_HOST_RE.test(new URL(url).hostname);
+      } catch (err) {
+        return false;
+      }
+    }) || null
+  );
 }
 
 function isShortLink(link) {
-  return /s\.shopee\.vn|shope\.ee/i.test(link);
+  let host;
+  try {
+    host = new URL(link).hostname.toLowerCase();
+  } catch (err) {
+    return false;
+  }
+  return /(?:^|\.)(?:shp\.ee|shope\.ee)$/.test(host) || /^s\.shopee\./.test(host);
 }
 
 // Short links (s.shopee.vn/shope.ee) redirect to the full product URL, which
