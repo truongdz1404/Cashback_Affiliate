@@ -1,91 +1,125 @@
 const crypto = require('crypto');
-const db = require('../db');
-const { toCamel, toCamelList } = require('../camelize');
+const { Prisma } = require('@prisma/client');
+const prisma = require('../prisma');
 const passwordHash = require('../passwordHash');
 
-function getOrCreateUserByZaloId(zaloUserId) {
-  const existing = db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId);
+async function getOrCreateUserByZaloId(zaloUserId) {
+  const existing = await prisma.user.findUnique({ where: { zaloUserId } });
   if (existing) return existing;
 
-  db.prepare('INSERT INTO users (zalo_user_id) VALUES (?)').run(zaloUserId);
-  return db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId);
+  return prisma.user.create({ data: { zaloUserId } });
 }
 
 // Used to decide whether to send the one-time welcome message - checked
 // (and the row created via getOrCreateUserByZaloId) before any command
 // handling runs, so a user's very first message is always caught regardless
 // of what it says (invalid command, plain text, etc).
-function isNewUser(zaloUserId) {
-  return !db.prepare('SELECT id FROM users WHERE zalo_user_id = ?').get(zaloUserId);
+async function isNewUser(zaloUserId) {
+  const row = await prisma.user.findUnique({ where: { zaloUserId }, select: { id: true } });
+  return !row;
 }
 
-function updatePhone(zaloUserId, phone) {
-  const user = getOrCreateUserByZaloId(zaloUserId);
-  db.prepare(
-    "UPDATE users SET phone = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(phone, user.id);
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+async function updatePhone(zaloUserId, phone) {
+  const user = await getOrCreateUserByZaloId(zaloUserId);
+  return prisma.user.update({ where: { id: user.id }, data: { phone } });
 }
 
-function updatePayment(zaloUserId, { bankName, accountNumber, accountHolder }) {
-  const user = getOrCreateUserByZaloId(zaloUserId);
-  db.prepare(
-    `UPDATE users
-     SET bank_name = ?, bank_account_number = ?, bank_account_holder = ?, updated_at = datetime('now')
-     WHERE id = ?`
-  ).run(bankName, accountNumber, accountHolder, user.id);
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+async function updatePayment(zaloUserId, { bankName, accountNumber, accountHolder }) {
+  const user = await getOrCreateUserByZaloId(zaloUserId);
+  return prisma.user.update({
+    where: { id: user.id },
+    data: { bankName, bankAccountNumber: accountNumber, bankAccountHolder: accountHolder },
+  });
 }
 
-function getPayment(zaloUserId) {
-  return db.prepare('SELECT * FROM users WHERE zalo_user_id = ?').get(zaloUserId) || null;
+async function getPayment(zaloUserId) {
+  return prisma.user.findUnique({ where: { zaloUserId } });
 }
 
 // Per-user commission_pct override (nullable). Null means "use the
 // system-wide default from lib/repositories/settings.js". Admin-facing only
-// (unlike getById, which internal bot logic reads snake_case fields from) -
-// safe to camelize.
-function setCommissionPct(userId, pct) {
-  db.prepare(
-    "UPDATE users SET commission_pct = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(pct === null || pct === undefined ? null : Number(pct), userId);
-  return toCamel(db.prepare('SELECT * FROM users WHERE id = ?').get(userId));
+// (unlike getById, which internal bot logic reads fields from) - safe to
+// return as-is.
+async function setCommissionPct(userId, pct) {
+  return prisma.user.update({
+    where: { id: Number(userId) },
+    data: { commissionPct: pct === null || pct === undefined ? null : Number(pct) },
+  });
 }
 
-// Admin-facing only - safe to camelize.
-function listAll() {
-  return toCamelList(db.prepare('SELECT * FROM users ORDER BY id DESC').all());
+// Admin-facing only.
+async function listAll() {
+  return prisma.user.findMany({ orderBy: { id: 'desc' } });
 }
 
-function getById(userId) {
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId) || null;
+async function getById(userId) {
+  return prisma.user.findUnique({ where: { id: Number(userId) } });
 }
 
 // Used by the admin dashboard's edit-in-place forms - any field left
-// undefined/null is left unchanged rather than cleared. Admin-facing only -
-// safe to camelize.
-function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAccountHolder } = {}) {
-  const current = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+// undefined/null is left unchanged rather than cleared.
+async function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAccountHolder } = {}) {
+  const current = await prisma.user.findUnique({ where: { id: Number(userId) } });
   if (!current) return null;
-  db.prepare(
-    `UPDATE users SET
-       phone = COALESCE(?, phone),
-       bank_name = COALESCE(?, bank_name),
-       bank_account_number = COALESCE(?, bank_account_number),
-       bank_account_holder = COALESCE(?, bank_account_holder),
-       updated_at = datetime('now')
-     WHERE id = ?`
-  ).run(phone ?? null, bankName ?? null, bankAccountNumber ?? null, bankAccountHolder ?? null, userId);
-  return toCamel(db.prepare('SELECT * FROM users WHERE id = ?').get(userId));
+  return prisma.user.update({
+    where: { id: Number(userId) },
+    data: {
+      phone: phone ?? current.phone,
+      bankName: bankName ?? current.bankName,
+      bankAccountNumber: bankAccountNumber ?? current.bankAccountNumber,
+      bankAccountHolder: bankAccountHolder ?? current.bankAccountHolder,
+    },
+  });
 }
 
-function findByPhone(phone) {
-  return db.prepare('SELECT * FROM users WHERE phone = ?').get(phone) || null;
+async function findByPhone(phone) {
+  return prisma.user.findFirst({ where: { phone } });
 }
 
-function findByReferralCode(code) {
+async function findByGoogleId(googleId) {
+  return prisma.user.findUnique({ where: { googleId } });
+}
+
+async function findByFacebookId(facebookId) {
+  return prisma.user.findUnique({ where: { facebookId } });
+}
+
+async function findByEmail(email) {
+  if (!email) return null;
+  return prisma.user.findUnique({ where: { email } });
+}
+
+// First Google/Facebook sign-in for this provider id: reuse an existing row
+// matched by email (e.g. already registered by phone with the same email on
+// file) so order history carries over, same idea as phone-matching in
+// /app/register; otherwise create a fresh app-only user.
+async function findOrCreateOAuthUser({ provider, providerId, email, name }) {
+  const existingByProvider = provider === 'google' ? await findByGoogleId(providerId) : await findByFacebookId(providerId);
+  if (existingByProvider) return existingByProvider;
+
+  const providerColumn = provider === 'google' ? { googleId: providerId } : { facebookId: providerId };
+  const existingByEmail = await findByEmail(email);
+  if (existingByEmail) {
+    return prisma.user.update({
+      where: { id: existingByEmail.id },
+      data: { ...providerColumn, fullName: existingByEmail.fullName ?? name ?? null },
+    });
+  }
+
+  const zaloUserId = `app:${crypto.randomBytes(8).toString('hex')}`;
+  return prisma.user.create({
+    data: {
+      zaloUserId,
+      email: email || null,
+      fullName: name || null,
+      ...providerColumn,
+    },
+  });
+}
+
+async function findByReferralCode(code) {
   if (!code) return null;
-  return db.prepare('SELECT * FROM users WHERE referral_code = ?').get(code) || null;
+  return prisma.user.findUnique({ where: { referralCode: code } });
 }
 
 // referral_code is generated lazily (on first need) rather than at row
@@ -96,18 +130,18 @@ function generateReferralCode() {
   return crypto.randomBytes(4).toString('hex');
 }
 
-function ensureReferralCode(userId) {
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+async function ensureReferralCode(userId) {
+  const user = await prisma.user.findUnique({ where: { id: Number(userId) } });
   if (!user) return null;
-  if (user.referral_code) return user.referral_code;
+  if (user.referralCode) return user.referralCode;
 
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = generateReferralCode();
     try {
-      db.prepare("UPDATE users SET referral_code = ?, updated_at = datetime('now') WHERE id = ?").run(code, userId);
+      await prisma.user.update({ where: { id: Number(userId) }, data: { referralCode: code } });
       return code;
     } catch (err) {
-      if (!/UNIQUE/.test(err.message)) throw err;
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') throw err;
     }
   }
   throw new Error('could not generate a unique referral code');
@@ -115,51 +149,47 @@ function ensureReferralCode(userId) {
 
 // Registers a brand-new app user. Callers must have already checked the
 // phone isn't taken (see server.js POST /app/register) - this always
-// inserts a fresh row rather than merging into an existing bot-created one
-// (see mergeIntoExistingByPhone for that case). zalo_user_id is a synthetic
-// "app:<hex>" placeholder so it satisfies the existing UNIQUE NOT NULL
-// constraint without colliding with a real numeric Zalo ID.
-function createAppUser(phone, password, referredByUserId) {
+// inserts a fresh row rather than merging into an existing bot-created one.
+// zalo_user_id is a synthetic "app:<hex>" placeholder so it satisfies the
+// existing UNIQUE NOT NULL constraint without colliding with a real numeric
+// Zalo ID.
+async function createAppUser(phone, password, referredByUserId) {
   const zaloUserId = `app:${crypto.randomBytes(8).toString('hex')}`;
   const hash = passwordHash.hashPassword(password);
-  const result = db
-    .prepare(
-      `INSERT INTO users (zalo_user_id, phone, password_hash, referred_by_user_id)
-       VALUES (?, ?, ?, ?)`
-    )
-    .run(zaloUserId, phone, hash, referredByUserId ?? null);
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
+  return prisma.user.create({
+    data: {
+      zaloUserId,
+      phone,
+      passwordHash: hash,
+      referredByUserId: referredByUserId ?? null,
+    },
+  });
 }
 
 // Attaches app login to an existing bot-created row found by phone, so the
 // user inherits their prior order history instead of starting a fresh row.
-function setPassword(userId, password) {
+async function setPassword(userId, password) {
   const hash = passwordHash.hashPassword(password);
-  db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?").run(hash, userId);
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  return prisma.user.update({ where: { id: Number(userId) }, data: { passwordHash: hash } });
 }
 
-function setReferredBy(userId, referredByUserId) {
-  db.prepare("UPDATE users SET referred_by_user_id = ?, updated_at = datetime('now') WHERE id = ?").run(
-    referredByUserId,
-    userId
-  );
+async function setReferredBy(userId, referredByUserId) {
+  await prisma.user.update({ where: { id: Number(userId) }, data: { referredByUserId: Number(referredByUserId) } });
 }
 
-function verifyLogin(phone, password) {
-  const user = findByPhone(phone);
-  if (!user || !user.password_hash) return null;
-  if (!passwordHash.verifyPassword(password, user.password_hash)) return null;
+async function verifyLogin(phone, password) {
+  const user = await findByPhone(phone);
+  if (!user || !user.passwordHash) return null;
+  if (!passwordHash.verifyPassword(password, user.passwordHash)) return null;
   return user;
 }
 
-// App-facing responses must never leak password_hash - strip it after
-// camelizing rather than remembering to omit it at every call site.
+// App-facing responses must never leak passwordHash - strip it rather than
+// remembering to omit it at every call site.
 function toPublicAppUser(user) {
   if (!user) return null;
-  const camelized = toCamel(user);
-  delete camelized.passwordHash;
-  return camelized;
+  const { passwordHash: _passwordHash, ...rest } = user;
+  return rest;
 }
 
 module.exports = {
@@ -173,6 +203,10 @@ module.exports = {
   getById,
   updateProfileById,
   findByPhone,
+  findByGoogleId,
+  findByFacebookId,
+  findByEmail,
+  findOrCreateOAuthUser,
   findByReferralCode,
   ensureReferralCode,
   createAppUser,

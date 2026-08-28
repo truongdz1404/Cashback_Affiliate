@@ -14,8 +14,26 @@ services:
       ZALO_WEBHOOK_SECRET: ${ZALO_WEBHOOK_SECRET}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@shopee-affiliate-db:5432/${POSTGRES_DB}
     volumes:
       - ./playwright-service/storage:/app/storage
+    depends_on:
+      - shopee-affiliate-db
+    networks:
+      - shared_net
+
+  shopee-affiliate-db:
+    image: postgres:16-alpine
+    container_name: shopee-affiliate-db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - shopee-affiliate-db-data:/var/lib/postgresql/data
     networks:
       - shared_net
 
@@ -36,3 +54,6 @@ services:
 networks:
   shared_net:
     external: true
+
+volumes:
+  shopee-affiliate-db-data:

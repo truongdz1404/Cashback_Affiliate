@@ -24,4 +24,6 @@ for _ in $(seq 1 50); do
 done
 [ -e "/tmp/.X11-unix/X$DISPLAY_NUM" ] || { echo "Xvfb failed to start" >&2; exit 1; }
 
+npx prisma migrate deploy
+
 exec node server.js

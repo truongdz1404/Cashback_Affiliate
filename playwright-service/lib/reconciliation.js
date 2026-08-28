@@ -80,14 +80,14 @@ async function reconcileOrders({ extraParams = {} } = {}) {
       const mapped = mapEntry(entry);
       if (!mapped.orderSn) continue;
 
-      const link = mapped.subId ? linksRepo.findBySubId(mapped.subId) : null;
-      const user = link ? usersRepo.getById(link.user_id) : null;
-      const effectivePct = getEffectivePct(user);
+      const link = mapped.subId ? await linksRepo.findBySubId(mapped.subId) : null;
+      const user = link ? await usersRepo.getById(link.userId) : null;
+      const effectivePct = await getEffectivePct(user);
       const { userAmount, operatorAmount } = splitAmount(mapped.totalCommission, effectivePct);
 
-      const savedOrder = ordersRepo.upsertOrder({
+      const savedOrder = await ordersRepo.upsertOrder({
         orderSn: mapped.orderSn,
-        userId: link ? link.user_id : null,
+        userId: link ? link.userId : null,
         subId: mapped.subId,
         totalCommission: mapped.totalCommission,
         userCommission: userAmount,
@@ -103,8 +103,8 @@ async function reconcileOrders({ extraParams = {} } = {}) {
       // idempotent (UNIQUE constraint / pending-only guard) so re-processing
       // the same order on a later reconcile run is safe.
       if (savedOrder.displayOrderStatus === 2 && savedOrder.userId) {
-        campaignsRepo.grantRewardsForUser(savedOrder.userId);
-        referralsRepo.qualifyIfEligible(savedOrder.userId);
+        await campaignsRepo.grantRewardsForUser(savedOrder.userId);
+        await referralsRepo.qualifyIfEligible(savedOrder.userId);
       }
     }
 

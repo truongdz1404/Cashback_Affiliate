@@ -9,21 +9,21 @@ const HELP_TEXT =
   '/thanhtoan (xem thông tin đã lưu)';
 
 function formatPaymentInfo(user) {
-  if (!user || (!user.bank_name && !user.bank_account_number)) {
+  if (!user || (!user.bankName && !user.bankAccountNumber)) {
     return 'Bạn chưa cấu hình thông tin thanh toán.\nDùng lệnh: /thanhtoan <ngân hàng> <số tài khoản> <tên chủ tài khoản>';
   }
   return (
     `💳 Thông tin thanh toán hiện tại:\n` +
-    `Ngân hàng: ${user.bank_name || 'N/A'}\n` +
-    `Số tài khoản: ${user.bank_account_number || 'N/A'}\n` +
-    `Chủ tài khoản: ${user.bank_account_holder || 'N/A'}`
+    `Ngân hàng: ${user.bankName || 'N/A'}\n` +
+    `Số tài khoản: ${user.bankAccountNumber || 'N/A'}\n` +
+    `Chủ tài khoản: ${user.bankAccountHolder || 'N/A'}`
   );
 }
 
 // Handles a slash command and returns the reply text. Persists any change
 // (phone/payment) via the users repo directly - no HTTP hop needed now that
 // this runs in the same process as the DB.
-function handleCommand(text, zaloUserId) {
+async function handleCommand(text, zaloUserId) {
   const trimmed = (text || '').trim();
 
   if (/^\/sdt\b/i.test(trimmed)) {
@@ -31,14 +31,14 @@ function handleCommand(text, zaloUserId) {
     if (!phone || !/^0\d{9,10}$/.test(phone)) {
       return 'Cú pháp: /sdt 0901234567 (số điện thoại Việt Nam, bắt đầu bằng 0)';
     }
-    usersRepo.updatePhone(zaloUserId, phone);
+    await usersRepo.updatePhone(zaloUserId, phone);
     return `✅ Đã lưu số điện thoại ${phone} để hoàn tiền sau này.`;
   }
 
   if (/^\/thanhtoan\b/i.test(trimmed)) {
     const rest = trimmed.replace(/^\/thanhtoan\s*/i, '').trim();
     if (!rest) {
-      return formatPaymentInfo(usersRepo.getPayment(zaloUserId));
+      return formatPaymentInfo(await usersRepo.getPayment(zaloUserId));
     }
     const parts = rest.split(/\s+/);
     if (parts.length < 3) {
@@ -49,7 +49,7 @@ function handleCommand(text, zaloUserId) {
     }
     const [bankName, accountNumber, ...holderParts] = parts;
     const accountHolder = holderParts.join(' ');
-    usersRepo.updatePayment(zaloUserId, { bankName, accountNumber, accountHolder });
+    await usersRepo.updatePayment(zaloUserId, { bankName, accountNumber, accountHolder });
     return (
       `✅ Đã lưu thông tin thanh toán:\n` +
       `Ngân hàng: ${bankName}\n` +

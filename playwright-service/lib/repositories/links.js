@@ -1,20 +1,34 @@
 const crypto = require('crypto');
-const db = require('../db');
+const prisma = require('../prisma');
 
 function generateSubId() {
   return crypto.randomBytes(5).toString('hex');
 }
 
-function saveLink({ userId, subId, itemId, shopeeUrl, affiliateUrl }) {
-  db.prepare(
-    `INSERT INTO links (user_id, item_id, sub_id, shopee_url, affiliate_url)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(userId, itemId || null, subId, shopeeUrl || null, affiliateUrl || null);
-  return db.prepare('SELECT * FROM links WHERE sub_id = ?').get(subId);
+async function saveLink({ userId, subId, itemId, shopeeUrl, affiliateUrl }) {
+  return prisma.link.create({
+    data: {
+      userId,
+      itemId: itemId || null,
+      subId,
+      shopeeUrl: shopeeUrl || null,
+      affiliateUrl: affiliateUrl || null,
+    },
+  });
 }
 
-function findBySubId(subId) {
-  return db.prepare('SELECT * FROM links WHERE sub_id = ?').get(subId) || null;
+async function findBySubId(subId) {
+  return prisma.link.findUnique({ where: { subId } });
 }
 
-module.exports = { generateSubId, saveLink, findBySubId };
+// Backs the app's "Hoàn tiền" history list - most recent first.
+async function listByUser(userId, { limit = 20, offset = 0 } = {}) {
+  return prisma.link.findMany({
+    where: { userId: Number(userId) },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    skip: offset,
+  });
+}
+
+module.exports = { generateSubId, saveLink, findBySubId, listByUser };

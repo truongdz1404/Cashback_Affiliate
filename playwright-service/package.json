@@ -6,15 +6,18 @@
   "scripts": {
     "start": "node server.js",
     "start:xvfb": "bash scripts/start-xvfb.sh",
-    "postinstall": "playwright install chromium",
-    "seed-login": "node scripts/login-from-file.js"
+    "postinstall": "playwright install chromium && prisma generate",
+    "seed-login": "node scripts/login-from-file.js",
+    "migrate-data": "node scripts/migrate-sqlite-to-postgres.js"
   },
   "dependencies": {
+    "@prisma/client": "^6.16.0",
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.3",
     "node-cron": "^3.0.3",
-    "playwright": "^1.47.0"
+    "playwright": "^1.47.0",
+    "prisma": "^6.16.0"
   }
 }

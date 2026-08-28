@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
 
 WORKDIR /app
 COPY package*.json ./
+COPY prisma ./prisma
 RUN npm ci --omit=dev
 
 COPY . .

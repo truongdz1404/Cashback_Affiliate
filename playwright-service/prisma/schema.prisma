@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  Int      @id @default(autoincrement())
+  zaloUserId          String   @unique @map("zalo_user_id")
+  phone               String?
+  bankName            String?  @map("bank_name")
+  bankAccountNumber   String?  @map("bank_account_number")
+  bankAccountHolder   String?  @map("bank_account_holder")
+  commissionPct       Float?   @map("commission_pct")
+  passwordHash        String?  @map("password_hash")
+  referralCode        String?  @unique @map("referral_code")
+  referredByUserId    Int?     @map("referred_by_user_id")
+  email               String?  @unique @map("email")
+  googleId            String?  @unique @map("google_id")
+  facebookId          String?  @unique @map("facebook_id")
+  fullName            String?  @map("full_name")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  referredBy          User?    @relation("UserReferredBy", fields: [referredByUserId], references: [id])
+  referredUsers       User[]   @relation("UserReferredBy")
+
+  links               Link[]
+  orders              Order[]
+  campaignRewards     CampaignReward[]
+  referralsAsReferrer Referral[]           @relation("ReferralReferrer")
+  referralAsReferred  Referral?            @relation("ReferralReferred")
+  withdrawalRequests  WithdrawalRequest[]
+
+  @@map("users")
+}
+
+model Setting {
+  key   String @id
+  value String
+
+  @@map("settings")
+}
+
+model Link {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @map("user_id")
+  itemId        String?  @map("item_id")
+  subId         String   @unique @map("sub_id")
+  shopeeUrl     String?  @map("shopee_url")
+  affiliateUrl  String?  @map("affiliate_url")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user          User     @relation(fields: [userId], references: [id])
+
+  @@map("links")
+}
+
+model Order {
+  id                  Int      @id @default(autoincrement())
+  orderSn             String   @unique @map("order_sn")
+  userId              Int?     @map("user_id")
+  subId               String?  @map("sub_id")
+  totalCommission     Float?   @map("total_commission")
+  userCommission      Float?   @map("user_commission")
+  operatorCommission  Float?   @map("operator_commission")
+  displayOrderStatus  Int?     @map("display_order_status")
+  payoutStatus        String   @default("unpaid") @map("payout_status")
+  paidAt              String?  @map("paid_at")
+  purchaseTime        String?  @map("purchase_time")
+  rawJson             String?  @map("raw_json")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  user                User?    @relation(fields: [userId], references: [id])
+
+  @@map("orders")
+}
+
+model Campaign {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  startsAt    String?  @map("starts_at")
+  endsAt      String?  @map("ends_at")
+  tiersJson   String   @default("[]") @map("tiers_json")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  rewards     CampaignReward[]
+
+  @@map("campaigns")
+}
+
+model CampaignReward {
+  id             Int      @id @default(autoincrement())
+  campaignId     Int      @map("campaign_id")
+  userId         Int      @map("user_id")
+  orderThreshold Int      @map("order_threshold")
+  rewardAmount   Float    @map("reward_amount")
+  payoutStatus   String   @default("unpaid") @map("payout_status")
+  paidAt         String?  @map("paid_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  campaign       Campaign @relation(fields: [campaignId], references: [id])
+  user           User     @relation(fields: [userId], references: [id])
+
+  @@unique([campaignId, userId, orderThreshold])
+  @@map("campaign_rewards")
+}
+
+model Referral {
+  id             Int      @id @default(autoincrement())
+  referrerUserId Int      @map("referrer_user_id")
+  referredUserId Int      @unique @map("referred_user_id")
+  status         String   @default("pending")
+  rewardAmount   Float?   @map("reward_amount")
+  createdAt      DateTime @default(now()) @map("created_at")
+  qualifiedAt    String?  @map("qualified_at")
+
+  referrer       User     @relation("ReferralReferrer", fields: [referrerUserId], references: [id])
+  referred       User     @relation("ReferralReferred", fields: [referredUserId], references: [id])
+
+  @@map("referrals")
+}
+
+model WithdrawalRequest {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  amount      Float
+  method      String   @default("bank")
+  status      String   @default("pending")
+  createdAt   DateTime @default(now()) @map("created_at")
+  processedAt String?  @map("processed_at")
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("withdrawal_requests")
+}

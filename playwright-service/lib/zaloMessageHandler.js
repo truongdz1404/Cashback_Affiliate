@@ -93,15 +93,15 @@ async function handleProductLink(text, zaloUserId) {
 
   // getLinkAndCommission resolves short links and extracts the itemId itself
   // (see customLink.js) - no need to pre-resolve the redirect here.
-  const tracking = linkTracking.prepareSubId(zaloUserId, null);
+  const tracking = await linkTracking.prepareSubId(zaloUserId, null);
   const result = await getLinkAndCommission([foundLink], tracking.finalSubIds);
   if (!result.pid) return CANNOT_PARSE_TEXT;
 
   if (tracking.userId) {
-    linkTracking.recordLink(tracking.userId, tracking.subId, [foundLink], result, result.pid);
+    await linkTracking.recordLink(tracking.userId, tracking.subId, [foundLink], result, result.pid);
   }
-  const user = tracking.userId ? usersRepo.getById(tracking.userId) : null;
-  return formatProductReply(result, getEffectivePct(user));
+  const user = tracking.userId ? await usersRepo.getById(tracking.userId) : null;
+  return formatProductReply(result, await getEffectivePct(user));
 }
 
 // Returns the reply text for one incoming text message. Slash commands are

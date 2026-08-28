@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const db = require('./db');
+const prisma = require('./prisma');
 
 // Secrets that used to live only in .env, now live-editable from the admin
 // dashboard (lib/adminAuth.js + the /admin/config routes in server.js)
@@ -19,43 +19,51 @@ const KEYS = {
   zaloBotToken: { settingKey: 'zalo_bot_token', envName: 'ZALO_BOT_TOKEN', generate: false },
   zaloWebhookSecret: { settingKey: 'zalo_webhook_secret', envName: 'ZALO_WEBHOOK_SECRET', generate: false },
   jwtSecret: { settingKey: 'jwt_secret', envName: 'JWT_SECRET', generate: true },
+  // Google/Facebook app login - unset (no env var) until the user supplies
+  // real OAuth app credentials; /app/login/google and /app/login/facebook
+  // respond "not_configured" until then (see lib/oauthLogin.js).
+  googleClientId: { settingKey: 'google_client_id', envName: 'GOOGLE_CLIENT_ID', generate: false },
+  facebookAppId: { settingKey: 'facebook_app_id', envName: 'FACEBOOK_APP_ID', generate: false },
+  facebookAppSecret: { settingKey: 'facebook_app_secret', envName: 'FACEBOOK_APP_SECRET', generate: false },
 };
 
-function readSetting(settingKey) {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(settingKey);
+async function readSetting(settingKey) {
+  const row = await prisma.setting.findUnique({ where: { key: settingKey } });
   return row ? row.value : null;
 }
 
-function writeSetting(settingKey, value) {
-  db.prepare(
-    `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(settingKey, value);
+async function writeSetting(settingKey, value) {
+  await prisma.setting.upsert({
+    where: { key: settingKey },
+    create: { key: settingKey, value },
+    update: { value },
+  });
 }
 
-function get(name) {
+async function get(name) {
   const spec = KEYS[name];
   if (!spec) throw new Error(`unknown config key: ${name}`);
 
-  const stored = readSetting(spec.settingKey);
+  const stored = await readSetting(spec.settingKey);
   if (stored !== null) return stored;
 
   const fromEnv = process.env[spec.envName];
   if (fromEnv && fromEnv !== 'change-me') {
-    writeSetting(spec.settingKey, fromEnv);
+    await writeSetting(spec.settingKey, fromEnv);
     return fromEnv;
   }
   if (spec.generate) {
     const seeded = crypto.randomBytes(24).toString('hex');
-    writeSetting(spec.settingKey, seeded);
+    await writeSetting(spec.settingKey, seeded);
     return seeded;
   }
   return null;
 }
 
-function set(name, value) {
+async function set(name, value) {
   const spec = KEYS[name];
   if (!spec) throw new Error(`unknown config key: ${name}`);
-  writeSetting(spec.settingKey, value);
+  await writeSetting(spec.settingKey, value);
   return value;
 }
 
