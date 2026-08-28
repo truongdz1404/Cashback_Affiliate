@@ -4,6 +4,10 @@
 // preserving original ids, then fixes up each table's serial sequence so
 // the next INSERT via Prisma doesn't collide with a migrated id.
 //
+// Safe to re-run: every createMany uses skipDuplicates, so rows already
+// migrated by an earlier run are silently skipped and only new SQLite rows
+// get inserted.
+//
 // Usage: node scripts/migrate-sqlite-to-postgres.js [path-to-app.db]
 // Defaults to storage/app.db. DATABASE_URL (Postgres target) comes from
 // .env / the environment, same as the running server.
@@ -68,6 +72,7 @@ async function migrateUsers() {
       referredByUserId: null,
       createdAt: toDate(r.created_at),
     })),
+    skipDuplicates: true,
   });
 
   for (const r of rows) {
@@ -86,6 +91,7 @@ async function migrateSettings() {
 
   await prisma.setting.createMany({
     data: rows.map((r) => ({ key: r.key, value: r.value })),
+    skipDuplicates: true,
   });
   console.log(`settings: migrated ${rows.length}`);
 }
@@ -104,6 +110,7 @@ async function migrateLinks() {
       affiliateUrl: r.affiliate_url ?? null,
       createdAt: toDate(r.created_at),
     })),
+    skipDuplicates: true,
   });
   await resetSequence('links');
   console.log(`links: migrated ${rows.length}`);
@@ -129,6 +136,7 @@ async function migrateOrders() {
       rawJson: r.raw_json ?? null,
       createdAt: toDate(r.created_at),
     })),
+    skipDuplicates: true,
   });
   await resetSequence('orders');
   console.log(`orders: migrated ${rows.length}`);
@@ -149,6 +157,7 @@ async function migrateCampaigns() {
       isActive: !!r.is_active,
       createdAt: toDate(r.created_at),
     })),
+    skipDuplicates: true,
   });
   await resetSequence('campaigns');
   console.log(`campaigns: migrated ${rows.length}`);
@@ -169,6 +178,7 @@ async function migrateCampaignRewards() {
       paidAt: r.paid_at ?? null,
       createdAt: toDate(r.created_at),
     })),
+    skipDuplicates: true,
   });
   await resetSequence('campaign_rewards');
   console.log(`campaign_rewards: migrated ${rows.length}`);
@@ -188,6 +198,7 @@ async function migrateReferrals() {
       createdAt: toDate(r.created_at),
       qualifiedAt: r.qualified_at ?? null,
     })),
+    skipDuplicates: true,
   });
   await resetSequence('referrals');
   console.log(`referrals: migrated ${rows.length}`);
@@ -207,6 +218,7 @@ async function migrateWithdrawalRequests() {
       createdAt: toDate(r.created_at),
       processedAt: r.processed_at ?? null,
     })),
+    skipDuplicates: true,
   });
   await resetSequence('withdrawal_requests');
   console.log(`withdrawal_requests: migrated ${rows.length}`);
