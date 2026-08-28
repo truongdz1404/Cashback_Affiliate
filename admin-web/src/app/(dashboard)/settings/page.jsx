@@ -8,6 +8,9 @@ const CONFIG_LABELS = {
   zaloBotToken: "Zalo Bot Token",
   zaloWebhookSecret: "Zalo Webhook Secret",
   jwtSecret: "JWT Secret (admin session)",
+  googleClientId: "Google OAuth Client ID",
+  facebookAppId: "Facebook App ID",
+  facebookAppSecret: "Facebook App Secret",
 };
 
 function SectionCard({ title, description, children }) {
