@@ -173,6 +173,17 @@ app.get('/app/oauth-config', async (req, res) => {
   }
 });
 
+// Facebook's "Valid OAuth Redirect URIs" only accepts https:// URIs, but the
+// app itself lives at a custom URL scheme (rewally://). This static page is
+// the https hop Facebook redirects to; its inline script immediately forwards
+// the URL fragment (where the access_token lives - never sent to a server)
+// on to the app's own custom-scheme deep link, which the OS then opens.
+app.get('/app/oauth/relay', (req, res) => {
+  res.type('html').send(`<!DOCTYPE html><html><body>
+<script>window.location.replace('rewally://oauthredirect#' + window.location.hash.slice(1));</script>
+</body></html>`);
+});
+
 async function handleOAuthLogin(req, res, provider, verify, tokenField) {
   try {
     const token = req.body[tokenField];
