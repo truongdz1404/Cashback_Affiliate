@@ -184,6 +184,113 @@ app.get('/app/oauth/relay', (req, res) => {
 </body></html>`);
 });
 
+// Static legal pages required by Facebook (and Google Play/App Store later)
+// before an OAuth app can go Live - linked from the Facebook App Dashboard's
+// "Privacy Policy URL" / "Data Deletion" fields under app settings.
+const LEGAL_CONTACT_EMAIL = 'tro247.company@gmail.com';
+
+app.get('/app/legal/privacy', (req, res) => {
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chính sách quyền riêng tư - Rewally</title>
+<style>
+  body { font-family: -apple-system, Roboto, Helvetica, Arial, sans-serif; max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; color: #2A2E35; line-height: 1.6; }
+  h1 { color: #4C7EF3; font-size: 22px; }
+  h2 { font-size: 17px; margin-top: 32px; }
+  a { color: #4C7EF3; }
+  .updated { color: #777; font-size: 13px; margin-bottom: 24px; }
+</style>
+</head>
+<body>
+<h1>Chính sách quyền riêng tư - Rewally</h1>
+<p class="updated">Cập nhật lần cuối: 29/08/2026</p>
+
+<p>Rewally ("chúng tôi") cung cấp dịch vụ hoàn tiền/tiếp thị liên kết cho các sàn thương mại điện tử (Shopee và các sàn khác trong tương lai). Chính sách này giải thích chúng tôi thu thập, sử dụng và bảo vệ thông tin của bạn như thế nào khi bạn dùng ứng dụng Rewally.</p>
+
+<h2>1. Thông tin chúng tôi thu thập</h2>
+<ul>
+  <li><b>Thông tin tài khoản:</b> số điện thoại, mật khẩu (được mã hóa, không lưu dạng văn bản thuần).</li>
+  <li><b>Thông tin đăng nhập qua Google/Facebook (nếu bạn chọn dùng):</b> tên hiển thị, địa chỉ email, ảnh đại diện công khai. Chúng tôi không truy cập và không lưu mật khẩu Google/Facebook của bạn.</li>
+  <li><b>Thông tin thanh toán:</b> tên ngân hàng, số tài khoản ngân hàng, dùng để chi trả tiền hoàn tiền/hoa hồng cho bạn.</li>
+  <li><b>Dữ liệu giao dịch:</b> link sản phẩm bạn tạo qua app, đơn hàng và hoa hồng phát sinh từ các link đó.</li>
+  <li><b>Dữ liệu giới thiệu bạn bè:</b> mã giới thiệu, danh sách người bạn đã mời (nếu bạn dùng tính năng này).</li>
+</ul>
+
+<h2>2. Mục đích sử dụng</h2>
+<ul>
+  <li>Xác thực và bảo vệ tài khoản của bạn.</li>
+  <li>Tạo link tiếp thị liên kết và tính toán hoa hồng/hoàn tiền.</li>
+  <li>Xử lý thanh toán hoàn tiền/thưởng sự kiện/thưởng giới thiệu bạn bè vào tài khoản ngân hàng bạn cung cấp.</li>
+  <li>Chăm sóc khách hàng và hỗ trợ khi bạn liên hệ.</li>
+</ul>
+
+<h2>3. Chia sẻ thông tin</h2>
+<p>Chúng tôi không bán hoặc cho thuê thông tin cá nhân của bạn. Thông tin chỉ được chia sẻ trong các trường hợp sau:</p>
+<ul>
+  <li>Với Google/Facebook: chỉ ở bước xác thực đăng nhập (OAuth), theo đúng quy định của các nền tảng này.</li>
+  <li>Với sàn thương mại điện tử (Shopee...): chỉ dữ liệu cần thiết để tạo/tra cứu link liên kết và đối soát hoa hồng.</li>
+  <li>Khi pháp luật yêu cầu.</li>
+</ul>
+
+<h2>4. Lưu trữ và bảo mật</h2>
+<p>Dữ liệu được lưu trữ trên máy chủ có kiểm soát truy cập, mật khẩu được mã hóa một chiều (hashed). Chúng tôi áp dụng các biện pháp hợp lý để bảo vệ dữ liệu khỏi truy cập trái phép.</p>
+
+<h2>5. Quyền của bạn</h2>
+<p>Bạn có quyền yêu cầu truy cập, chỉnh sửa hoặc xóa dữ liệu cá nhân của mình. Xem hướng dẫn xóa dữ liệu tại <a href="/app/legal/data-deletion">đây</a>.</p>
+
+<h2>6. Trẻ em</h2>
+<p>Dịch vụ này không hướng đến người dùng dưới 16 tuổi. Chúng tôi không cố ý thu thập dữ liệu từ trẻ em.</p>
+
+<h2>7. Thay đổi chính sách</h2>
+<p>Chúng tôi có thể cập nhật chính sách này theo thời gian. Phiên bản mới nhất luôn được đăng tại địa chỉ này.</p>
+
+<h2>8. Liên hệ</h2>
+<p>Mọi câu hỏi về quyền riêng tư, vui lòng liên hệ: <a href="mailto:${LEGAL_CONTACT_EMAIL}">${LEGAL_CONTACT_EMAIL}</a></p>
+</body>
+</html>`);
+});
+
+app.get('/app/legal/data-deletion', (req, res) => {
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hướng dẫn xóa dữ liệu - Rewally</title>
+<style>
+  body { font-family: -apple-system, Roboto, Helvetica, Arial, sans-serif; max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; color: #2A2E35; line-height: 1.6; }
+  h1 { color: #4C7EF3; font-size: 22px; }
+  h2 { font-size: 17px; margin-top: 32px; }
+  a { color: #4C7EF3; }
+  .updated { color: #777; font-size: 13px; margin-bottom: 24px; }
+  ol { padding-left: 20px; }
+</style>
+</head>
+<body>
+<h1>Hướng dẫn yêu cầu xóa dữ liệu - Rewally</h1>
+<p class="updated">Cập nhật lần cuối: 29/08/2026</p>
+
+<p>Nếu bạn muốn xóa toàn bộ dữ liệu cá nhân đã cung cấp cho Rewally (bao gồm dữ liệu liên kết qua đăng nhập Google/Facebook), vui lòng làm theo các bước sau:</p>
+
+<h2>Cách gửi yêu cầu</h2>
+<ol>
+  <li>Gửi email tới <a href="mailto:${LEGAL_CONTACT_EMAIL}">${LEGAL_CONTACT_EMAIL}</a> với tiêu đề: <b>"Yêu cầu xóa dữ liệu tài khoản Rewally"</b>.</li>
+  <li>Trong email, vui lòng cung cấp số điện thoại đã đăng ký tài khoản, hoặc địa chỉ email bạn dùng để đăng nhập bằng Google/Facebook, để chúng tôi xác minh đúng tài khoản.</li>
+</ol>
+
+<h2>Quy trình xử lý</h2>
+<p>Sau khi xác minh yêu cầu, chúng tôi sẽ xóa vĩnh viễn dữ liệu cá nhân liên quan đến tài khoản của bạn (thông tin đăng nhập, thông tin ngân hàng, lịch sử liên kết đã tạo) trong vòng <b>30 ngày làm việc</b>, ngoại trừ dữ liệu bắt buộc phải lưu giữ theo quy định pháp luật hiện hành (ví dụ chứng từ giao dịch tài chính đã phát sinh).</p>
+<p>Chúng tôi sẽ gửi email xác nhận đến bạn khi việc xóa dữ liệu hoàn tất.</p>
+
+<h2>Liên hệ</h2>
+<p><a href="mailto:${LEGAL_CONTACT_EMAIL}">${LEGAL_CONTACT_EMAIL}</a></p>
+</body>
+</html>`);
+});
+
 async function handleOAuthLogin(req, res, provider, verify, tokenField) {
   try {
     const token = req.body[tokenField];
