@@ -31,19 +31,21 @@ function pick(entry, ...keys) {
 }
 
 /**
- * The real shape of a report/list entry hasn't been confirmed yet against a
- * live order (no orders have gone through the system so far) - this reads
- * both the snake_case and camelCase spelling of each field defensively, and
- * the full raw entry is kept in orders.raw_json so the mapping below can be
- * corrected against the first real order without re-deriving it from
- * scratch.
+ * Confirmed against a live order (see /debug/report-list): each report/list
+ * entry is one *checkout*, not one order - order_sn/order_id/display_order_status
+ * live one level down in entry.orders[] (a checkout can contain more than one
+ * order), and commission is per line item (order.items[].item_commission),
+ * not on the checkout or order itself. purchase_time/utm_content are shared
+ * across every order in the same checkout, so they're read off the checkout.
  */
-function mapEntry(entry) {
-  const orderSn = pick(entry, 'order_sn', 'orderSn', 'order_id', 'orderId');
+function mapEntry(entry, order) {
+  const orderSn = pick(order, 'order_sn', 'orderSn', 'order_id', 'orderId');
   const subId = pick(entry, 'utm_content', 'utmContent', 'sub_id1', 'subId1');
-  const totalCommission =
-    Number(pick(entry, 'total_commission', 'totalCommission', 'commission', 'estimated_commission')) || 0;
-  const displayOrderStatusRaw = pick(entry, 'display_order_status', 'displayOrderStatus', 'order_status', 'status');
+  const items = Array.isArray(order.items) ? order.items : [];
+  const totalCommission = items.length
+    ? items.reduce((sum, item) => sum + (Number(pick(item, 'item_commission', 'itemCommission')) || 0), 0)
+    : Number(pick(order, 'total_commission', 'totalCommission', 'commission', 'estimated_commission')) || 0;
+  const displayOrderStatusRaw = pick(order, 'display_order_status', 'displayOrderStatus', 'order_status', 'status');
   const displayOrderStatus = displayOrderStatusRaw === null ? null : Number(displayOrderStatusRaw);
   const purchaseTime = pick(entry, 'purchase_time', 'purchaseTime', 'order_time', 'create_time');
   return { orderSn, subId, totalCommission, displayOrderStatus, purchaseTime };
@@ -76,35 +78,38 @@ async function reconcileOrders({ extraParams = {} } = {}) {
     if (list.length === 0) break;
 
     for (const entry of list) {
-      processed += 1;
-      const mapped = mapEntry(entry);
-      if (!mapped.orderSn) continue;
+      const orders = Array.isArray(entry.orders) ? entry.orders : [];
+      for (const order of orders) {
+        processed += 1;
+        const mapped = mapEntry(entry, order);
+        if (!mapped.orderSn) continue;
 
-      const link = mapped.subId ? await linksRepo.findBySubId(mapped.subId) : null;
-      const user = link ? await usersRepo.getById(link.userId) : null;
-      const effectivePct = await getEffectivePct(user);
-      const { userAmount, operatorAmount } = splitAmount(mapped.totalCommission, effectivePct);
+        const link = mapped.subId ? await linksRepo.findBySubId(mapped.subId) : null;
+        const user = link ? await usersRepo.getById(link.userId) : null;
+        const effectivePct = await getEffectivePct(user);
+        const { userAmount, operatorAmount } = splitAmount(mapped.totalCommission, effectivePct);
 
-      const savedOrder = await ordersRepo.upsertOrder({
-        orderSn: mapped.orderSn,
-        userId: link ? link.userId : null,
-        subId: mapped.subId,
-        totalCommission: mapped.totalCommission,
-        userCommission: userAmount,
-        operatorCommission: operatorAmount,
-        displayOrderStatus: mapped.displayOrderStatus,
-        purchaseTime: mapped.purchaseTime,
-        rawJson: JSON.stringify(entry),
-      });
-      upserted += 1;
+        const savedOrder = await ordersRepo.upsertOrder({
+          orderSn: mapped.orderSn,
+          userId: link ? link.userId : null,
+          subId: mapped.subId,
+          totalCommission: mapped.totalCommission,
+          userCommission: userAmount,
+          operatorCommission: operatorAmount,
+          displayOrderStatus: mapped.displayOrderStatus,
+          purchaseTime: mapped.purchaseTime,
+          rawJson: JSON.stringify({ checkout: entry, order }),
+        });
+        upserted += 1;
 
-      // Campaign tiers and referral qualification only care about orders
-      // that actually completed (display_order_status 2) - both calls are
-      // idempotent (UNIQUE constraint / pending-only guard) so re-processing
-      // the same order on a later reconcile run is safe.
-      if (savedOrder.displayOrderStatus === 2 && savedOrder.userId) {
-        await campaignsRepo.grantRewardsForUser(savedOrder.userId);
-        await referralsRepo.qualifyIfEligible(savedOrder.userId);
+        // Campaign tiers and referral qualification only care about orders
+        // that actually completed (display_order_status 2) - both calls are
+        // idempotent (UNIQUE constraint / pending-only guard) so re-processing
+        // the same order on a later reconcile run is safe.
+        if (savedOrder.displayOrderStatus === 2 && savedOrder.userId) {
+          await campaignsRepo.grantRewardsForUser(savedOrder.userId);
+          await referralsRepo.qualifyIfEligible(savedOrder.userId);
+        }
       }
     }
 
