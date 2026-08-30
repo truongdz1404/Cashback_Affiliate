@@ -17,6 +17,12 @@ let context = null;
 // half-created page.
 let customLinkPagePool = [];
 
+// How many times a pooled page gets reused before it's recycled (fresh
+// navigate) instead - a safety valve against unbounded DOM/memory growth from
+// repeatedly rendering "Lấy link" results into the same page over hours.
+const CUSTOM_LINK_PAGE_MAX_REUSE = parseInt(process.env.CUSTOM_LINK_PAGE_MAX_REUSE || '200', 10);
+const customLinkPageUseCounts = new WeakMap();
+
 function warmCustomLinkPage() {
   return (async () => {
     const c = await getContext();
@@ -61,6 +67,44 @@ async function acquireCustomLinkPage() {
   refillCustomLinkPool();
   if (!page) page = await warmCustomLinkPage();
   return page;
+}
+
+/**
+ * Hands a used custom-link page back to the pool instead of discarding it -
+ * this is what keeps repeat requests fast (skip the ~5-8s cold navigate) once
+ * the caller has moved off the fetch-bypass path and onto driving the real
+ * page for every request. Clears the form fields in-place (native value
+ * setter + 'input' event, so React's controlled inputs pick it up) rather
+ * than reloading, which would pay the full SPA boot cost again.
+ * Falls back to closing + re-warming if the reset fails or the page has been
+ * reused too many times.
+ */
+async function releaseCustomLinkPage(page) {
+  const uses = (customLinkPageUseCounts.get(page) || 0) + 1;
+  customLinkPageUseCounts.set(page, uses);
+
+  const poolIsOversized = customLinkPagePool.length >= CUSTOM_LINK_POOL_SIZE * 3;
+  const canReuse = uses < CUSTOM_LINK_PAGE_MAX_REUSE && !page.isClosed() && !poolIsOversized;
+
+  if (canReuse) {
+    try {
+      await page.evaluate(() => {
+        document.querySelectorAll('input, textarea').forEach((el) => {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+          setter.call(el, '');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+      });
+      customLinkPagePool.push(Promise.resolve(page));
+      return;
+    } catch (err) {
+      console.error('[pool] failed to reset page for reuse, discarding:', err.message);
+    }
+  }
+
+  await page.close().catch(() => {});
+  refillCustomLinkPool();
 }
 
 /**
@@ -195,5 +239,6 @@ module.exports = {
   persistStorageState,
   shutdown,
   acquireCustomLinkPage,
+  releaseCustomLinkPage,
   refillCustomLinkPool,
 };

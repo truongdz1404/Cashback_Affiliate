@@ -12,27 +12,52 @@ const BATCH_CUSTOM_LINK_QUERY = `
 `;
 
 /**
- * Best-effort fill of the Sub_id1..Sub_id5 inputs. The dashboard is a
- * dynamic React app without stable class names, so we locate each field by
- * the visible "Sub_idN" label next to it rather than a CSS selector.
+ * Fills the link textarea and the Sub_id1..Sub_id5 inputs in a single
+ * page.evaluate() round trip instead of Playwright's per-field
+ * locator().fill() (each of which pays a full actionability wait - visible,
+ * enabled, stable, receives-events - over the CDP wire). Values are set via
+ * the native value-property setter + a dispatched 'input' event, which is
+ * what makes React's controlled inputs pick up the change (a plain
+ * `el.value = x` does not trigger their onChange).
+ *
+ * Sub_id fields are located the same way the old per-field locator did -
+ * find the "Sub_idN" label, take the next <input> after it in document
+ * order - just resolved once in-page instead of N round trips.
  *
  * NOTE: if Shopee changes this page's markup this is the first thing to
  * re-check. Run `npx playwright codegen https://affiliate.shopee.vn/offer/custom_link`
  * (logged in, in your own browser) to inspect the live DOM and adjust the
- * locator below if it stops matching.
+ * label-matching below if it stops working.
  */
-async function fillSubIds(page, subIds = {}) {
-  for (let i = 1; i <= 5; i += 1) {
-    const value = subIds[`sub_id${i}`];
-    if (!value) continue;
-    const field = page
-      .locator(`text=/Sub_id${i}\\b/i`)
-      .locator('xpath=following::input[1]')
-      .first();
-    if (await field.count()) {
-      await field.fill(String(value)).catch(() => {});
-    }
-  }
+async function fillFormFast(page, links, subIds = {}) {
+  await page.evaluate(
+    ({ linksText, subIds }) => {
+      function setNativeValue(el, value) {
+        const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+      const textarea = document.querySelector('textarea');
+      if (textarea) setNativeValue(textarea, linksText);
+
+      const allInputs = Array.from(document.querySelectorAll('input'));
+      const labelNodes = Array.from(document.querySelectorAll('*')).filter(
+        (el) => el.children.length === 0 && /^Sub_id[1-5]$/i.test(el.textContent.trim())
+      );
+
+      for (const labelNode of labelNodes) {
+        const idx = labelNode.textContent.trim().match(/[1-5]/)[0];
+        const value = subIds[`sub_id${idx}`];
+        if (!value) continue;
+        const input = allInputs.find((inp) => labelNode.compareDocumentPosition(inp) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (input) setNativeValue(input, String(value));
+      }
+    },
+    { linksText: links.slice(0, 5).join('\n'), subIds }
+  );
 }
 
 /**
@@ -89,6 +114,14 @@ function buildBatchCustomLinkPayload(links, subIds = {}) {
  * entirely and hit the GraphQL endpoint directly. This takes ~100-450ms
  * versus the ~2-6s the Playwright/pool path pays for a full page load +
  * button click + DOM wait.
+ *
+ * DISABLED as of the getCustomLinks() switch below: this is exactly the
+ * kind of "bypasses Shopee's own anti-fraud tokens" traffic pattern flagged
+ * as a likely contributor to the account's commission-fraud rejections
+ * (every custom link for every user going out through one shared IP/session
+ * via a raw fetch that deliberately skips the tokens Shopee attaches to
+ * normal dashboard use). Kept here, unused, in case this turns out not to be
+ * the cause and the speed tradeoff needs to be revisited.
  */
 async function getCustomLinksViaFetch(links, subIds) {
   const context = await browserManager.getContext();
@@ -133,6 +166,10 @@ async function extractResultFromPage(page, apiResponse) {
 
   // Fallback: scrape whatever shortened links are visible on screen. No
   // itemId is recoverable this way, but at least the link itself isn't lost.
+  // NOTE: since the page is now reused across requests (not reloaded), a
+  // slow render on this specific call could in theory surface a leftover
+  // result from a previous call here - acceptable for a last-resort path
+  // that's only hit when the primary API-response capture fails.
   await page.waitForTimeout(1500);
   const scraped = await page.evaluate(() => {
     const anchors = Array.from(document.querySelectorAll('a[href*="s.shopee"], a[href*="shope.ee"]'))
@@ -150,10 +187,13 @@ async function extractResultFromPage(page, apiResponse) {
 }
 
 /**
- * Fallback path: drives the real custom_link page like a user would. Used
- * only when getCustomLinksViaFetch() fails (e.g. Shopee starts requiring
- * anti-fraud headers here too, or the session cookies are stale) so a
- * transient issue with the fast path doesn't take the feature down.
+ * Drives the real custom_link page like a user would, so Shopee's own page
+ * JS attaches whatever anti-fraud tokens it normally attaches to this
+ * action - unlike getCustomLinksViaFetch() above. Uses a pooled, already
+ * logged-in, already-on-the-page tab (see browserManager.js) and fills it
+ * via fillFormFast() so the only real latency left is the actual network
+ * round trip Shopee's page itself makes for "Lấy link" - typically a few
+ * hundred ms, same order as the raw-fetch path was.
  */
 async function getCustomLinksViaBrowser(links, subIds) {
   const page = await browserManager.acquireCustomLinkPage();
@@ -163,12 +203,7 @@ async function getCustomLinksViaBrowser(links, subIds) {
       throw new Error('Not logged in - call POST /login with valid cookies first.');
     }
 
-    const textarea = page.locator('textarea').first();
-    await textarea.fill(links.slice(0, 5).join('\n'));
-
-    if (subIds) {
-      await fillSubIds(page, subIds);
-    }
+    await fillFormFast(page, links, subIds || {});
 
     const responsePromise = page
       .waitForResponse((resp) => resp.url().includes('q=batchCustomLink'), { timeout: 15000 })
@@ -179,19 +214,13 @@ async function getCustomLinksViaBrowser(links, subIds) {
     const apiResponse = await responsePromise;
     return await extractResultFromPage(page, apiResponse);
   } finally {
-    // Single-use tab: pooled pages are meant to be consumed once (the
-    // textarea/result state doesn't reset cleanly for reuse). Closing it and
-    // letting the pool top itself back up in the background keeps the next
-    // caller fast too.
-    await page.close().catch(() => {});
-    browserManager.refillCustomLinkPool();
+    await browserManager.releaseCustomLinkPage(page);
   }
 }
 
 /**
- * Generates custom affiliate links for up to 5 product URLs. Tries the fast
- * direct-fetch path first and only falls back to driving the real page if
- * that fails.
+ * Generates custom affiliate links for up to 5 product URLs by driving the
+ * real Shopee dashboard page (see getCustomLinksViaBrowser above).
  * @param {string[]} links product URLs, max 5 (matches the page's own limit)
  * @param {object} [subIds] e.g. { sub_id1: 'campaign_a' }
  */
@@ -200,13 +229,7 @@ async function getCustomLinks(links, subIds) {
     throw new Error('links must be a non-empty array of product URLs (max 5)');
   }
 
-  let result;
-  try {
-    result = await getCustomLinksViaFetch(links, subIds);
-  } catch (err) {
-    result = await getCustomLinksViaBrowser(links, subIds);
-  }
-
+  const result = await getCustomLinksViaBrowser(links, subIds);
   return { links, subIds: subIds || null, ...result };
 }
 
