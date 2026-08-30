@@ -14,7 +14,9 @@ async function getLinkAndCommission(links, subIds) {
 
   let commission = null;
   if (first && first.itemId) {
+    const start = Date.now();
     commission = await getCommission(first.itemId).catch((err) => ({ error: err.message }));
+    console.log(`[linkAndCommission] getCommission took ${Date.now() - start}ms (source=${commission?.source})`);
   }
 
   return {

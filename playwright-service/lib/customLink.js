@@ -196,6 +196,7 @@ async function extractResultFromPage(page, apiResponse) {
  * hundred ms, same order as the raw-fetch path was.
  */
 async function getCustomLinksViaBrowser(links, subIds) {
+  const start = Date.now();
   const page = await browserManager.acquireCustomLinkPage();
 
   try {
@@ -212,7 +213,9 @@ async function getCustomLinksViaBrowser(links, subIds) {
     await page.getByRole('button', { name: /Lấy link/i }).click();
 
     const apiResponse = await responsePromise;
-    return await extractResultFromPage(page, apiResponse);
+    const result = await extractResultFromPage(page, apiResponse);
+    console.log(`[customLink] getCustomLinksViaBrowser took ${Date.now() - start}ms (source=${result.source})`);
+    return result;
   } finally {
     await browserManager.releaseCustomLinkPage(page);
   }
