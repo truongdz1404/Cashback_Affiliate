@@ -47,7 +47,10 @@ function mapEntry(entry, order) {
     : Number(pick(order, 'total_commission', 'totalCommission', 'commission', 'estimated_commission')) || 0;
   const displayOrderStatusRaw = pick(order, 'display_order_status', 'displayOrderStatus', 'order_status', 'status');
   const displayOrderStatus = displayOrderStatusRaw === null ? null : Number(displayOrderStatusRaw);
-  const purchaseTime = pick(entry, 'purchase_time', 'purchaseTime', 'order_time', 'create_time');
+  // Shopee returns purchase_time as a Unix timestamp number, but the orders.purchase_time
+  // column is TEXT (schema.prisma: `purchaseTime String?`) - coerce or Prisma rejects it.
+  const purchaseTimeRaw = pick(entry, 'purchase_time', 'purchaseTime', 'order_time', 'create_time');
+  const purchaseTime = purchaseTimeRaw === null ? null : String(purchaseTimeRaw);
   return { orderSn, subId, totalCommission, displayOrderStatus, purchaseTime };
 }
 
