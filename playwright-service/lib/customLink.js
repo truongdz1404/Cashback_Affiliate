@@ -78,12 +78,18 @@ function extractShopAndItemId(longLink) {
 }
 
 function toResults(entries) {
-  return entries.map((e) => ({
-    shortLink: e.shortLink || null,
-    longLink: e.longLink || null,
-    failCode: e.failCode ?? null,
-    ...extractShopAndItemId(e.longLink),
-  }));
+  return entries.map((e) => {
+    const ids = extractShopAndItemId(e.longLink);
+    if (e.longLink && !ids.itemId) {
+      console.warn(`[customLink] could not extract itemId from longLink: ${e.longLink}`);
+    }
+    return {
+      shortLink: e.shortLink || null,
+      longLink: e.longLink || null,
+      failCode: e.failCode ?? null,
+      ...ids,
+    };
+  });
 }
 
 function buildBatchCustomLinkPayload(links, subIds = {}) {
