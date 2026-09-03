@@ -184,6 +184,15 @@ async function verifyLogin(phone, password) {
   return user;
 }
 
+// Used by PUT /app/password before allowing a change. Accounts that signed
+// up via OAuth and never set a password have no passwordHash yet - treat
+// that as nothing to verify rather than an automatic rejection.
+async function verifyPassword(userId, password) {
+  const user = await getById(userId);
+  if (!user || !user.passwordHash) return true;
+  return passwordHash.verifyPassword(password, user.passwordHash);
+}
+
 // App-facing responses must never leak passwordHash - strip it rather than
 // remembering to omit it at every call site.
 function toPublicAppUser(user) {
@@ -213,5 +222,6 @@ module.exports = {
   setPassword,
   setReferredBy,
   verifyLogin,
+  verifyPassword,
   toPublicAppUser,
 };

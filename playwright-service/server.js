@@ -347,9 +347,12 @@ app.put('/app/me', appAuth.requireAppUser, async (req, res) => {
 
 app.put('/app/password', appAuth.requireAppUser, async (req, res) => {
   try {
-    const { newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body;
     if (!newPassword || String(newPassword).length < 6) {
       return res.status(400).json({ error: 'newPassword must be at least 6 characters' });
+    }
+    if (!(await usersRepo.verifyPassword(req.appUserId, currentPassword || ''))) {
+      return res.status(400).json({ error: 'currentPassword is incorrect' });
     }
     await usersRepo.setPassword(req.appUserId, newPassword);
     res.json({ ok: true });
