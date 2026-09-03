@@ -1,7 +1,7 @@
 const configStore = require('./configStore');
 
-function apiBase() {
-  const token = configStore.get('zaloBotToken');
+async function apiBase() {
+  const token = await configStore.get('zaloBotToken');
   if (!token) {
     throw new Error('ZALO_BOT_TOKEN is not configured (.env or admin dashboard)');
   }
@@ -9,7 +9,7 @@ function apiBase() {
 }
 
 async function sendMessage(chatId, text) {
-  const response = await fetch(`${apiBase()}/sendMessage`, {
+  const response = await fetch(`${await apiBase()}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text }),

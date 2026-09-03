@@ -18,8 +18,16 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       RABBITMQ_HOST: rabbitmq
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM}
     volumes:
       - ./playwright-service/storage:/app/storage
+    extra_hosts:
+      - host.docker.internal:host-gateway
     depends_on:
       - shopee-affiliate-db
       - rabbitmq

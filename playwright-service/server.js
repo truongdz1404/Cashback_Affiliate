@@ -21,6 +21,7 @@ const appAuth = require('./lib/appAuth');
 const oauthLogin = require('./lib/oauthLogin');
 const configStore = require('./lib/configStore');
 const { reconcileOrders } = require('./lib/reconciliation');
+const { runHealthCheck } = require('./lib/healthCheck');
 const { rateLimit } = require('./lib/simpleRateLimit');
 const { getEffectivePct, splitAmount } = require('./lib/commissionSplit');
 const { publishWithdrawalRequest } = require('./lib/queue/withdrawalQueue');
@@ -951,6 +952,11 @@ cron.schedule('0 */6 * * *', () => {
   reconcileOrders()
     .then((result) => console.log(`cron reconcile: ${JSON.stringify(result)}`))
     .catch((err) => console.error('cron reconcile failed', err.message));
+});
+
+// Health check: every 30 minutes - alerts via email if any service is down
+cron.schedule('*/30 * * * *', () => {
+  runHealthCheck().catch((err) => console.error('health-check cron error', err.message));
 });
 
 process.on('SIGTERM', async () => {
