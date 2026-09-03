@@ -15,10 +15,49 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@shopee-affiliate-db:5432/${POSTGRES_DB}
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
     volumes:
       - ./playwright-service/storage:/app/storage
     depends_on:
       - shopee-affiliate-db
+      - rabbitmq
+    networks:
+      - shared_net
+
+  # Withdrawal-creation consumer - deliberately its own container (built from
+  # the lightweight Dockerfile.worker, not the heavy Playwright image) so a
+  # routine deploy of the main API service doesn't restart it mid-processing.
+  withdrawal-worker:
+    build:
+      context: ./playwright-service
+      dockerfile: Dockerfile.worker
+    container_name: shopee-affiliate-withdrawal-worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@shopee-affiliate-db:5432/${POSTGRES_DB}
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+    depends_on:
+      - shopee-affiliate-db
+      - rabbitmq
+    networks:
+      - shared_net
+
+  # No public ports - RabbitMQ (including its 15672 management UI) is only
+  # reachable from other containers on shared_net, matching how
+  # shopee-affiliate-db's Postgres port is kept loopback-only.
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: shopee-affiliate-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - shopee-affiliate-rabbitmq-data:/var/lib/rabbitmq
     networks:
       - shared_net
 
@@ -57,3 +96,4 @@ networks:
 
 volumes:
   shopee-affiliate-db-data:
+  shopee-affiliate-rabbitmq-data:

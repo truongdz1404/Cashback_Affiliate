@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+COPY package*.json ./
+COPY prisma ./prisma
+# Skips the Playwright browser download (postinstall) - this worker never
+# touches a browser, it only talks to Postgres and RabbitMQ. Regenerate the
+# Prisma client explicitly since --ignore-scripts also skips the
+# postinstall's `prisma generate`.
+RUN npm ci --omit=dev --ignore-scripts && npx prisma generate
+
+COPY lib ./lib
+COPY worker ./worker
+
+CMD ["node", "worker/withdrawalWorker.js"]

@@ -34,6 +34,7 @@ model User {
   referralsAsReferrer Referral[]           @relation("ReferralReferrer")
   referralAsReferred  Referral?            @relation("ReferralReferred")
   withdrawalRequests  WithdrawalRequest[]
+  clawbackFlags       ClawbackFlag[]
 
   @@map("users")
 }
@@ -71,6 +72,7 @@ model Order {
   payoutStatus        String   @default("unpaid") @map("payout_status")
   paidAt              String?  @map("paid_at")
   purchaseTime        String?  @map("purchase_time")
+  productName         String?  @map("product_name")
   rawJson             String?  @map("raw_json")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
@@ -113,30 +115,56 @@ model CampaignReward {
 }
 
 model Referral {
-  id             Int      @id @default(autoincrement())
-  referrerUserId Int      @map("referrer_user_id")
-  referredUserId Int      @unique @map("referred_user_id")
-  status         String   @default("pending")
-  rewardAmount   Float?   @map("reward_amount")
-  createdAt      DateTime @default(now()) @map("created_at")
-  qualifiedAt    String?  @map("qualified_at")
+  id                Int      @id @default(autoincrement())
+  referrerUserId    Int      @map("referrer_user_id")
+  referredUserId    Int      @unique @map("referred_user_id")
+  status            String   @default("pending")
+  rewardAmount      Float?   @map("reward_amount")
+  createdAt         DateTime @default(now()) @map("created_at")
+  qualifiedAt       String?  @map("qualified_at")
+  payoutStatus      String   @default("unpaid") @map("payout_status")
+  paidAt            String?  @map("paid_at")
+  qualifyingOrderId Int?     @map("qualifying_order_id")
 
-  referrer       User     @relation("ReferralReferrer", fields: [referrerUserId], references: [id])
-  referred       User     @relation("ReferralReferred", fields: [referredUserId], references: [id])
+  referrer          User     @relation("ReferralReferrer", fields: [referrerUserId], references: [id])
+  referred          User     @relation("ReferralReferred", fields: [referredUserId], references: [id])
 
+  @@index([referrerUserId, payoutStatus])
   @@map("referrals")
 }
 
 model WithdrawalRequest {
-  id          Int      @id @default(autoincrement())
-  userId      Int      @map("user_id")
-  amount      Float
-  method      String   @default("bank")
-  status      String   @default("pending")
-  createdAt   DateTime @default(now()) @map("created_at")
-  processedAt String?  @map("processed_at")
+  id              Int      @id @default(autoincrement())
+  userId          Int      @map("user_id")
+  amount          Float
+  method          String   @default("bank")
+  status          String   @default("pending")
+  createdAt       DateTime @default(now()) @map("created_at")
+  processedAt     String?  @map("processed_at")
+  clientRequestId String?  @unique @map("client_request_id")
 
-  user        User     @relation(fields: [userId], references: [id])
+  user            User     @relation(fields: [userId], references: [id])
 
   @@map("withdrawal_requests")
+}
+
+// Manual-review queue: written when money already marked paid (order payout,
+// referral, or campaign reward) needs reversal because Shopee later reported
+// the underlying order as Cancelled. Never auto-reversed - a human confirms
+// whether/how to claw the paid-out amount back.
+model ClawbackFlag {
+  id                   Int       @id @default(autoincrement())
+  userId               Int       @map("user_id")
+  sourceType           String    @map("source_type")
+  sourceId             Int       @map("source_id")
+  previousPayoutStatus String    @map("previous_payout_status")
+  amount               Float
+  detectedAt           DateTime  @default(now()) @map("detected_at")
+  resolvedAt           DateTime? @map("resolved_at")
+  resolvedBy           String?   @map("resolved_by")
+  note                 String?
+
+  user                 User      @relation(fields: [userId], references: [id])
+
+  @@map("clawback_flags")
 }

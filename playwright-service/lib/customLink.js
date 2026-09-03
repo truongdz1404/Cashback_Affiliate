@@ -204,13 +204,23 @@ async function getCustomLinksViaBrowser(links, subIds) {
       throw new Error('Not logged in - call POST /login with valid cookies first.');
     }
 
+    await browserManager.dismissBlockingModals(page);
     await fillFormFast(page, links, subIds || {});
 
     const responsePromise = page
       .waitForResponse((resp) => resp.url().includes('q=batchCustomLink'), { timeout: 15000 })
       .catch(() => null);
 
-    await page.getByRole('button', { name: /Lấy link/i }).click();
+    const button = page.getByRole('button', { name: /Lấy link/i });
+    try {
+      // Short timeout: a leftover modal (see dismissBlockingModals) blocks
+      // this instantly, so fail fast instead of eating the full 30s default.
+      await button.click({ timeout: 8000 });
+    } catch (err) {
+      console.error('[customLink] click blocked, dismissing modal and retrying:', err.message);
+      await browserManager.dismissBlockingModals(page);
+      await button.click();
+    }
 
     const apiResponse = await responsePromise;
     const result = await extractResultFromPage(page, apiResponse);

@@ -1,6 +1,12 @@
 const prisma = require('../prisma');
+const clawbackRepo = require('./clawback');
 
-async function upsertOrder(order) {
+// display_order_status 3 = Cancelled. When an order Shopee previously
+// reported as something else (often 2/Completed) flips to Cancelled, any
+// payout already marked 'paid' can't be auto-reversed (money's already been
+// bank-transferred) - it's flagged for manual review instead. Not-yet-paid
+// orders are simply marked 'cancelled' so they stop counting as withdrawable.
+async function upsertOrder(order, tx = prisma) {
   const data = {
     userId: order.userId ?? null,
     subId: order.subId ?? null,
@@ -9,13 +15,37 @@ async function upsertOrder(order) {
     operatorCommission: order.operatorCommission ?? null,
     displayOrderStatus: order.displayOrderStatus ?? null,
     purchaseTime: order.purchaseTime ?? null,
+    productName: order.productName ?? null,
     rawJson: order.rawJson ?? null,
   };
-  return prisma.order.upsert({
+
+  const existing = await tx.order.findUnique({ where: { orderSn: order.orderSn } });
+  const wasNewlyCancelled = Boolean(existing) && order.displayOrderStatus === 3 && existing.displayOrderStatus !== 3;
+
+  if (wasNewlyCancelled && existing.payoutStatus !== 'paid') {
+    data.payoutStatus = 'cancelled';
+  }
+
+  const saved = await tx.order.upsert({
     where: { orderSn: order.orderSn },
     create: { orderSn: order.orderSn, ...data },
     update: data,
   });
+
+  if (wasNewlyCancelled && existing.payoutStatus === 'paid') {
+    await clawbackRepo.flag(
+      {
+        userId: existing.userId,
+        sourceType: 'order',
+        sourceId: existing.id,
+        previousPayoutStatus: existing.payoutStatus,
+        amount: existing.userCommission ?? 0,
+      },
+      tx,
+    );
+  }
+
+  return { ...saved, wasNewlyCancelled };
 }
 
 function buildWhere({ payoutStatus, displayStatus } = {}) {

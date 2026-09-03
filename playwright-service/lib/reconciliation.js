@@ -1,9 +1,11 @@
+const prisma = require('./prisma');
 const browserManager = require('./browserManager');
 const linksRepo = require('./repositories/links');
 const ordersRepo = require('./repositories/orders');
 const usersRepo = require('./repositories/users');
 const campaignsRepo = require('./repositories/campaigns');
 const referralsRepo = require('./repositories/referrals');
+const clawbackRepo = require('./repositories/clawback');
 const { getEffectivePct, splitAmount } = require('./commissionSplit');
 
 const REPORT_LIST_URL = 'https://affiliate.shopee.vn/api/v3/report/list';
@@ -45,13 +47,18 @@ function mapEntry(entry, order) {
   const totalCommission = items.length
     ? items.reduce((sum, item) => sum + (Number(pick(item, 'item_commission', 'itemCommission')) || 0), 0)
     : Number(pick(order, 'total_commission', 'totalCommission', 'commission', 'estimated_commission')) || 0;
+  // First line item's product name, if Shopee's payload carries one - used as
+  // an honest display title instead of a fabricated "Sản phẩm Shopee ...".
+  const productName = items.length
+    ? pick(items[0], 'item_name', 'itemName', 'product_name', 'productName', 'name')
+    : null;
   const displayOrderStatusRaw = pick(order, 'display_order_status', 'displayOrderStatus', 'order_status', 'status');
   const displayOrderStatus = displayOrderStatusRaw === null ? null : Number(displayOrderStatusRaw);
   // Shopee returns purchase_time as a Unix timestamp number, but the orders.purchase_time
   // column is TEXT (schema.prisma: `purchaseTime String?`) - coerce or Prisma rejects it.
   const purchaseTimeRaw = pick(entry, 'purchase_time', 'purchaseTime', 'order_time', 'create_time');
   const purchaseTime = purchaseTimeRaw === null ? null : String(purchaseTimeRaw);
-  return { orderSn, subId, totalCommission, displayOrderStatus, purchaseTime };
+  return { orderSn, subId, totalCommission, productName, displayOrderStatus, purchaseTime };
 }
 
 /**
@@ -92,7 +99,7 @@ async function reconcileOrders({ extraParams = {} } = {}) {
         const effectivePct = await getEffectivePct(user);
         const { userAmount, operatorAmount } = splitAmount(mapped.totalCommission, effectivePct);
 
-        const savedOrder = await ordersRepo.upsertOrder({
+        const orderData = {
           orderSn: mapped.orderSn,
           userId: link ? link.userId : null,
           subId: mapped.subId,
@@ -101,7 +108,44 @@ async function reconcileOrders({ extraParams = {} } = {}) {
           operatorCommission: operatorAmount,
           displayOrderStatus: mapped.displayOrderStatus,
           purchaseTime: mapped.purchaseTime,
+          productName: mapped.productName,
           rawJson: JSON.stringify({ checkout: entry, order }),
+        };
+
+        // Wrapped in one transaction so a newly-detected Cancelled order's
+        // payout reversal/clawback-flag and its referral/campaign-reward
+        // revocation either all land together or none do.
+        const savedOrder = await prisma.$transaction(async (tx) => {
+          const saved = await ordersRepo.upsertOrder(orderData, tx);
+          if (saved.wasNewlyCancelled && saved.userId) {
+            const revoked = await referralsRepo.revokeReferralForOrder(saved.id, tx);
+            if (revoked?.needsClawback) {
+              await clawbackRepo.flag(
+                {
+                  userId: revoked.referral.referrerUserId,
+                  sourceType: 'referral',
+                  sourceId: revoked.referral.id,
+                  previousPayoutStatus: revoked.referral.payoutStatus,
+                  amount: revoked.referral.rewardAmount ?? 0,
+                },
+                tx,
+              );
+            }
+            const flaggedRewards = await campaignsRepo.reevaluateRewardsForUser(saved.userId, tx);
+            for (const reward of flaggedRewards) {
+              await clawbackRepo.flag(
+                {
+                  userId: reward.userId,
+                  sourceType: 'campaignReward',
+                  sourceId: reward.id,
+                  previousPayoutStatus: reward.payoutStatus,
+                  amount: reward.rewardAmount ?? 0,
+                },
+                tx,
+              );
+            }
+          }
+          return saved;
         });
         upserted += 1;
 
@@ -111,7 +155,7 @@ async function reconcileOrders({ extraParams = {} } = {}) {
         // the same order on a later reconcile run is safe.
         if (savedOrder.displayOrderStatus === 2 && savedOrder.userId) {
           await campaignsRepo.grantRewardsForUser(savedOrder.userId);
-          await referralsRepo.qualifyIfEligible(savedOrder.userId);
+          await referralsRepo.qualifyIfEligible(savedOrder.userId, savedOrder.id);
         }
       }
     }

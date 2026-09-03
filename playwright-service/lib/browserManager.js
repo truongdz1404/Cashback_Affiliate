@@ -70,12 +70,41 @@ async function acquireCustomLinkPage() {
 }
 
 /**
+ * Antd renders the "kết quả" dialog Shopee shows after a successful "Lấy
+ * link" click (and any other popup, e.g. an announcement modal) as an
+ * `.ant-modal-wrap` overlay that doesn't go away just because we've already
+ * read the data out of it. Since pages are reused instead of reloaded, a
+ * leftover modal mask can sit on top of the page and swallow the *next*
+ * request's click on "Lấy link" - seen in production as
+ * `locator.click: Timeout 30000ms exceeded ... <div class="ant-modal-wrap">
+ * ... intercepts pointer events`, which made every subsequent link request on
+ * that page fail outright. Click each modal's own close button first (a real
+ * DOM click(), so antd's onClose handler runs and its React state actually
+ * flips to closed, not just the node disappearing) then press Escape as a
+ * second, independent way to ask antd to close whatever's left. Called both
+ * when handing a page back to the pool and again right before the next click,
+ * in case a modal reopened in between (e.g. a periodic Shopee announcement).
+ */
+async function dismissBlockingModals(page) {
+  try {
+    await page.evaluate(() => {
+      document.querySelectorAll('.ant-modal-close').forEach((btn) => btn.click());
+    });
+    await page.keyboard.press('Escape');
+  } catch (err) {
+    // Best-effort only - a failed dismiss attempt shouldn't break the caller.
+  }
+}
+
+/**
  * Hands a used custom-link page back to the pool instead of discarding it -
  * this is what keeps repeat requests fast (skip the ~5-8s cold navigate) once
  * the caller has moved off the fetch-bypass path and onto driving the real
  * page for every request. Clears the form fields in-place (native value
  * setter + 'input' event, so React's controlled inputs pick it up) rather
- * than reloading, which would pay the full SPA boot cost again.
+ * than reloading, which would pay the full SPA boot cost again, and dismisses
+ * any leftover modal (see dismissBlockingModals) so it can't block the next
+ * request's click.
  * Falls back to closing + re-warming if the reset fails or the page has been
  * reused too many times.
  */
@@ -88,6 +117,7 @@ async function releaseCustomLinkPage(page) {
 
   if (canReuse) {
     try {
+      await dismissBlockingModals(page);
       await page.evaluate(() => {
         document.querySelectorAll('input, textarea').forEach((el) => {
           const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
@@ -241,4 +271,5 @@ module.exports = {
   acquireCustomLinkPage,
   releaseCustomLinkPage,
   refillCustomLinkPool,
+  dismissBlockingModals,
 };

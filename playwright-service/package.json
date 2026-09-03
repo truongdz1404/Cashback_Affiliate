@@ -6,12 +6,14 @@
   "scripts": {
     "start": "node server.js",
     "start:xvfb": "bash scripts/start-xvfb.sh",
+    "start:withdrawal-worker": "node worker/withdrawalWorker.js",
     "postinstall": "playwright install chromium && prisma generate",
     "seed-login": "node scripts/login-from-file.js",
     "migrate-data": "node scripts/migrate-sqlite-to-postgres.js"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",
+    "amqplib": "^0.10.9",
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

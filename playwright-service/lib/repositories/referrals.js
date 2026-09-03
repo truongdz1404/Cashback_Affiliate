@@ -24,7 +24,7 @@ async function findByReferredUser(referredUserId) {
 // Completed. Moves a still-pending referral to 'qualified' the first time
 // the referred user completes any order - only fires once since the second
 // call finds status already 'qualified' and no-ops.
-async function qualifyIfEligible(referredUserId) {
+async function qualifyIfEligible(referredUserId, orderId) {
   const referral = await prisma.referral.findFirst({
     where: { referredUserId: Number(referredUserId), status: 'pending' },
   });
@@ -32,8 +32,48 @@ async function qualifyIfEligible(referredUserId) {
 
   return prisma.referral.update({
     where: { id: referral.id },
-    data: { status: 'qualified', qualifiedAt: new Date().toISOString() },
+    data: {
+      status: 'qualified',
+      qualifiedAt: new Date().toISOString(),
+      qualifyingOrderId: orderId != null ? Number(orderId) : null,
+    },
   });
+}
+
+async function unpaidTotalForReferrer(referrerUserId) {
+  const result = await prisma.referral.aggregate({
+    where: { referrerUserId: Number(referrerUserId), status: 'qualified', payoutStatus: 'unpaid' },
+    _sum: { rewardAmount: true },
+  });
+  return result._sum.rewardAmount ?? 0;
+}
+
+async function markPaid(id) {
+  return prisma.referral.update({
+    where: { id: Number(id) },
+    data: { payoutStatus: 'paid', paidAt: new Date().toISOString() },
+  });
+}
+
+// Called when the order that qualified this referral is later reported
+// Cancelled by Shopee. Money not yet paid out is simply revoked; money
+// already paid can't be auto-reversed, so it's flagged for manual review
+// instead (see lib/repositories/clawback.js).
+async function revokeReferralForOrder(orderId, tx = prisma) {
+  const referral = await tx.referral.findFirst({
+    where: { qualifyingOrderId: Number(orderId), status: 'qualified' },
+  });
+  if (!referral) return null;
+
+  if (referral.payoutStatus === 'paid') {
+    return { referral, needsClawback: true };
+  }
+
+  const updated = await tx.referral.update({
+    where: { id: referral.id },
+    data: { payoutStatus: 'revoked' },
+  });
+  return { referral: updated, needsClawback: false };
 }
 
 async function listForReferrer(referrerUserId) {
@@ -67,4 +107,7 @@ module.exports = {
   qualifyIfEligible,
   listForReferrer,
   statsForReferrer,
+  unpaidTotalForReferrer,
+  markPaid,
+  revokeReferralForOrder,
 };

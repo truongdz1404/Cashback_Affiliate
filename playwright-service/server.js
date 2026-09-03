@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cron = require('node-cron');
+const { randomUUID } = require('crypto');
 const browserManager = require('./lib/browserManager');
 const { getCustomLinks } = require('./lib/customLink');
 const { getCommission } = require('./lib/commission');
@@ -22,6 +23,8 @@ const configStore = require('./lib/configStore');
 const { reconcileOrders } = require('./lib/reconciliation');
 const { rateLimit } = require('./lib/simpleRateLimit');
 const { getEffectivePct, splitAmount } = require('./lib/commissionSplit');
+const { publishWithdrawalRequest } = require('./lib/queue/withdrawalQueue');
+const { availableAmountForUser } = require('./lib/walletBalance');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -419,15 +422,20 @@ app.get('/app/orders', appAuth.requireAppUser, async (req, res) => {
 });
 
 const MIN_WITHDRAW_AMOUNT = 50000;
+// How long the HTTP request waits for the worker to finish processing before
+// falling back to 202/processing - the worker's own work is just a couple of
+// DB round trips so this comfortably covers normal cases while still
+// bounding the request lifetime if RabbitMQ/the worker is briefly down.
+const WITHDRAW_POLL_TIMEOUT_MS = 6000;
+const WITHDRAW_POLL_INTERVAL_MS = 200;
 
 app.get('/app/wallet', appAuth.requireAppUser, async (req, res) => {
   try {
-    const summary = await ordersRepo.summaryForUser(req.appUserId);
+    const { summary, available } = await availableAmountForUser(req.appUserId);
     const pendingWithdrawal = (await withdrawalsRepo.latestPendingForUser(req.appUserId)) ?? null;
-    const pendingWithdrawalTotal = await withdrawalsRepo.pendingTotalForUser(req.appUserId);
     res.json({
       ...summary,
-      availableAmount: Math.max(summary.unpaidAmount - pendingWithdrawalTotal, 0),
+      availableAmount: available,
       minWithdrawAmount: MIN_WITHDRAW_AMOUNT,
       pendingWithdrawal,
     });
@@ -436,10 +444,17 @@ app.get('/app/wallet', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
-// "Tao yeu cau thanh toan" on the Wallet tab: queues a payout request against
-// the user's unpaid (earned but not yet transferred) commission. Doesn't
-// move any money itself - an admin reviews it and pays out via the existing
-// /admin/orders/:id/payout flow, then marks this request processed.
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// "Tao yeu cau thanh toan" on the Wallet tab. The actual accept/reject
+// decision (balance re-check under a Postgres advisory lock) happens in
+// worker/withdrawalWorker.js, not here - this route only does the cheap
+// up-front validation, publishes the request to RabbitMQ, then polls the DB
+// briefly by clientRequestId so the app still gets an immediate result in
+// the common case. Doesn't move any money itself - an admin reviews accepted
+// requests and pays out manually, then marks the request 'paid'.
 app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
   try {
     const amount = Number(req.body.amount);
@@ -460,15 +475,32 @@ app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
       return res.status(409).json({ error: 'a withdrawal request is already pending', request: existingPending });
     }
 
-    const summary = await ordersRepo.summaryForUser(req.appUserId);
-    const pendingWithdrawalTotal = await withdrawalsRepo.pendingTotalForUser(req.appUserId);
-    const available = Math.max(summary.unpaidAmount - pendingWithdrawalTotal, 0);
-    if (amount > available) {
-      return res.status(400).json({ error: 'amount exceeds available balance', available });
+    const clientRequestId = randomUUID();
+    await publishWithdrawalRequest({ clientRequestId, userId: req.appUserId, amount, method: 'bank' });
+
+    const deadline = Date.now() + WITHDRAW_POLL_TIMEOUT_MS;
+    let request = null;
+    while (Date.now() < deadline) {
+      request = await withdrawalsRepo.findByClientRequestId(clientRequestId);
+      if (request) break;
+      await sleep(WITHDRAW_POLL_INTERVAL_MS);
     }
 
-    const request = await withdrawalsRepo.create({ userId: req.appUserId, amount, method: 'bank' });
+    if (!request) {
+      return res.status(202).json({ clientRequestId, status: 'processing' });
+    }
+    if (request.status === 'rejected') {
+      return res.status(400).json({ error: 'amount exceeds available balance or another request is already open', request });
+    }
     res.json(request);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/wallet/withdrawals', appAuth.requireAppUser, async (req, res) => {
+  try {
+    res.json(await withdrawalsRepo.listForUser(req.appUserId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -808,6 +840,25 @@ app.get('/admin/orders', adminAuth.requireAdmin, async (req, res) => {
 app.put('/admin/orders/:id/payout', adminAuth.requireAdmin, async (req, res) => {
   try {
     res.json(await ordersRepo.setPayoutStatus(req.params.id, !!req.body.paid));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Referral/campaign rewards are paid out manually by admin the same way
+// orders are (bank transfer outside the app, then marked paid here) - see
+// lib/repositories/referrals.js#markPaid / campaigns.js#markRewardPaid.
+app.put('/admin/referrals/:id/payout', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    res.json(await referralsRepo.markPaid(req.params.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/admin/campaign-rewards/:id/payout', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    res.json(await campaignsRepo.markRewardPaid(req.params.id));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

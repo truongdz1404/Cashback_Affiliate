@@ -74,7 +74,7 @@ async function update(id, { title, description, startsAt, endsAt, tiers, isActiv
 // Progress toward a campaign's tiers is computed on the fly from completed
 // orders placed within the campaign's date window, rather than tracked in a
 // running counter - avoids a second source of truth to keep in sync.
-async function countCompletedOrders(userId, campaign) {
+async function countCompletedOrders(userId, campaign, tx = prisma) {
   const where = { userId: Number(userId), displayOrderStatus: 2 };
   if (campaign.starts_at || campaign.startsAt) {
     where.purchaseTime = { ...(where.purchaseTime || {}), gte: campaign.starts_at || campaign.startsAt };
@@ -82,7 +82,7 @@ async function countCompletedOrders(userId, campaign) {
   if (campaign.ends_at || campaign.endsAt) {
     where.purchaseTime = { ...(where.purchaseTime || {}), lte: campaign.ends_at || campaign.endsAt };
   }
-  return prisma.order.count({ where });
+  return tx.order.count({ where });
 }
 
 // Called from lib/reconciliation.js right after an order upserts as
@@ -120,6 +120,46 @@ async function grantRewardsForUser(userId) {
   return granted;
 }
 
+async function unpaidTotalForUser(userId) {
+  const result = await prisma.campaignReward.aggregate({
+    where: { userId: Number(userId), payoutStatus: 'unpaid' },
+    _sum: { rewardAmount: true },
+  });
+  return result._sum.rewardAmount ?? 0;
+}
+
+async function markRewardPaid(id) {
+  return prisma.campaignReward.update({
+    where: { id: Number(id) },
+    data: { payoutStatus: 'paid', paidAt: new Date().toISOString() },
+  });
+}
+
+// Called when one of this user's completed orders is later reported
+// Cancelled by Shopee, since grantRewardsForUser's tier progress is computed
+// live from completed-order counts and may no longer be reached. Re-checks
+// every reward already granted to this user against the current count;
+// unpaid rewards that no longer qualify are revoked, paid ones are flagged
+// for manual review instead (money already sent can't be auto-reversed).
+async function reevaluateRewardsForUser(userId, tx = prisma) {
+  const rewards = await tx.campaignReward.findMany({
+    where: { userId: Number(userId), payoutStatus: { in: ['unpaid', 'paid'] } },
+    include: { campaign: true },
+  });
+  const flagged = [];
+  for (const reward of rewards) {
+    const completedOrders = await countCompletedOrders(userId, reward.campaign, tx);
+    if (completedOrders >= reward.orderThreshold) continue;
+
+    if (reward.payoutStatus === 'paid') {
+      flagged.push(reward);
+      continue;
+    }
+    await tx.campaignReward.update({ where: { id: reward.id }, data: { payoutStatus: 'revoked' } });
+  }
+  return flagged;
+}
+
 async function rewardsForUser(userId) {
   const rows = await prisma.campaignReward.findMany({
     where: { userId: Number(userId) },
@@ -155,4 +195,7 @@ module.exports = {
   grantRewardsForUser,
   rewardsForUser,
   viewForUser,
+  unpaidTotalForUser,
+  markRewardPaid,
+  reevaluateRewardsForUser,
 };
