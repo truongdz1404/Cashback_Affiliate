@@ -20,7 +20,7 @@ const withdrawalsRepo = require('./lib/repositories/withdrawals');
 const banksRepo = require('./lib/repositories/banks');
 const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
 const shoppingProductImport = require('./lib/shoppingProductImport');
-const { runProductOfferSync } = require('./lib/productOfferScraper');
+const productOfferSyncJob = require('./lib/productOfferSyncJob');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
 const adminAuth = require('./lib/adminAuth');
@@ -1022,14 +1022,24 @@ app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
 // Manual trigger for the daily product-offer scrape - see the cron entry
 // below for the scheduled run. Useful for testing without waiting for the
 // next morning.
+//
+// Runs in the background (202 + poll via GET below) rather than blocking the
+// request for the whole crawl - a multi-page crawl routinely runs past
+// Cloudflare's own ~100s upstream timeout, which returns its own HTML 524
+// error page well before this finishes even though the crawl itself
+// completes fine server-side; that mismatch was confusing this endpoint's
+// callers into thinking the sync had failed when it hadn't.
 app.post('/admin/product-offer-sync', adminAuth.requireAdmin, async (req, res) => {
   try {
     const maxPages = req.body?.maxPages ? Number(req.body.maxPages) : await settingsRepo.getProductOfferMaxPages();
-    const result = await runProductOfferSync({ maxPages });
-    res.json(result);
+    res.status(202).json(productOfferSyncJob.start(maxPages));
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
+});
+
+app.get('/admin/product-offer-sync', adminAuth.requireAdmin, (_req, res) => {
+  res.json(productOfferSyncJob.getStatus());
 });
 
 app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
@@ -1226,8 +1236,7 @@ cron.schedule('*/30 * * * *', () => {
 cron.schedule('0 6 * * *', async () => {
   try {
     const maxPages = await settingsRepo.getProductOfferMaxPages();
-    const result = await runProductOfferSync({ maxPages });
-    console.log(`cron product-offer-sync: ${JSON.stringify(result)}`);
+    productOfferSyncJob.start(maxPages);
   } catch (err) {
     console.error('cron product-offer-sync failed', err.message);
   }

@@ -29,25 +29,23 @@ const PAGE_DELAY_MS = parseInt(process.env.PRODUCT_OFFER_PAGE_DELAY_MS || '4000'
  * Best-effort product image capture. Shopee's own CSV export (what
  * scrapeCurrentPage below uses for name/price/commission) has no image
  * column, so images have to come from the page's DOM instead. There's no
- * visible product-id attribute to key off of here, so this relies on DOM row
+ * visible product-id attribute to key off of here, so this relies on DOM card
  * order matching the CSV row order for THIS SAME page - both are produced by
  * the same "select all rows on this page -> export" action below, so the row
  * set is identical; only the top-to-bottom order needs to line up, which
- * holds as long as the table renders in the same order it exports.
+ * holds as long as the grid renders in the same order it exports.
  *
- * NOT independently verified against the live page (no test Shopee session
- * available while writing this) - same caveat as scrapeCurrentPage's own
- * comment: if the selector below doesn't match, this just returns an empty
- * array and every product's imageUrl stays null (same as before this
- * change), it won't break the price/commission scrape. Re-check with
+ * The page is a card grid (`.ItemCard__container`), not a `<table>` - confirmed
+ * against a real logged-in DOM dump. Each card's image lives at
+ * `.ItemCard__imageSection .ItemCard__image img`. Re-check with
  * `npx playwright codegen https://affiliate.shopee.vn/offer/product_offer`
- * (logged in) if images aren't showing up after a real run.
+ * (logged in) if Shopee changes this markup and images stop showing up again.
  */
 async function scrapeImageMap(page) {
   try {
-    return await page.locator('table tbody tr').evaluateAll((rows) =>
-      rows.map((row) => {
-        const img = row.querySelector('img');
+    return await page.locator('.ItemCard__container').evaluateAll((cards) =>
+      cards.map((card) => {
+        const img = card.querySelector('.ItemCard__image img');
         if (!img) return null;
         return img.getAttribute('src') || img.getAttribute('data-src') || null;
       })

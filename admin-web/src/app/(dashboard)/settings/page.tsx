@@ -12,6 +12,14 @@ type Settings = {
 
 type SyncResult = { pagesVisited: number; scraped: number; saved: number };
 
+type SyncStatus = {
+  status: "idle" | "running" | "done" | "error";
+  startedAt: string | null;
+  finishedAt: string | null;
+  result: SyncResult | null;
+  error: string | null;
+};
+
 type ConfigKey = "zaloBotToken" | "zaloWebhookSecret" | "jwtSecret" | "googleClientId" | "facebookAppId" | "facebookAppSecret";
 
 type ConfigMap = Partial<Record<ConfigKey, string>>;
@@ -155,9 +163,55 @@ function ProductOfferMaxPagesSection() {
     }
   }, []);
 
+  const describeStatus = useCallback((status: SyncStatus) => {
+    if (status.status === "done" && status.result) {
+      const r = status.result;
+      return `Xong: ${r.pagesVisited} trang, cào được ${r.scraped} sản phẩm, lưu ${r.saved} sản phẩm.`;
+    }
+    if (status.status === "error") return status.error || "Chạy cào thất bại";
+    return "Đang cào dữ liệu, có thể mất vài phút...";
+  }, []);
+
+  // The backend runs the crawl in the background and returns right away, so
+  // a held-open request would time out at Cloudflare's own ~100s upstream
+  // limit well before a multi-page crawl finishes (even though the crawl
+  // itself keeps running and completes fine server-side) - poll the status
+  // endpoint instead of awaiting one long response.
+  const pollStatus = useCallback(() => {
+    const interval = setInterval(async () => {
+      try {
+        const status = await clientApi.get<SyncStatus>("/api/product-offer-sync");
+        if (status.status === "running") return;
+        clearInterval(interval);
+        setSyncing(false);
+        setSyncMsg(describeStatus(status));
+      } catch (err) {
+        clearInterval(interval);
+        setSyncing(false);
+        setSyncMsg(err instanceof Error ? err.message : "Không kiểm tra được trạng thái cào");
+      }
+    }, 3000);
+    return interval;
+  }, [describeStatus]);
+
   useEffect(() => {
     load();
-  }, [load]);
+    // Pick up a sync already running (e.g. the 6h cron, or a run started
+    // from another tab) so the button reflects reality on page load.
+    let interval: ReturnType<typeof setInterval> | undefined;
+    clientApi
+      .get<SyncStatus>("/api/product-offer-sync")
+      .then((status) => {
+        if (status.status !== "running") return;
+        setSyncing(true);
+        setSyncMsg(describeStatus(status));
+        interval = pollStatus();
+      })
+      .catch(() => {});
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [load, pollStatus, describeStatus]);
 
   async function save() {
     setSaving(true);
@@ -176,12 +230,16 @@ function ProductOfferMaxPagesSection() {
     setSyncing(true);
     setSyncMsg("Đang cào dữ liệu, có thể mất vài phút...");
     try {
-      const result = await clientApi.post<SyncResult>("/api/product-offer-sync", {});
-      setSyncMsg(`Xong: ${result.pagesVisited} trang, cào được ${result.scraped} sản phẩm, lưu ${result.saved} sản phẩm.`);
+      const status = await clientApi.post<SyncStatus>("/api/product-offer-sync", {});
+      if (status.status !== "running") {
+        setSyncing(false);
+        setSyncMsg(describeStatus(status));
+        return;
+      }
+      pollStatus();
     } catch (err) {
-      setSyncMsg(err instanceof Error ? err.message : "Chạy cào thất bại");
-    } finally {
       setSyncing(false);
+      setSyncMsg(err instanceof Error ? err.message : "Chạy cào thất bại");
     }
   }
 
