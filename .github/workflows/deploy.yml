@@ -15,6 +15,7 @@ jobs:
           port: ${{ secrets.VPS_PORT }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
           script: |
             set -euo pipefail
             cd ${{ secrets.VPS_DEPLOY_PATH }}
