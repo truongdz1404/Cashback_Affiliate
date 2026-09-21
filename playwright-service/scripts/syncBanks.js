@@ -32,22 +32,31 @@ async function syncBanks() {
   const payload = await res.json();
   const banks = payload.data || [];
 
-  const rows = [];
+  // Upsert each bank right after its logo downloads, instead of batching
+  // everything until the end - a transient failure on one bank's logo
+  // (network hiccup, broken CDN URL) used to abort the whole run and leave
+  // the table empty even though most logos had already downloaded fine.
+  let synced = 0;
   for (const [index, bank] of banks.entries()) {
-    const logoPath = await downloadLogo(bank);
-    rows.push({
-      code: bank.code,
-      bin: bank.bin,
-      name: bank.name,
-      shortName: bank.shortName,
-      logoPath,
-      swiftCode: bank.swift_code || null,
-      sortOrder: index,
-    });
+    try {
+      const logoPath = await downloadLogo(bank);
+      await banksRepo.upsertMany([
+        {
+          code: bank.code,
+          bin: bank.bin,
+          name: bank.name,
+          shortName: bank.shortName,
+          logoPath,
+          swiftCode: bank.swift_code || null,
+          sortOrder: index,
+        },
+      ]);
+      synced += 1;
+    } catch (err) {
+      console.error(`syncBanks: skipping ${bank.code}: ${err.message}`);
+    }
   }
-
-  await banksRepo.upsertMany(rows);
-  return rows.length;
+  return synced;
 }
 
 if (require.main === module) {
