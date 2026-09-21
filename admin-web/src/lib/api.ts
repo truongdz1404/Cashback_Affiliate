@@ -7,7 +7,8 @@ const BACKEND_URL = process.env.BACKEND_URL || "http://shopee-affiliate:4000";
 const BACKEND_API_KEY = process.env.BACKEND_API_KEY || "";
 
 export class BackendError extends Error {
-  constructor(status, message) {
+  status: number;
+  constructor(status: number, message: string) {
     super(message);
     this.status = status;
   }
@@ -16,7 +17,7 @@ export class BackendError extends Error {
 // Every call into playwright-service's /admin/* API needs both the shared
 // x-api-key (held only here, server-side - the browser never sees it) and
 // the admin's JWT (read from the httpOnly cookie set by /api/login).
-export async function backendFetch(path, init = {}) {
+export async function backendFetch(path: string, init: RequestInit = {}) {
   const jar = await cookies();
   const token = jar.get(TOKEN_COOKIE_NAME)?.value;
 
@@ -35,14 +36,15 @@ export async function backendFetch(path, init = {}) {
   return data;
 }
 
-function errorResponse(err) {
+function errorResponse(err: unknown) {
   if (err instanceof BackendError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json({ error: err.message || "unexpected error" }, { status: 500 });
+  const message = err instanceof Error ? err.message : "unexpected error";
+  return NextResponse.json({ error: message }, { status: 500 });
 }
 
-export async function proxyGet(path) {
+export async function proxyGet(path: string) {
   try {
     return NextResponse.json(await backendFetch(path));
   } catch (err) {
@@ -50,7 +52,7 @@ export async function proxyGet(path) {
   }
 }
 
-export async function proxyMutate(path, method, body) {
+export async function proxyMutate(path: string, method: string, body?: unknown) {
   try {
     return NextResponse.json(
       await backendFetch(path, { method, body: body !== undefined ? JSON.stringify(body) : undefined })
@@ -63,7 +65,7 @@ export async function proxyMutate(path, method, body) {
 // Forwards a raw file upload to playwright-service. Separate from
 // backendFetch since that helper always JSON-encodes the body - the backend
 // expects the file's raw bytes here instead (see /admin/shopping-products/import).
-export async function proxyUpload(path, buffer, fileName) {
+export async function proxyUpload(path: string, buffer: Buffer, fileName?: string) {
   try {
     const jar = await cookies();
     const token = jar.get(TOKEN_COOKIE_NAME)?.value;
@@ -74,7 +76,12 @@ export async function proxyUpload(path, buffer, fileName) {
     if (fileName) headers.set("x-file-name", encodeURIComponent(fileName));
     if (token) headers.set("authorization", `Bearer ${token}`);
 
-    const res = await fetch(`${BACKEND_URL}${path}`, { method: "POST", headers, body: buffer, cache: "no-store" });
+    const res = await fetch(`${BACKEND_URL}${path}`, {
+      method: "POST",
+      headers,
+      body: new Uint8Array(buffer),
+      cache: "no-store",
+    });
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;
     if (!res.ok) throw new BackendError(res.status, (data && data.error) || `backend error ${res.status}`);

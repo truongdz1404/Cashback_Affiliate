@@ -1,22 +1,33 @@
-@import "tailwindcss";
+/* @heroui/styles already imports tailwindcss internally - importing it
+   again here would double-run the Tailwind v4 layer setup. */
+@import "@heroui/styles";
 
+/* Brand palette lifted from the mobile app (src/constants/palette.ts),
+   converted to OKLCH so it plugs into HeroUI's color-mix()-based shade
+   generation. Light theme only - the app has no dark palette either. */
 :root {
-  --color-bg: #f4f5f7;
-  --color-surface: #ffffff;
-  --color-border: #e2e4e9;
-  --color-text: #1a1d23;
-  --color-muted: #6b7280;
-  --color-primary: #ee4d2d;
-  --color-primary-dark: #d8431f;
-  --color-success: #16a34a;
-  --color-danger: #dc2626;
+  --accent: oklch(0.7091 0.1378 154.75); /* Palette.accent #4DBA7A */
+  --accent-foreground: oklch(1 0 0);
+
+  --background: oklch(0.9711 0.0034 145.55); /* Palette.background #F4F6F4 */
+  --foreground: oklch(0.2716 0.0199 163.04); /* Palette.textPrimary #1E2A24 */
+
+  --surface: oklch(1 0 0); /* Palette.surface #FFFFFF */
+  --surface-secondary: oklch(0.9662 0.0189 157.88); /* Palette.surfaceMuted #EAF8EF */
+
+  --border: oklch(0.9321 0.0075 151.88); /* Palette.border #E5EAE6 */
+  --muted: oklch(0.6896 0.0232 162.76); /* Palette.textMuted #8FA097 */
+
+  --success: oklch(0.6445 0.1468 155.86); /* Palette.success #22A766 */
+  --danger: oklch(0.6256 0.1933 23.03); /* Palette.danger #E5484D */
+  --warning: oklch(0.7837 0.1587 72.99);
+
+  --field-background: var(--surface);
 }
 
 html,
 body {
   height: 100%;
-  background: var(--color-bg);
-  color: var(--color-text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 

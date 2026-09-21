@@ -1,0 +1,410 @@
+"use client";
+
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Button, Card, Chip, Input, Label, TextArea, TextField } from "@heroui/react";
+import { clientApi } from "@/lib/clientApi";
+
+type Settings = {
+  commissionPct?: number | null;
+  referralRewardAmount?: number | null;
+  productOfferMaxPages?: number | null;
+};
+
+type SyncResult = { pagesVisited: number; scraped: number; saved: number };
+
+type ConfigKey = "zaloBotToken" | "zaloWebhookSecret" | "jwtSecret" | "googleClientId" | "facebookAppId" | "facebookAppSecret";
+
+type ConfigMap = Partial<Record<ConfigKey, string>>;
+
+type SessionStatus = { loggedIn: boolean };
+
+const CONFIG_LABELS: Record<ConfigKey, string> = {
+  zaloBotToken: "Zalo Bot Token",
+  zaloWebhookSecret: "Zalo Webhook Secret",
+  jwtSecret: "JWT Secret (admin session)",
+  googleClientId: "Google OAuth Client ID",
+  facebookAppId: "Facebook App ID",
+  facebookAppSecret: "Facebook App Secret",
+};
+
+function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>{title}</Card.Title>
+        {description && <Card.Description>{description}</Card.Description>}
+      </Card.Header>
+      <Card.Content>{children}</Card.Content>
+    </Card>
+  );
+}
+
+function CommissionSection() {
+  const [pct, setPct] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get<Settings>("/api/settings");
+      setPct(String(data.commissionPct ?? ""));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      await clientApi.put("/api/settings", { commissionPct: Number(pct) });
+      setMsg("Đã lưu.");
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="% Hoa hồng mặc định cho khách"
+      description="Áp dụng cho khách chưa có mức riêng (tùy chỉnh theo từng khách ở trang Khách hàng)."
+    >
+      <div className="flex items-center gap-2">
+        <TextField name="commissionPct" value={pct} onChange={setPct} className="w-24" aria-label="% Hoa hồng mặc định">
+          <Input placeholder="70" />
+        </TextField>
+        <span className="text-sm text-[var(--muted)]">%</span>
+        <Button onPress={save} isPending={saving} isDisabled={pct === ""}>
+          Lưu
+        </Button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
+    </SectionCard>
+  );
+}
+
+function ReferralRewardSection() {
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get<Settings>("/api/settings");
+      setAmount(String(data.referralRewardAmount ?? ""));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      await clientApi.put("/api/settings", { referralRewardAmount: Number(amount) });
+      setMsg("Đã lưu.");
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Thưởng giới thiệu bạn bè"
+      description="Số tiền cộng cho người giới thiệu khi bạn được mời hoàn tất đơn hàng đầu tiên."
+    >
+      <div className="flex items-center gap-2">
+        <TextField name="referralRewardAmount" value={amount} onChange={setAmount} className="w-32" aria-label="Thưởng giới thiệu">
+          <Input placeholder="10000" />
+        </TextField>
+        <span className="text-sm text-[var(--muted)]">đ</span>
+        <Button onPress={save} isPending={saving} isDisabled={amount === ""}>
+          Lưu
+        </Button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
+    </SectionCard>
+  );
+}
+
+function ProductOfferMaxPagesSection() {
+  const [pages, setPages] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [syncMsg, setSyncMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get<Settings>("/api/settings");
+      setPages(String(data.productOfferMaxPages ?? ""));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      await clientApi.put("/api/settings", { productOfferMaxPages: Number(pages) });
+      setMsg("Đã lưu.");
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function syncNow() {
+    setSyncing(true);
+    setSyncMsg("Đang cào dữ liệu, có thể mất vài phút...");
+    try {
+      const result = await clientApi.post<SyncResult>("/api/product-offer-sync", {});
+      setSyncMsg(`Xong: ${result.pagesVisited} trang, cào được ${result.scraped} sản phẩm, lưu ${result.saved} sản phẩm.`);
+    } catch (err) {
+      setSyncMsg(err instanceof Error ? err.message : "Chạy cào thất bại");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Số trang cào sản phẩm Shopee (Mua sắm)"
+      description="Số trang tối đa của affiliate.shopee.vn/offer/product_offer được cào mỗi lần chạy (20 sản phẩm/trang). Áp dụng cho cả lần chạy tự động 6h sáng và chạy tay bên dưới."
+    >
+      <div className="flex items-center gap-2">
+        <TextField name="productOfferMaxPages" value={pages} onChange={setPages} className="w-24" aria-label="Số trang cào">
+          <Input placeholder="3" />
+        </TextField>
+        <span className="text-sm text-[var(--muted)]">trang</span>
+        <Button onPress={save} isPending={saving} isDisabled={pages === ""}>
+          Lưu
+        </Button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
+      <div className="mt-4 border-t border-[var(--border)] pt-3">
+        <Button variant="outline" onPress={syncNow} isPending={syncing}>
+          Chạy cào ngay
+        </Button>
+        {syncMsg && <p className="mt-2 text-xs text-[var(--muted)]">{syncMsg}</p>}
+      </div>
+    </SectionCard>
+  );
+}
+
+function SecretsSection() {
+  const [config, setConfig] = useState<ConfigMap | null>(null);
+  const [drafts, setDrafts] = useState<Partial<Record<ConfigKey, string>>>({});
+  const [busyKey, setBusyKey] = useState<ConfigKey | null>(null);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      setConfig(await clientApi.get<ConfigMap>("/api/config"));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function rotate(key: ConfigKey) {
+    const value = (drafts[key] || "").trim();
+    if (!value) return;
+    setBusyKey(key);
+    setMsg("");
+    try {
+      await clientApi.put(`/api/config/${key}`, { value });
+      setDrafts((d) => ({ ...d, [key]: "" }));
+      setMsg(`Đã cập nhật ${CONFIG_LABELS[key] || key}.`);
+      await load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Cập nhật thất bại");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Khoá cấu hình (env) có thể chỉnh sửa"
+      description="Chỉ hiển thị 4 ký tự cuối. Nhập giá trị mới rồi bấm Cập nhật để đổi. Riêng SERVICE_API_KEY không quản lý ở đây vì đổi trực tiếp có thể khiến dashboard tự khoá quyền truy cập của chính nó (chỉ sửa được qua SSH)."
+    >
+      <div className="space-y-3">
+        {config &&
+          (Object.keys(CONFIG_LABELS) as ConfigKey[]).map((key) => (
+            <div key={key} className="flex flex-wrap items-center gap-2">
+              <div className="w-56 shrink-0">
+                <p className="text-sm font-medium text-[var(--foreground)]">{CONFIG_LABELS[key]}</p>
+                <p className="text-xs text-[var(--muted)]">Hiện tại: {config[key] || "chưa đặt"}</p>
+              </div>
+              <TextField
+                name={key}
+                value={drafts[key] || ""}
+                onChange={(v) => setDrafts((d) => ({ ...d, [key]: v }))}
+                type="password"
+                className="min-w-[180px] flex-1"
+                aria-label={CONFIG_LABELS[key]}
+              >
+                <Input placeholder="Giá trị mới" />
+              </TextField>
+              <Button
+                variant="outline"
+                onPress={() => rotate(key)}
+                isPending={busyKey === key}
+                isDisabled={!(drafts[key] || "").trim()}
+              >
+                Cập nhật
+              </Button>
+            </div>
+          ))}
+      </div>
+      {msg && <p className="mt-3 text-xs text-[var(--muted)]">{msg}</p>}
+    </SectionCard>
+  );
+}
+
+function PasswordSection() {
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function save() {
+    setMsg("");
+    if (newPassword.length < 8) {
+      setMsg("Mật khẩu phải từ 8 ký tự trở lên.");
+      return;
+    }
+    if (newPassword !== confirm) {
+      setMsg("Mật khẩu nhập lại không khớp.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await clientApi.put("/api/password", { newPassword });
+      setNewPassword("");
+      setConfirm("");
+      setMsg("Đã đổi mật khẩu quản trị.");
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Đổi mật khẩu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionCard title="Mật khẩu đăng nhập quản trị">
+      <div className="flex flex-wrap gap-2">
+        <TextField name="newPassword" value={newPassword} onChange={setNewPassword} type="password" aria-label="Mật khẩu mới">
+          <Input placeholder="Mật khẩu mới (tối thiểu 8 ký tự)" />
+        </TextField>
+        <TextField name="confirmPassword" value={confirm} onChange={setConfirm} type="password" aria-label="Nhập lại mật khẩu mới">
+          <Input placeholder="Nhập lại mật khẩu mới" />
+        </TextField>
+        <Button onPress={save} isPending={saving} isDisabled={!newPassword}>
+          Đổi mật khẩu
+        </Button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
+    </SectionCard>
+  );
+}
+
+function SessionSection() {
+  const [status, setStatus] = useState<SessionStatus | null>(null);
+  const [cookieText, setCookieText] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const check = useCallback(async () => {
+    setChecking(true);
+    setMsg("");
+    try {
+      setStatus(await clientApi.get<SessionStatus>("/api/session"));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Không kiểm tra được phiên");
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    check();
+  }, [check]);
+
+  async function submitCookie() {
+    if (!cookieText.trim()) return;
+    setSubmitting(true);
+    setMsg("");
+    try {
+      await clientApi.post("/api/session", { cookies: cookieText.trim() });
+      setCookieText("");
+      setMsg("Đã cập nhật cookie phiên Shopee.");
+      await check();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Cập nhật cookie thất bại");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Phiên đăng nhập Shopee Affiliate (cookie)"
+      description="Dán cookie đã đăng nhập affiliate.shopee.vn (chuỗi 'name=value; name2=value2' hoặc JSON mảng cookie) để cập nhật phiên khi cookie hết hạn."
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <Chip color={status?.loggedIn ? "success" : "danger"}>
+          {status ? (status.loggedIn ? "Đang hoạt động" : "Chưa đăng nhập / đã hết hạn") : "Đang kiểm tra..."}
+        </Chip>
+        <Button variant="ghost" size="sm" onPress={check} isPending={checking}>
+          Kiểm tra lại
+        </Button>
+      </div>
+      <TextField name="cookieText" value={cookieText} onChange={setCookieText} aria-label="Cookie Shopee">
+        <Label className="sr-only">Cookie Shopee</Label>
+        <TextArea rows={4} className="font-mono text-xs" placeholder="SPC_EC=...; SPC_ST=...; ..." />
+      </TextField>
+      <Button className="mt-2" onPress={submitCookie} isPending={submitting} isDisabled={!cookieText.trim()}>
+        Cập nhật cookie
+      </Button>
+      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
+    </SectionCard>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <div className="space-y-6">
+      <h1 className="text-lg font-semibold text-[var(--foreground)]">Cài đặt</h1>
+      <CommissionSection />
+      <ReferralRewardSection />
+      <ProductOfferMaxPagesSection />
+      <SecretsSection />
+      <SessionSection />
+      <PasswordSection />
+    </div>
+  );
+}

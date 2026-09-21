@@ -25,8 +25,41 @@ const PAGE_DELAY_MS = parseInt(process.env.PRODUCT_OFFER_PAGE_DELAY_MS || '4000'
  * re-check - run `npx playwright codegen https://affiliate.shopee.vn/offer/product_offer`
  * (logged in, in your own browser) to inspect the live DOM.
  */
+/**
+ * Best-effort product image capture. Shopee's own CSV export (what
+ * scrapeCurrentPage below uses for name/price/commission) has no image
+ * column, so images have to come from the page's DOM instead. There's no
+ * visible product-id attribute to key off of here, so this relies on DOM row
+ * order matching the CSV row order for THIS SAME page - both are produced by
+ * the same "select all rows on this page -> export" action below, so the row
+ * set is identical; only the top-to-bottom order needs to line up, which
+ * holds as long as the table renders in the same order it exports.
+ *
+ * NOT independently verified against the live page (no test Shopee session
+ * available while writing this) - same caveat as scrapeCurrentPage's own
+ * comment: if the selector below doesn't match, this just returns an empty
+ * array and every product's imageUrl stays null (same as before this
+ * change), it won't break the price/commission scrape. Re-check with
+ * `npx playwright codegen https://affiliate.shopee.vn/offer/product_offer`
+ * (logged in) if images aren't showing up after a real run.
+ */
+async function scrapeImageMap(page) {
+  try {
+    return await page.locator('table tbody tr').evaluateAll((rows) =>
+      rows.map((row) => {
+        const img = row.querySelector('img');
+        if (!img) return null;
+        return img.getAttribute('src') || img.getAttribute('data-src') || null;
+      })
+    );
+  } catch {
+    return [];
+  }
+}
+
 async function scrapeCurrentPage(page) {
   await browserManager.dismissBlockingModals(page);
+  const imageMap = await scrapeImageMap(page);
 
   // Selection is NOT scoped to the current page - checking this box adds
   // this page's rows on top of whatever was already selected on prior pages
@@ -75,7 +108,7 @@ async function scrapeCurrentPage(page) {
   await page.waitForTimeout(300);
 
   return parseCsvObjects(csvText)
-    .map(mapCsvRowToProduct)
+    .map((row, i) => ({ ...mapCsvRowToProduct(row), imageUrl: imageMap[i] || null }))
     .filter((p) => p.productId);
 }
 

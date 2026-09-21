@@ -52,6 +52,9 @@ function mapCsvRowToProduct(row) {
     commissionValue: parseCommissionAmountVnd(commissionText),
     productUrl: (row['Link sản phẩm'] || '').trim() || null,
     offerUrl: (row['Link ưu đãi'] || '').trim() || null,
+    // Not in Shopee's CSV export - productOfferScraper.js fills this in
+    // separately from the page DOM; admin CSV/XLSX imports leave it null.
+    imageUrl: null,
   };
 }
 

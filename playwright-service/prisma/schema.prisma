@@ -260,6 +260,11 @@ model ShoppingProduct {
   commissionValue     Int?    @map("commission_value")
   productUrl         String?  @map("product_url")
   offerUrl           String?  @map("offer_url")
+  // Best-effort: scraped from the product_offer page's DOM (not in Shopee's
+  // CSV export), matched to this row by page position - see
+  // productOfferScraper.js's scrapeImageMap. Null for admin CSV/XLSX imports,
+  // which never have an image column.
+  imageUrl           String?  @map("image_url")
   scrapedAt          DateTime @default(now()) @map("scraped_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
