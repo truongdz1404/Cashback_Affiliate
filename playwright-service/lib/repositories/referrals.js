@@ -76,10 +76,12 @@ async function revokeReferralForOrder(orderId, tx = prisma) {
   return { referral: updated, needsClawback: false };
 }
 
-async function listForReferrer(referrerUserId) {
+async function listForReferrer(referrerUserId, { limit, offset } = {}) {
   const rows = await prisma.referral.findMany({
     where: { referrerUserId: Number(referrerUserId) },
     orderBy: { id: 'desc' },
+    ...(limit !== undefined ? { take: limit } : {}),
+    ...(offset !== undefined ? { skip: offset } : {}),
     include: { referred: { select: { phone: true } } },
   });
   return rows.map(({ referred, ...referral }) => ({ ...referral, referredPhone: referred.phone }));

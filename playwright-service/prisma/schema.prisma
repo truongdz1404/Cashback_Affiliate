@@ -47,13 +47,15 @@ model Setting {
 }
 
 model Link {
-  id            Int      @id @default(autoincrement())
-  userId        Int      @map("user_id")
-  itemId        String?  @map("item_id")
-  subId         String   @unique @map("sub_id")
-  shopeeUrl     String?  @map("shopee_url")
-  affiliateUrl  String?  @map("affiliate_url")
-  createdAt     DateTime @default(now()) @map("created_at")
+  id               Int      @id @default(autoincrement())
+  userId           Int      @map("user_id")
+  itemId           String?  @map("item_id")
+  subId            String   @unique @map("sub_id")
+  shopeeUrl        String?  @map("shopee_url")
+  affiliateUrl     String?  @map("affiliate_url")
+  estimatedAmount  Float?   @map("estimated_amount")
+  estimatedPct     Float?   @map("estimated_pct")
+  createdAt        DateTime @default(now()) @map("created_at")
 
   user          User     @relation(fields: [userId], references: [id])
 

@@ -52,10 +52,12 @@ async function pendingTotalForUser(userId) {
   return result._sum.amount ?? 0;
 }
 
-async function listForUser(userId) {
+async function listForUser(userId, { limit, offset } = {}) {
   return prisma.withdrawalRequest.findMany({
     where: { userId: Number(userId) },
     orderBy: { id: 'desc' },
+    ...(limit !== undefined ? { take: limit } : {}),
+    ...(offset !== undefined ? { skip: offset } : {}),
   });
 }
 

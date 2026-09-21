@@ -16,7 +16,7 @@ function parseTiers(row) {
   return { ...row, tiers };
 }
 
-async function listActive() {
+async function listActive({ limit, offset } = {}) {
   const now = new Date().toISOString();
   const rows = await prisma.campaign.findMany({
     where: {
@@ -27,6 +27,8 @@ async function listActive() {
       ],
     },
     orderBy: { id: 'desc' },
+    ...(limit !== undefined ? { take: limit } : {}),
+    ...(offset !== undefined ? { skip: offset } : {}),
   });
   return rows.map(parseTiers);
 }
@@ -194,8 +196,8 @@ async function rewardsForUser(userId) {
 
 // App-facing "Su kien" tab: each active campaign plus this user's live
 // progress and any tiers already reached, in one call.
-async function viewForUser(userId) {
-  const campaigns = await listActive();
+async function viewForUser(userId, { limit, offset } = {}) {
+  const campaigns = await listActive({ limit, offset });
   const rewards = await rewardsForUser(userId);
   const results = [];
   for (const campaign of campaigns) {

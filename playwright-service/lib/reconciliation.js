@@ -10,6 +10,11 @@ const { getEffectivePct, splitAmount } = require('./commissionSplit');
 
 const REPORT_LIST_URL = 'https://affiliate.shopee.vn/api/v3/report/list';
 const PAGE_SIZE = 50;
+// Confirmed against live orders (via /debug/report-list) by comparing against
+// the affiliate dashboard's own numbers: report/list returns money/commission
+// fields as fixed-point integers scaled by 1e5 (e.g. item_price 16600000000
+// for a ₫166.000 product) - divide by this to get plain VND.
+const SHOPEE_AMOUNT_SCALE = 100000;
 // Safety cap so a shape/pagination mismatch can't spin this into an
 // unbounded loop against Shopee's API.
 const MAX_PAGES = 200;
@@ -44,9 +49,17 @@ function mapEntry(entry, order) {
   const orderSn = pick(order, 'order_sn', 'orderSn', 'order_id', 'orderId');
   const subId = pick(entry, 'utm_content', 'utmContent', 'sub_id1', 'subId1');
   const items = Array.isArray(order.items) ? order.items : [];
-  const totalCommission = items.length
-    ? items.reduce((sum, item) => sum + (Number(pick(item, 'item_commission', 'itemCommission')) || 0), 0)
+  // Per item, Shopee splits commission into a platform share (item_commission)
+  // and, for brand/Xtra deals, an extra brand share (capped_brand_commission) -
+  // both must be summed to match the dashboard's "Hoa hồng sản phẩm" total.
+  const rawTotalCommission = items.length
+    ? items.reduce((sum, item) => {
+        const platform = Number(pick(item, 'item_commission', 'itemCommission')) || 0;
+        const brand = Number(pick(item, 'capped_brand_commission', 'cappedBrandCommission')) || 0;
+        return sum + platform + brand;
+      }, 0)
     : Number(pick(order, 'total_commission', 'totalCommission', 'commission', 'estimated_commission')) || 0;
+  const totalCommission = rawTotalCommission / SHOPEE_AMOUNT_SCALE;
   // First line item's product name, if Shopee's payload carries one - used as
   // an honest display title instead of a fabricated "Sản phẩm Shopee ...".
   const productName = items.length

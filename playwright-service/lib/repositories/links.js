@@ -5,7 +5,7 @@ function generateSubId() {
   return crypto.randomBytes(5).toString('hex');
 }
 
-async function saveLink({ userId, subId, itemId, shopeeUrl, affiliateUrl }) {
+async function saveLink({ userId, subId, itemId, shopeeUrl, affiliateUrl, estimatedAmount, estimatedPct }) {
   return prisma.link.create({
     data: {
       userId,
@@ -13,6 +13,8 @@ async function saveLink({ userId, subId, itemId, shopeeUrl, affiliateUrl }) {
       subId,
       shopeeUrl: shopeeUrl || null,
       affiliateUrl: affiliateUrl || null,
+      estimatedAmount: estimatedAmount ?? null,
+      estimatedPct: estimatedPct ?? null,
     },
   });
 }

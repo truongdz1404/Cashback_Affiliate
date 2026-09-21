@@ -2,7 +2,7 @@ const { getLinkAndCommission } = require('./linkAndCommission');
 const { handleCommand } = require('./commands');
 const linkTracking = require('./linkTracking');
 const usersRepo = require('./repositories/users');
-const { getEffectivePct, splitAmount } = require('./commissionSplit');
+const { getEffectivePct, estimateFromResult } = require('./commissionSplit');
 
 const WELCOME_TEXT =
   '👋 Chào bạn! Mình là bot tạo link mua hàng hoàn tiền Shopee.\n\n' +
@@ -61,27 +61,23 @@ function formatPct(n) {
   return `${s}%`;
 }
 
-function formatProductReply(result, effectivePct) {
+function formatProductReply(result, estimate) {
   const first = (result.results && result.results[0]) || null;
   const link = first ? first.shortLink || first.longLink : null;
-  const table = (result.commission && result.commission.commissionTable) || [];
-  const social = table.find((r) => (r.channel || '').includes('Mạng xã hội')) || table[0] || {};
 
   const lines = [];
   lines.push(link ? `🔗 Link mua hàng hoàn tiền: ${link}` : '⚠️ Không tạo được link mua hàng hoàn tiền.');
   lines.push('');
-  if ((result.commission && result.commission.error) || social.totalAmount === null || social.totalAmount === undefined) {
+  if ((result.commission && result.commission.error) || !estimate) {
     lines.push('⚠️ Không tra được số tiền hoàn cho sản phẩm này.');
   } else {
     // Only the user's share (effectivePct% of the total commission Shopee
     // pays) is ever shown to the end user - the rest is kept as the
     // operator's cut, tracked separately once the order is reconciled.
-    const { userAmount } = splitAmount(social.totalAmount, effectivePct);
-    const userPct = social.totalPct === null || social.totalPct === undefined ? null : (social.totalPct * effectivePct) / 100;
     lines.push(
-      userPct === null
-        ? `💰 Số tiền hoàn ước tính: ${formatAmount(userAmount)}`
-        : `💰 Số tiền hoàn ước tính: ${formatAmount(userAmount)} (${formatPct(userPct)})`
+      estimate.userPct === null
+        ? `💰 Số tiền hoàn ước tính: ${formatAmount(estimate.userAmount)}`
+        : `💰 Số tiền hoàn ước tính: ${formatAmount(estimate.userAmount)} (${formatPct(estimate.userPct)})`
     );
   }
   return lines.join('\n');
@@ -97,11 +93,13 @@ async function handleProductLink(text, zaloUserId) {
   const result = await getLinkAndCommission([foundLink], tracking.finalSubIds);
   if (!result.pid) return CANNOT_PARSE_TEXT;
 
-  if (tracking.userId) {
-    await linkTracking.recordLink(tracking.userId, tracking.subId, [foundLink], result, result.pid);
-  }
   const user = tracking.userId ? await usersRepo.getById(tracking.userId) : null;
-  return formatProductReply(result, await getEffectivePct(user));
+  const estimate = estimateFromResult(result, await getEffectivePct(user));
+
+  if (tracking.userId) {
+    await linkTracking.recordLink(tracking.userId, tracking.subId, [foundLink], result, result.pid, estimate);
+  }
+  return formatProductReply(result, estimate);
 }
 
 // Returns the reply text for one incoming text message. Slash commands are

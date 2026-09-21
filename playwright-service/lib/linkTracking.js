@@ -18,8 +18,10 @@ async function prepareSubId(zaloUserId, subIds) {
 }
 
 // Persists the generated link once the Shopee call has returned, so it can
-// be looked up by sub_id during order reconciliation.
-async function recordLink(userId, subId, productLinks, result, fallbackItemId) {
+// be looked up by sub_id during order reconciliation. `estimate` (userAmount/
+// userPct) is stored alongside so the app's link history can show the same
+// figure the user saw right after creating the link.
+async function recordLink(userId, subId, productLinks, result, fallbackItemId, estimate) {
   const first = (result && result.results && result.results[0]) || null;
   await linksRepo.saveLink({
     userId,
@@ -27,6 +29,8 @@ async function recordLink(userId, subId, productLinks, result, fallbackItemId) {
     itemId: (first && first.itemId) || fallbackItemId || null,
     shopeeUrl: Array.isArray(productLinks) ? productLinks[0] : null,
     affiliateUrl: first ? first.shortLink || first.longLink : null,
+    estimatedAmount: estimate ? estimate.userAmount : null,
+    estimatedPct: estimate ? estimate.userPct : null,
   });
 }
 

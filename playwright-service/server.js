@@ -25,7 +25,7 @@ const configStore = require('./lib/configStore');
 const { reconcileOrders } = require('./lib/reconciliation');
 const { runHealthCheck } = require('./lib/healthCheck');
 const { rateLimit } = require('./lib/simpleRateLimit');
-const { getEffectivePct, splitAmount } = require('./lib/commissionSplit');
+const { getEffectivePct, estimateFromResult } = require('./lib/commissionSplit');
 const { publishWithdrawalRequest } = require('./lib/queue/withdrawalQueue');
 const { availableAmountForUser } = require('./lib/walletBalance');
 
@@ -388,22 +388,10 @@ app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
     const user = await usersRepo.getById(req.appUserId);
     const tracking = await linkTracking.prepareSubId(user.zaloUserId, undefined);
     const result = await getLinkAndCommission([productUrl], tracking.finalSubIds);
-    if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid);
-    }
+    const estimate = estimateFromResult(result, await getEffectivePct(user));
 
-    // Same estimate shown by the Zalo bot (formatProductReply in
-    // zaloMessageHandler.js): pick the "Mạng xã hội" row from the commission
-    // table (falling back to the first row) and split it by this user's
-    // effective %, so the app never has to know the system default itself.
-    let estimate = null;
-    const table = (result.commission && result.commission.commissionTable) || [];
-    const social = table.find((r) => (r.channel || '').includes('Mạng xã hội')) || table[0] || null;
-    if (social && social.totalAmount !== null && social.totalAmount !== undefined) {
-      const pct = await getEffectivePct(user);
-      const { userAmount } = splitAmount(social.totalAmount, pct);
-      const userPct = social.totalPct === null || social.totalPct === undefined ? null : (social.totalPct * pct) / 100;
-      estimate = { userAmount, userPct };
+    if (tracking.userId) {
+      await linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid, estimate);
     }
 
     res.json({ ...result, estimate });
@@ -511,7 +499,9 @@ app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
 
 app.get('/app/wallet/withdrawals', appAuth.requireAppUser, async (req, res) => {
   try {
-    res.json(await withdrawalsRepo.listForUser(req.appUserId));
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Number(req.query.offset) || 0;
+    res.json(await withdrawalsRepo.listForUser(req.appUserId, { limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -528,7 +518,9 @@ app.get('/app/banks', appAuth.requireAppUser, async (req, res) => {
 
 app.get('/app/campaigns', appAuth.requireAppUser, async (req, res) => {
   try {
-    res.json(await campaignsRepo.viewForUser(req.appUserId));
+    const limit = Math.min(Number(req.query.limit) || 10, 100);
+    const offset = Number(req.query.offset) || 0;
+    res.json(await campaignsRepo.viewForUser(req.appUserId, { limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -536,11 +528,13 @@ app.get('/app/campaigns', appAuth.requireAppUser, async (req, res) => {
 
 app.get('/app/referral', appAuth.requireAppUser, async (req, res) => {
   try {
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Number(req.query.offset) || 0;
     const referralCode = await usersRepo.ensureReferralCode(req.appUserId);
     res.json({
       referralCode,
       stats: await referralsRepo.statsForReferrer(req.appUserId),
-      invited: await referralsRepo.listForReferrer(req.appUserId),
+      invited: await referralsRepo.listForReferrer(req.appUserId, { limit, offset }),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
