@@ -1,6 +1,6 @@
 const net = require('net');
-const nodemailer = require('nodemailer');
 const configStore = require('./configStore');
+const { getTransporter } = require('./mailer');
 
 const TIMEOUT_MS = 8000;
 
@@ -75,20 +75,6 @@ async function runChecks() {
     results.push({ name: svc.name, ...r });
   }
   return results;
-}
-
-function getTransporter() {
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || '587', 10);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !user || !pass) return null;
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
 }
 
 async function sendAlert(items, subject, emoji) {

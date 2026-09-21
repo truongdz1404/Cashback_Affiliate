@@ -134,6 +134,90 @@ function ReferralRewardSection() {
   );
 }
 
+function ProductOfferMaxPagesSection() {
+  const [pages, setPages] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [syncMsg, setSyncMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get("/api/settings");
+      setPages(String(data.productOfferMaxPages ?? ""));
+    } catch (err) {
+      setMsg(err.message || "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      await clientApi.put("/api/settings", { productOfferMaxPages: Number(pages) });
+      setMsg("Đã lưu.");
+    } catch (err) {
+      setMsg(err.message || "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function syncNow() {
+    setSyncing(true);
+    setSyncMsg("Đang cào dữ liệu, có thể mất vài phút...");
+    try {
+      const result = await clientApi.post("/api/product-offer-sync", {});
+      setSyncMsg(
+        `Xong: ${result.pagesVisited} trang, cào được ${result.scraped} sản phẩm, lưu ${result.saved} sản phẩm.`
+      );
+    } catch (err) {
+      setSyncMsg(err.message || "Chạy cào thất bại");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Số trang cào sản phẩm Shopee (Mua sắm)"
+      description="Số trang tối đa của affiliate.shopee.vn/offer/product_offer được cào mỗi lần chạy (20 sản phẩm/trang). Áp dụng cho cả lần chạy tự động 6h sáng và chạy tay bên dưới."
+    >
+      <div className="flex items-center gap-2">
+        <input
+          value={pages}
+          onChange={(e) => setPages(e.target.value)}
+          className="w-24 rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+          placeholder="3"
+        />
+        <span className="text-sm text-slate-500">trang</span>
+        <button
+          onClick={save}
+          disabled={saving || pages === ""}
+          className="rounded-lg bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+        >
+          Lưu
+        </button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-slate-500">{msg}</p>}
+      <div className="mt-4 border-t border-slate-100 pt-3">
+        <button
+          onClick={syncNow}
+          disabled={syncing}
+          className="rounded-lg border border-orange-600 px-3 py-1.5 text-sm font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-50"
+        >
+          {syncing ? "Đang chạy..." : "Chạy cào ngay"}
+        </button>
+        {syncMsg && <p className="mt-2 text-xs text-slate-500">{syncMsg}</p>}
+      </div>
+    </SectionCard>
+  );
+}
+
 function SecretsSection() {
   const [config, setConfig] = useState(null);
   const [drafts, setDrafts] = useState({});
@@ -334,6 +418,7 @@ export default function SettingsPage() {
       <h1 className="text-lg font-semibold text-slate-900">Cài đặt</h1>
       <CommissionSection />
       <ReferralRewardSection />
+      <ProductOfferMaxPagesSection />
       <SecretsSection />
       <SessionSection />
       <PasswordSection />

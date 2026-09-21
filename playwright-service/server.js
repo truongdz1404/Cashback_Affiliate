@@ -18,6 +18,9 @@ const bannersRepo = require('./lib/repositories/banners');
 const referralsRepo = require('./lib/repositories/referrals');
 const withdrawalsRepo = require('./lib/repositories/withdrawals');
 const banksRepo = require('./lib/repositories/banks');
+const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
+const shoppingProductImport = require('./lib/shoppingProductImport');
+const { runProductOfferSync } = require('./lib/productOfferScraper');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
 const adminAuth = require('./lib/adminAuth');
@@ -29,6 +32,7 @@ const { runHealthCheck } = require('./lib/healthCheck');
 const { rateLimit } = require('./lib/simpleRateLimit');
 const { getEffectivePct, estimateFromResult } = require('./lib/commissionSplit');
 const { publishWithdrawalRequest } = require('./lib/queue/withdrawalQueue');
+const emailOtp = require('./lib/emailOtp');
 const { availableAmountForUser } = require('./lib/walletBalance');
 
 const app = express();
@@ -350,19 +354,66 @@ app.get('/app/me', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
+// email is intentionally NOT accepted here - it's a @unique, login-linkable
+// field (see the account-takeover comment in lib/repositories/users.js), so
+// changing it must go through the OTP-verified /app/me/email/* routes below
+// rather than being writable in the same unauthenticated-of-new-value shot
+// as phone/bank/name.
 app.put('/app/me', appAuth.requireAppUser, async (req, res) => {
   try {
-    const { phone, bankName, bankAccountNumber, bankAccountHolder, fullName, email } = req.body;
-    const updated = await usersRepo.updateProfileById(req.appUserId, { phone, bankName, bankAccountNumber, bankAccountHolder, fullName, email });
+    const { phone, bankName, bankAccountNumber, bankAccountHolder, fullName } = req.body;
+    const updated = await usersRepo.updateProfileById(req.appUserId, { phone, bankName, bankAccountNumber, bankAccountHolder, fullName });
     if (!updated) return res.status(404).json({ error: 'user not found' });
     res.json(usersRepo.toPublicAppUser(await usersRepo.getById(req.appUserId)));
   } catch (err) {
-    // email is @unique - give a clean 409 instead of a raw Prisma 500 if
-    // it's already taken by another account.
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      return res.status(409).json({ error: 'email already in use' });
-    }
     res.status(500).json({ error: err.message });
+  }
+});
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Step 1 of email change: mail a 6-digit code to the candidate address.
+// Rate-limited per IP like /app/register - this is reachable by any logged-in
+// app user, so it could otherwise be used to spam arbitrary inboxes.
+app.post('/app/me/email/request-otp', appAuth.requireAppUser, rateLimit({ windowMs: 15 * 60 * 1000, max: 5 }), async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'body.email is invalid' });
+
+    const existing = await usersRepo.getById(req.appUserId);
+    if (existing?.email === email) return res.status(400).json({ error: 'this is already your current email' });
+
+    await emailOtp.requestOtp(req.appUserId, email);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Step 2: verify the code and, only then, write the new email onto the user.
+app.post('/app/me/email/verify-otp', appAuth.requireAppUser, rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }), async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const otp = String(req.body.otp || '').trim();
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'body.email is invalid' });
+    if (!otp) return res.status(400).json({ error: 'body.otp is required' });
+
+    await emailOtp.verifyOtp(req.appUserId, email, otp);
+
+    try {
+      await usersRepo.updateProfileById(req.appUserId, { email });
+    } catch (err) {
+      // email is @unique - the code was valid, but someone else grabbed this
+      // address in the meantime.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return res.status(409).json({ error: 'email already in use' });
+      }
+      throw err;
+    }
+
+    res.json(usersRepo.toPublicAppUser(await usersRepo.getById(req.appUserId)));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -536,6 +587,52 @@ app.get('/app/campaigns', appAuth.requireAppUser, async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 10, 100);
     const offset = Number(req.query.offset) || 0;
     res.json(await campaignsRepo.viewForUser(req.appUserId, { limit, offset }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Number(req.query.offset) || 0;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
+    const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
+    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+
+    const user = await usersRepo.getById(req.appUserId);
+    const pct = await getEffectivePct(user);
+
+    // minCommissionPct/maxCommissionPct/minCommissionAmount/maxCommissionAmount
+    // are USER-FACING (what this user actually receives), same scale as the
+    // userCommissionRateValue/userCommissionValue fields returned below -
+    // convert to Shopee's raw scale before querying, since that's what's
+    // stored (see schema.prisma comment on ShoppingProduct.commissionRateValue).
+    const toRaw = (userFacing) => (userFacing != null && pct > 0 ? (userFacing * 100) / pct : undefined);
+    const minCommissionRateValue = toRaw(req.query.minCommissionPct !== undefined ? Number(req.query.minCommissionPct) : undefined);
+    const maxCommissionRateValue = toRaw(req.query.maxCommissionPct !== undefined ? Number(req.query.maxCommissionPct) : undefined);
+    const minCommissionValue = toRaw(req.query.minCommissionAmount !== undefined ? Number(req.query.minCommissionAmount) : undefined);
+    const maxCommissionValue = toRaw(req.query.maxCommissionAmount !== undefined ? Number(req.query.maxCommissionAmount) : undefined);
+
+    const products = await shoppingProductsRepo.list({
+      limit,
+      offset,
+      search,
+      minPrice,
+      maxPrice,
+      minCommissionRateValue,
+      maxCommissionRateValue,
+      minCommissionValue,
+      maxCommissionValue,
+      sort,
+    });
+
+    res.json(products.map((p) => ({
+      ...p,
+      userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,
+      userCommissionValue: p.commissionValue != null ? (p.commissionValue * pct) / 100 : null,
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -775,6 +872,7 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
     res.json({
       commissionPct: await settingsRepo.getCommissionPct(),
       referralRewardAmount: await settingsRepo.getReferralReward(),
+      productOfferMaxPages: await settingsRepo.getProductOfferMaxPages(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -797,6 +895,13 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'body.referralRewardAmount must be a non-negative number' });
       }
       response.referralRewardAmount = await settingsRepo.setReferralReward(amount);
+    }
+    if (req.body.productOfferMaxPages !== undefined) {
+      const pages = Number(req.body.productOfferMaxPages);
+      if (!Number.isInteger(pages) || pages < 1 || pages > 100) {
+        return res.status(400).json({ error: 'body.productOfferMaxPages must be an integer between 1 and 100' });
+      }
+      response.productOfferMaxPages = await settingsRepo.setProductOfferMaxPages(pages);
     }
     res.json(response);
   } catch (err) {
@@ -914,6 +1019,19 @@ app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
   }
 });
 
+// Manual trigger for the daily product-offer scrape - see the cron entry
+// below for the scheduled run. Useful for testing without waiting for the
+// next morning.
+app.post('/admin/product-offer-sync', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const maxPages = req.body?.maxPages ? Number(req.body.maxPages) : await settingsRepo.getProductOfferMaxPages();
+    const result = await runProductOfferSync({ maxPages });
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
   try {
     res.json(await bannersRepo.listAll());
@@ -952,6 +1070,54 @@ app.delete('/admin/banners/:id', adminAuth.requireAdmin, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// "Mua sắm" tab's product catalog. Normally kept fresh by the daily
+// product-offer-sync scrape (see /admin/product-offer-sync below), but an
+// admin can also drop in the same list file by hand here - same
+// upsert-by-productId semantics either way, so a manual import never
+// duplicates rows the scraper already collected.
+app.get('/admin/shopping-products', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Number(req.query.offset) || 0;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const [items, total] = await Promise.all([
+      shoppingProductsRepo.list({ limit, offset, search, sort: 'newest' }),
+      shoppingProductsRepo.count({ search }),
+    ]);
+    res.json({ items, total });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/admin/shopping-products/:id', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const removed = await shoppingProductsRepo.remove(req.params.id);
+    if (!removed) return res.status(404).json({ error: 'product not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Body is the raw file bytes (not JSON) - the admin-web proxy route reads
+// the uploaded file and forwards it verbatim, filename carried in a header
+// since multipart parsing isn't otherwise needed anywhere in this service.
+app.post(
+  '/admin/shopping-products/import',
+  adminAuth.requireAdmin,
+  express.raw({ type: '*/*', limit: '25mb' }),
+  async (req, res) => {
+    try {
+      const fileName = decodeURIComponent(req.get('x-file-name') || 'upload.csv');
+      const result = await shoppingProductImport.importFile(req.body, fileName);
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
 
 // Milestone/tier campaigns ("Su kien" tab in the app) - tiers is a simple
 // [{amount, reward}] array ("pay out `reward` once this user's paid
@@ -1052,6 +1218,19 @@ cron.schedule('0 */6 * * *', () => {
 // Health check: every 30 minutes - alerts via email if any service is down
 cron.schedule('*/30 * * * *', () => {
   runHealthCheck().catch((err) => console.error('health-check cron error', err.message));
+});
+
+// Daily product-offer scrape for the "Mua sắm" tab, every morning at 6:00
+// (server time). See lib/productOfferScraper.js for the page-count/pacing
+// caution - also triggerable on demand via POST /admin/product-offer-sync.
+cron.schedule('0 6 * * *', async () => {
+  try {
+    const maxPages = await settingsRepo.getProductOfferMaxPages();
+    const result = await runProductOfferSync({ maxPages });
+    console.log(`cron product-offer-sync: ${JSON.stringify(result)}`);
+  } catch (err) {
+    console.error('cron product-offer-sync failed', err.message);
+  }
 });
 
 process.on('SIGTERM', async () => {

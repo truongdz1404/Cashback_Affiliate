@@ -35,6 +35,7 @@ model User {
   referralAsReferred  Referral?            @relation("ReferralReferred")
   withdrawalRequests  WithdrawalRequest[]
   clawbackFlags       ClawbackFlag[]
+  emailVerifications  EmailVerification[]
 
   @@map("users")
 }
@@ -202,4 +203,67 @@ model ClawbackFlag {
   user                 User      @relation(fields: [userId], references: [id])
 
   @@map("clawback_flags")
+}
+
+// Pending OTP codes for PUT /app/me/email - email is a free-text, unverified
+// field (see the account-takeover comment in lib/repositories/users.js), so
+// changing it now requires proving control of the new address via a mailed
+// one-time code before it's written to users.email. codeHash uses the same
+// scrypt hash/verify as user passwords (lib/passwordHash.js); consumedAt/
+// attempts prevent replay and brute-forcing a 6-digit code.
+model EmailVerification {
+  id         Int       @id @default(autoincrement())
+  userId     Int       @map("user_id")
+  newEmail   String    @map("new_email")
+  codeHash   String    @map("code_hash")
+  attempts   Int       @default(0)
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user       User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, consumedAt])
+  @@map("email_verifications")
+}
+
+// Product listings scraped every morning from
+// https://affiliate.shopee.vn/offer/product_offer (lib/productOfferScraper.js)
+// via the "Lấy link hàng loạt" CSV export, so the "Mua sắm" mobile tab has
+// ready-made affiliate links without the user visiting Shopee's own
+// dashboard. All the *Text fields are kept as the raw strings Shopee's CSV
+// exports (e.g. "54,0k", "₫9.180") rather than parsed into numbers - the
+// Vietnamese k/tr-suffixed, comma-decimal formatting is easy to mis-parse,
+// and this is money-adjacent data. "revenueText" is the CSV's own "Doanh
+// thu" column, but its sample values (e.g. "20k+") look like a sold-count,
+// not a revenue figure - kept verbatim either way. productId is Shopee's
+// item id (unique); re-scraping just upserts fresher price/commission text
+// onto the same row.
+model ShoppingProduct {
+  id                 Int      @id @default(autoincrement())
+  productId          String   @unique @map("product_id")
+  name               String
+  priceText          String?  @map("price_text")
+  // VND, parsed from priceText (e.g. "108,0k" -> 108000, "2,8tr" -> 2800000)
+  // so the app can filter/sort by price range without re-parsing client-side.
+  priceValue         Int?     @map("price_value")
+  revenueText        String?  @map("revenue_text")
+  shopName           String?  @map("shop_name")
+  commissionRateText String?  @map("commission_rate_text")
+  commissionText     String?  @map("commission_text")
+  // Both parsed from the *Text columns above (e.g. "2,5%" -> 2.5, "₫2.160" ->
+  // 2160) - these are Shopee's RAW affiliate-account commission, not what an
+  // app user actually receives. The app's cut is commissionSplit.getEffectivePct()
+  // applied on top of these at request time (server.js /app/shopping-products),
+  // never stored here since the % can change per-user/over time.
+  commissionRateValue Float?  @map("commission_rate_value")
+  commissionValue     Int?    @map("commission_value")
+  productUrl         String?  @map("product_url")
+  offerUrl           String?  @map("offer_url")
+  scrapedAt          DateTime @default(now()) @map("scraped_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@index([priceValue])
+  @@index([commissionValue])
+  @@map("shopping_products")
 }

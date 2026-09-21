@@ -59,3 +59,27 @@ export async function proxyMutate(path, method, body) {
     return errorResponse(err);
   }
 }
+
+// Forwards a raw file upload to playwright-service. Separate from
+// backendFetch since that helper always JSON-encodes the body - the backend
+// expects the file's raw bytes here instead (see /admin/shopping-products/import).
+export async function proxyUpload(path, buffer, fileName) {
+  try {
+    const jar = await cookies();
+    const token = jar.get(TOKEN_COOKIE_NAME)?.value;
+
+    const headers = new Headers();
+    headers.set("x-api-key", BACKEND_API_KEY);
+    headers.set("content-type", "application/octet-stream");
+    if (fileName) headers.set("x-file-name", encodeURIComponent(fileName));
+    if (token) headers.set("authorization", `Bearer ${token}`);
+
+    const res = await fetch(`${BACKEND_URL}${path}`, { method: "POST", headers, body: buffer, cache: "no-store" });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!res.ok) throw new BackendError(res.status, (data && data.error) || `backend error ${res.status}`);
+    return NextResponse.json(data);
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
