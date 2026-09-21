@@ -1,6 +1,7 @@
 require('dotenv').config();
 const path = require('path');
 const express = require('express');
+const { Prisma } = require('@prisma/client');
 const cron = require('node-cron');
 const { randomUUID } = require('crypto');
 const browserManager = require('./lib/browserManager');
@@ -356,6 +357,11 @@ app.put('/app/me', appAuth.requireAppUser, async (req, res) => {
     if (!updated) return res.status(404).json({ error: 'user not found' });
     res.json(usersRepo.toPublicAppUser(await usersRepo.getById(req.appUserId)));
   } catch (err) {
+    // email is @unique - give a clean 409 instead of a raw Prisma 500 if
+    // it's already taken by another account.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return res.status(409).json({ error: 'email already in use' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -686,7 +692,11 @@ app.post('/users/:zaloUserId/payment', async (req, res) => {
 // the future admin-web app is expected to hold the api key server-side and
 // only hand the browser the short-lived JWT. ---
 
-app.post('/admin/login', async (req, res) => {
+// Tighter than the app-user login limiter above - there's only ever one
+// admin password, so a brute-force attempt against it is far more
+// concentrated (and far more dangerous, since it unlocks every money-moving
+// admin route) than the same rate against millions of possible phone numbers.
+app.post('/admin/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }), async (req, res) => {
   try {
     const { password } = req.body;
     if (!password) return res.status(400).json({ error: 'body.password is required' });

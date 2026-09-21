@@ -86,37 +86,44 @@ async function findByFacebookId(facebookId) {
   return prisma.user.findUnique({ where: { facebookId } });
 }
 
-async function findByEmail(email) {
-  if (!email) return null;
-  return prisma.user.findUnique({ where: { email } });
-}
-
-// First Google/Facebook sign-in for this provider id: reuse an existing row
-// matched by email (e.g. already registered by phone with the same email on
-// file) so order history carries over, same idea as phone-matching in
-// /app/register; otherwise create a fresh app-only user.
+// First Google/Facebook sign-in for this provider id: create a fresh
+// app-only user. Deliberately does NOT match/merge onto an existing row by
+// email: email is a free-text, unverified field a user can set to anything
+// via PUT /app/me (see server.js), so matching on it let an attacker
+// pre-register a phone/password account with a victim's real email address
+// and "claim" it - when the victim later signed in with Google/Facebook
+// using that same (verified, but merely email-matching) address, they'd be
+// silently logged into the attacker's account instead of getting their own,
+// handing the attacker control of any bank details the victim then entered.
+// A provider id (Google/Facebook sub) is unforgeable proof of ownership;
+// a bare email string on our own row is not - so only the former may merge.
 async function findOrCreateOAuthUser({ provider, providerId, email, name }) {
   const existingByProvider = provider === 'google' ? await findByGoogleId(providerId) : await findByFacebookId(providerId);
   if (existingByProvider) return existingByProvider;
 
   const providerColumn = provider === 'google' ? { googleId: providerId } : { facebookId: providerId };
-  const existingByEmail = await findByEmail(email);
-  if (existingByEmail) {
-    return prisma.user.update({
-      where: { id: existingByEmail.id },
-      data: { ...providerColumn, fullName: existingByEmail.fullName ?? name ?? null },
-    });
-  }
-
   const zaloUserId = `app:${crypto.randomBytes(8).toString('hex')}`;
-  return prisma.user.create({
-    data: {
-      zaloUserId,
-      email: email || null,
-      fullName: name || null,
-      ...providerColumn,
-    },
-  });
+  try {
+    return await prisma.user.create({
+      data: {
+        zaloUserId,
+        email: email || null,
+        fullName: name || null,
+        ...providerColumn,
+      },
+    });
+  } catch (err) {
+    // email is @unique - if some other row already holds this address (most
+    // likely someone squatted it via the free-text PUT /app/me email field,
+    // see the comment above), don't block this real, verified sign-in over
+    // it: create the account without the email rather than 500ing.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return prisma.user.create({
+        data: { zaloUserId, email: null, fullName: name || null, ...providerColumn },
+      });
+    }
+    throw err;
+  }
 }
 
 async function findByReferralCode(code) {
@@ -216,7 +223,6 @@ module.exports = {
   findByPhone,
   findByGoogleId,
   findByFacebookId,
-  findByEmail,
   findOrCreateOAuthUser,
   findByReferralCode,
   ensureReferralCode,
