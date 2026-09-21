@@ -9,7 +9,8 @@
     "start:withdrawal-worker": "node worker/withdrawalWorker.js",
     "postinstall": "playwright install chromium && prisma generate",
     "seed-login": "node scripts/login-from-file.js",
-    "migrate-data": "node scripts/migrate-sqlite-to-postgres.js"
+    "migrate-data": "node scripts/migrate-sqlite-to-postgres.js",
+    "sync-banks": "node scripts/syncBanks.js"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",

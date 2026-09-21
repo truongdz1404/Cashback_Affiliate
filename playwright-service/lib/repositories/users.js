@@ -58,7 +58,7 @@ async function getById(userId) {
 
 // Used by the admin dashboard's edit-in-place forms - any field left
 // undefined/null is left unchanged rather than cleared.
-async function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAccountHolder } = {}) {
+async function updateProfileById(userId, { phone, bankName, bankAccountNumber, bankAccountHolder, fullName, email } = {}) {
   const current = await prisma.user.findUnique({ where: { id: Number(userId) } });
   if (!current) return null;
   return prisma.user.update({
@@ -68,6 +68,8 @@ async function updateProfileById(userId, { phone, bankName, bankAccountNumber, b
       bankName: bankName ?? current.bankName,
       bankAccountNumber: bankAccountNumber ?? current.bankAccountNumber,
       bankAccountHolder: bankAccountHolder ?? current.bankAccountHolder,
+      fullName: fullName ?? current.fullName,
+      email: email ?? current.email,
     },
   });
 }
@@ -198,7 +200,7 @@ async function verifyPassword(userId, password) {
 function toPublicAppUser(user) {
   if (!user) return null;
   const { passwordHash: _passwordHash, ...rest } = user;
-  return rest;
+  return { ...rest, hasPassword: Boolean(_passwordHash) };
 }
 
 module.exports = {

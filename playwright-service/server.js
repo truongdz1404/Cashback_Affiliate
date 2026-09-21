@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const cron = require('node-cron');
 const { randomUUID } = require('crypto');
@@ -14,6 +15,7 @@ const settingsRepo = require('./lib/repositories/settings');
 const campaignsRepo = require('./lib/repositories/campaigns');
 const referralsRepo = require('./lib/repositories/referrals');
 const withdrawalsRepo = require('./lib/repositories/withdrawals');
+const banksRepo = require('./lib/repositories/banks');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
 const adminAuth = require('./lib/adminAuth');
@@ -32,6 +34,14 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 4000;
 const API_KEY = process.env.SERVICE_API_KEY;
+// Where this service is publicly reachable - used only to build absolute
+// logo URLs for /app/banks (req.protocol/req.get('host') isn't reliable
+// behind the nginx reverse proxy without trust-proxy config).
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://refundmoney.tro247.online';
+
+// Bank logos crawled by scripts/syncBanks.js - served as plain static files,
+// same origin as the API so the app doesn't need a separate asset host.
+app.use('/app/bank-logos', express.static(path.join(__dirname, 'public', 'bank-logos')));
 
 // Zalo calls this directly (its own secret token, not our x-api-key), so it
 // must be registered before the x-api-key middleware below. Ack immediately
@@ -340,8 +350,8 @@ app.get('/app/me', appAuth.requireAppUser, async (req, res) => {
 
 app.put('/app/me', appAuth.requireAppUser, async (req, res) => {
   try {
-    const { phone, bankName, bankAccountNumber, bankAccountHolder } = req.body;
-    const updated = await usersRepo.updateProfileById(req.appUserId, { phone, bankName, bankAccountNumber, bankAccountHolder });
+    const { phone, bankName, bankAccountNumber, bankAccountHolder, fullName, email } = req.body;
+    const updated = await usersRepo.updateProfileById(req.appUserId, { phone, bankName, bankAccountNumber, bankAccountHolder, fullName, email });
     if (!updated) return res.status(404).json({ error: 'user not found' });
     res.json(usersRepo.toPublicAppUser(await usersRepo.getById(req.appUserId)));
   } catch (err) {
@@ -502,6 +512,15 @@ app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
 app.get('/app/wallet/withdrawals', appAuth.requireAppUser, async (req, res) => {
   try {
     res.json(await withdrawalsRepo.listForUser(req.appUserId));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/banks', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const banks = await banksRepo.listAll();
+    res.json(banks.map((bank) => banksRepo.toPublicBank(bank, PUBLIC_BASE_URL)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -959,6 +978,15 @@ app.listen(PORT, () => {
   // persisted on disk, so the very first request doesn't pay the cold-page
   // cost either.
   browserManager.refillCustomLinkPool();
+
+  // One-time seed: only hits VietQR if the banks table is still empty (fresh
+  // DB / first deploy after this migration), so normal restarts don't
+  // re-download 65 logos every time.
+  banksRepo
+    .count()
+    .then((count) => (count === 0 ? require('./scripts/syncBanks').syncBanks() : null))
+    .then((synced) => synced && console.log(`banks: seeded ${synced} banks from VietQR`))
+    .catch((err) => console.error('banks: initial sync failed', err.message));
 });
 
 // Order reconciliation, every 6 hours - also triggerable on demand via

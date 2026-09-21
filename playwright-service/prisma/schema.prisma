@@ -148,6 +148,24 @@ model WithdrawalRequest {
   @@map("withdrawal_requests")
 }
 
+// Vietnamese bank directory, synced from the VietQR public API
+// (scripts/syncBanks.js) so the app's bank picker doesn't depend on an
+// external service at request time. Logos are downloaded and served from
+// this server too (see /bank-logos static route in server.js).
+model Bank {
+  id         Int      @id @default(autoincrement())
+  code       String   @unique
+  bin        String   @unique
+  name       String
+  shortName  String   @map("short_name")
+  logoPath   String   @map("logo_path")
+  swiftCode  String?  @map("swift_code")
+  sortOrder  Int      @default(0) @map("sort_order")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("banks")
+}
+
 // Manual-review queue: written when money already marked paid (order payout,
 // referral, or campaign reward) needs reversal because Shopee later reported
 // the underlying order as Cancelled. Never auto-reversed - a human confirms
