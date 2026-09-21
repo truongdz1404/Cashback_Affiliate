@@ -883,8 +883,9 @@ app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
 });
 
 // Milestone/tier campaigns ("Su kien" tab in the app) - tiers is a simple
-// [{orders, reward}] array, edited as one JSON blob from the dashboard
-// rather than needing a dedicated tiers UI.
+// [{amount, reward}] array ("pay out `reward` once this user's paid
+// cashback in the campaign window reaches `amount`"), edited as one JSON
+// blob from the dashboard rather than needing a dedicated tiers UI.
 app.get('/admin/campaigns', adminAuth.requireAdmin, async (_req, res) => {
   try {
     res.json(await campaignsRepo.listAll());
@@ -911,6 +912,20 @@ app.put('/admin/campaigns/:id', adminAuth.requireAdmin, async (req, res) => {
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Calculation helper for admins defining tiers: turns "every 100k paid,
+// +10k reward, 5 times" into the actual [{amount, reward}] array, so they
+// don't have to hand-multiply the JSON blob above. Doesn't touch the DB -
+// admins review/tweak the preview then pass it as `tiers` to POST/PUT
+// /admin/campaigns as usual.
+app.post('/admin/campaigns/tier-calculator', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const { stepAmount, rewardPerStep, steps } = req.body;
+    res.json({ tiers: campaignsRepo.buildStepTiers({ stepAmount, rewardPerStep, steps }) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 

@@ -43,13 +43,25 @@ function CampaignForm({ initial, onSaved, onCancel }) {
   );
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [calc, setCalc] = useState({ stepAmount: "100000", rewardPerStep: "10000", steps: "5" });
+  const [calcMsg, setCalcMsg] = useState("");
+
+  async function applyCalculator() {
+    setCalcMsg("");
+    try {
+      const { tiers } = await clientApi.post("/api/campaigns/tier-calculator", calc);
+      setForm((f) => ({ ...f, tiersJson: JSON.stringify(tiers, null, 2) }));
+    } catch (err) {
+      setCalcMsg(err.message || "Tính mốc thất bại");
+    }
+  }
 
   async function save() {
     setMsg("");
     let tiers;
     try {
       tiers = JSON.parse(form.tiersJson || "[]");
-      if (!Array.isArray(tiers)) throw new Error("tiers phải là mảng JSON, ví dụ [{\"orders\":3,\"reward\":6000}]");
+      if (!Array.isArray(tiers)) throw new Error("tiers phải là mảng JSON, ví dụ [{\"amount\":100000,\"reward\":10000}]");
     } catch (err) {
       return setMsg(err.message || "tiers JSON không hợp lệ");
     }
@@ -117,16 +129,58 @@ function CampaignForm({ initial, onSaved, onCancel }) {
           />
         </label>
       </div>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p className="mb-2 text-xs font-medium text-slate-700">
+          Tính nhanh mốc thưởng (mốc đều nhau, ví dụ: cứ hoàn thêm 100.000đ thì thưởng 10.000đ, lặp lại 5 lần)
+        </p>
+        <div className="grid grid-cols-3 gap-2">
+          <label className="text-xs">
+            <span className="mb-1 block text-slate-500">Mỗi mốc cách nhau (đ)</span>
+            <input
+              value={calc.stepAmount}
+              onChange={(e) => setCalc((c) => ({ ...c, stepAmount: e.target.value }))}
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              inputMode="numeric"
+            />
+          </label>
+          <label className="text-xs">
+            <span className="mb-1 block text-slate-500">Thưởng mỗi mốc (đ)</span>
+            <input
+              value={calc.rewardPerStep}
+              onChange={(e) => setCalc((c) => ({ ...c, rewardPerStep: e.target.value }))}
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              inputMode="numeric"
+            />
+          </label>
+          <label className="text-xs">
+            <span className="mb-1 block text-slate-500">Số mốc</span>
+            <input
+              value={calc.steps}
+              onChange={(e) => setCalc((c) => ({ ...c, steps: e.target.value }))}
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              inputMode="numeric"
+            />
+          </label>
+        </div>
+        <button
+          onClick={applyCalculator}
+          type="button"
+          className="mt-2 rounded-lg border border-orange-300 bg-white px-3 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50"
+        >
+          Tính và điền vào JSON bên dưới
+        </button>
+        {calcMsg && <p className="mt-1 text-xs text-red-600">{calcMsg}</p>}
+      </div>
       <label className="block text-sm">
         <span className="mb-1 block font-medium text-slate-700">
-          Mốc thưởng (JSON: mảng {"{orders, reward}"})
+          Mốc thưởng (JSON: mảng {"{amount, reward}"} - amount là tổng tiền hoàn đã thanh toán cần đạt)
         </span>
         <textarea
           value={form.tiersJson}
           onChange={(e) => setForm((f) => ({ ...f, tiersJson: e.target.value }))}
           rows={5}
           className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs"
-          placeholder={'[\n  { "orders": 3, "reward": 6000 },\n  { "orders": 10, "reward": 25000 }\n]'}
+          placeholder={'[\n  { "amount": 100000, "reward": 10000 },\n  { "amount": 200000, "reward": 25000 }\n]'}
         />
       </label>
       <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -226,7 +280,7 @@ export default function CampaignsPage() {
                       {c.startsAt || "không giới hạn"} → {c.endsAt || "không giới hạn"}
                     </p>
                     <p className="mt-2 text-xs text-slate-600">
-                      Mốc: {(c.tiers || []).map((t) => `${t.orders} đơn → ${t.reward}đ`).join(", ") || "chưa có"}
+                      Mốc: {(c.tiers || []).map((t) => `hoàn ${t.amount}đ → thưởng ${t.reward}đ`).join(", ") || "chưa có"}
                     </p>
                   </div>
                   <button

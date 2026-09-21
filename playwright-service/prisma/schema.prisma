@@ -98,19 +98,19 @@ model Campaign {
 }
 
 model CampaignReward {
-  id             Int      @id @default(autoincrement())
-  campaignId     Int      @map("campaign_id")
-  userId         Int      @map("user_id")
-  orderThreshold Int      @map("order_threshold")
-  rewardAmount   Float    @map("reward_amount")
-  payoutStatus   String   @default("unpaid") @map("payout_status")
-  paidAt         String?  @map("paid_at")
-  createdAt      DateTime @default(now()) @map("created_at")
+  id              Int      @id @default(autoincrement())
+  campaignId      Int      @map("campaign_id")
+  userId          Int      @map("user_id")
+  thresholdAmount Float    @map("threshold_amount")
+  rewardAmount    Float    @map("reward_amount")
+  payoutStatus    String   @default("unpaid") @map("payout_status")
+  paidAt          String?  @map("paid_at")
+  createdAt       DateTime @default(now()) @map("created_at")
 
-  campaign       Campaign @relation(fields: [campaignId], references: [id])
-  user           User     @relation(fields: [userId], references: [id])
+  campaign        Campaign @relation(fields: [campaignId], references: [id])
+  user            User     @relation(fields: [userId], references: [id])
 
-  @@unique([campaignId, userId, orderThreshold])
+  @@unique([campaignId, userId, thresholdAmount])
   @@map("campaign_rewards")
 }
 
