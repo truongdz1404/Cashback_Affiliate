@@ -13,6 +13,7 @@ const linksRepo = require('./lib/repositories/links');
 const ordersRepo = require('./lib/repositories/orders');
 const settingsRepo = require('./lib/repositories/settings');
 const campaignsRepo = require('./lib/repositories/campaigns');
+const bannersRepo = require('./lib/repositories/banners');
 const referralsRepo = require('./lib/repositories/referrals');
 const withdrawalsRepo = require('./lib/repositories/withdrawals');
 const banksRepo = require('./lib/repositories/banks');
@@ -516,6 +517,14 @@ app.get('/app/banks', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
+app.get('/app/banners', appAuth.requireAppUser, async (_req, res) => {
+  try {
+    res.json(await bannersRepo.listActive());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/app/campaigns', appAuth.requireAppUser, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 100);
@@ -892,6 +901,45 @@ app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
     res.json(result);
   } catch (err) {
     res.status(502).json({ error: err.message });
+  }
+});
+
+app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
+  try {
+    res.json(await bannersRepo.listAll());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/banners', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const { imageUrl, linkUrl, sortOrder, isActive } = req.body;
+    if (!imageUrl) return res.status(400).json({ error: 'body.imageUrl is required' });
+    res.json(await bannersRepo.create({ imageUrl, linkUrl, sortOrder, isActive }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/admin/banners/:id', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const { imageUrl, linkUrl, sortOrder, isActive } = req.body;
+    const updated = await bannersRepo.update(req.params.id, { imageUrl, linkUrl, sortOrder, isActive });
+    if (!updated) return res.status(404).json({ error: 'banner not found' });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/admin/banners/:id', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const removed = await bannersRepo.remove(req.params.id);
+    if (!removed) return res.status(404).json({ error: 'banner not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

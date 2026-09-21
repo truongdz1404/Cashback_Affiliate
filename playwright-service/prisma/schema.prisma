@@ -116,6 +116,21 @@ model CampaignReward {
   @@map("campaign_rewards")
 }
 
+// Home-screen slide banners, managed from the admin dashboard so the app
+// never needs a new store release to change/add/remove one. `linkUrl` is
+// optional - a plain deep link (e.g. rewally://campaigns) or https URL the
+// app opens on tap; sortOrder controls left-to-right slide order.
+model Banner {
+  id        Int      @id @default(autoincrement())
+  imageUrl  String   @map("image_url")
+  linkUrl   String?  @map("link_url")
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("banners")
+}
+
 model Referral {
   id                Int      @id @default(autoincrement())
   referrerUserId    Int      @map("referrer_user_id")
