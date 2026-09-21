@@ -26,6 +26,7 @@ services:
       ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM}
     volumes:
       - ./playwright-service/storage:/app/storage
+      - ./playwright-service/public/bank-logos:/app/public/bank-logos
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
