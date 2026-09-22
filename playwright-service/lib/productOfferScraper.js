@@ -265,7 +265,8 @@ async function runProductOfferSync({
       throw new Error('Not logged in - call POST /login with valid cookies first.');
     }
 
-    await selectTab(page, (tabName && tabName.trim()) || DEFAULT_TAB_NAME);
+    const selectedTabName = (tabName && tabName.trim()) || DEFAULT_TAB_NAME;
+    await selectTab(page, selectedTabName);
     if (searchText && searchText.trim()) {
       await performSearch(page, searchText.trim(), sortLabel);
     }
@@ -286,7 +287,11 @@ async function runProductOfferSync({
       }
 
       totalScraped += pageProducts.length;
-      totalSaved += await shoppingProductsRepo.upsertMany(pageProducts);
+      // Recommendation engine's category signal (lib/repositories/recommendations.js)
+      // - free, since selectTab already told us which tab this page came from.
+      totalSaved += await shoppingProductsRepo.upsertMany(
+        pageProducts.map((p) => ({ ...p, category: selectedTabName }))
+      );
       pagesVisited++;
 
       if (i < maxPages - 1) {

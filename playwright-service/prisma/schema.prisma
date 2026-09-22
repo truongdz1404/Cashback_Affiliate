@@ -56,6 +56,19 @@ model Link {
   affiliateUrl     String?  @map("affiliate_url")
   estimatedAmount  Float?   @map("estimated_amount")
   estimatedPct     Float?   @map("estimated_pct")
+  // Content snapshot of the linked product, best-effort filled from the same
+  // addlivetag commission lookup /app/link already makes (see
+  // lib/commission.js's getCommissionViaApi) - no extra network call. Powers
+  // the recommendation engine (lib/repositories/recommendations.js), which has
+  // nothing else to go on since itemId alone rarely matches the scraped
+  // shopping_products catalog. Null whenever that lookup fell back to the
+  // browser path or failed outright.
+  itemName         String?  @map("item_name")
+  catId            Int?     @map("cat_id")
+  catName          String?  @map("cat_name")
+  shopName         String?  @map("shop_name")
+  priceValue       Int?     @map("price_value")
+  imageUrl         String?  @map("image_url")
   createdAt        DateTime @default(now()) @map("created_at")
 
   user          User     @relation(fields: [userId], references: [id])
@@ -265,6 +278,11 @@ model ShoppingProduct {
   // productOfferScraper.js's scrapeImageMap. Null for admin CSV/XLSX imports,
   // which never have an image column.
   imageUrl           String?  @map("image_url")
+  // The product_offer tab this row was scraped under (e.g. "Thời trang nữ") -
+  // a coarse but free category signal (the scraper already knows it, see
+  // productOfferScraper.js) used by the recommendation engine to match against
+  // a user's linked-product categories. Null for admin CSV/XLSX imports.
+  category           String?  @map("category")
   scrapedAt          DateTime @default(now()) @map("scraped_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 

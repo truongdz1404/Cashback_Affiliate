@@ -5,7 +5,21 @@ function generateSubId() {
   return crypto.randomBytes(5).toString('hex');
 }
 
-async function saveLink({ userId, subId, itemId, shopeeUrl, affiliateUrl, estimatedAmount, estimatedPct }) {
+async function saveLink({
+  userId,
+  subId,
+  itemId,
+  shopeeUrl,
+  affiliateUrl,
+  estimatedAmount,
+  estimatedPct,
+  itemName,
+  catId,
+  catName,
+  shopName,
+  priceValue,
+  imageUrl,
+}) {
   return prisma.link.create({
     data: {
       userId,
@@ -15,6 +29,12 @@ async function saveLink({ userId, subId, itemId, shopeeUrl, affiliateUrl, estima
       affiliateUrl: affiliateUrl || null,
       estimatedAmount: estimatedAmount ?? null,
       estimatedPct: estimatedPct ?? null,
+      itemName: itemName || null,
+      catId: catId ?? null,
+      catName: catName || null,
+      shopName: shopName || null,
+      priceValue: priceValue ?? null,
+      imageUrl: imageUrl || null,
     },
   });
 }

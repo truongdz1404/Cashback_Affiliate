@@ -19,6 +19,7 @@ const referralsRepo = require('./lib/repositories/referrals');
 const withdrawalsRepo = require('./lib/repositories/withdrawals');
 const banksRepo = require('./lib/repositories/banks');
 const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
+const recommendationsRepo = require('./lib/repositories/recommendations');
 const shoppingProductImport = require('./lib/shoppingProductImport');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
 const zaloBot = require('./lib/zaloBot');
@@ -449,7 +450,7 @@ app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
     const estimate = estimateFromResult(result, await getEffectivePct(user));
 
     if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid, estimate);
+      await linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid, estimate, result.meta);
     }
 
     res.json({ ...result, estimate });
@@ -629,6 +630,24 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
     });
 
     res.json(products.map((p) => ({
+      ...p,
+      userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,
+      userCommissionValue: p.commissionValue != null ? (p.commissionValue * pct) / 100 : null,
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Gợi ý cho bạn" on the Home tab - see lib/repositories/recommendations.js
+// for how this is scored off the user's "Tạo link" history.
+app.get('/app/recommendations', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 10, 30);
+    const user = await usersRepo.getById(req.appUserId);
+    const pct = await getEffectivePct(user);
+    const { items } = await recommendationsRepo.recommendForUser(req.appUserId, { limit });
+    res.json(items.map((p) => ({
       ...p,
       userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,
       userCommissionValue: p.commissionValue != null ? (p.commissionValue * pct) / 100 : null,

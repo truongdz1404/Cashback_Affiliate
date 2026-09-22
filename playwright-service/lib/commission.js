@@ -106,7 +106,23 @@ async function getCommissionViaApi(pid) {
     },
   };
 
-  return { source: 'api', product: productData, commissionTable: buildCommissionTable(productData) };
+  return {
+    source: 'api',
+    product: productData,
+    commissionTable: buildCommissionTable(productData),
+    // Everything addlivetag hands back beyond the commission rates - already
+    // paid for by this same request, so recordLink can snapshot it onto the
+    // Link row for free instead of the recommendation engine having only a
+    // bare itemId to work with (see server.js /app/link, lib/linkTracking.js).
+    meta: {
+      itemName: info.productName ?? null,
+      catId: info.catId ?? null,
+      catName: info.catName ?? null,
+      shopName: info.shopName ?? null,
+      priceValue: parseNumber(info.price),
+      imageUrl: info.imageUrl ?? null,
+    },
+  };
 }
 
 /**
@@ -148,7 +164,10 @@ async function getCommissionViaBrowser(pid) {
     const apiResponse = await apiResponsePromise;
     const productData = apiResponse ? await apiResponse.json().catch(() => null) : null;
 
-    return { source: 'browser', product: productData, commissionTable: buildCommissionTable(productData) };
+    // No addlivetag-shaped `meta` here - Shopee's own API uses a different
+    // response shape we haven't mapped, and this path only runs when
+    // addlivetag already failed, so it's rare in practice.
+    return { source: 'browser', product: productData, commissionTable: buildCommissionTable(productData), meta: null };
   } finally {
     await page.close();
   }

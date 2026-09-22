@@ -23,6 +23,7 @@ async function getLinkAndCommission(links, subIds) {
     ...linkResult,
     pid: first ? first.itemId : null,
     commission,
+    meta: commission && !commission.error ? commission.meta ?? null : null,
   };
 }
 

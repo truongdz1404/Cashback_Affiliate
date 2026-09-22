@@ -21,7 +21,7 @@ async function prepareSubId(zaloUserId, subIds) {
 // be looked up by sub_id during order reconciliation. `estimate` (userAmount/
 // userPct) is stored alongside so the app's link history can show the same
 // figure the user saw right after creating the link.
-async function recordLink(userId, subId, productLinks, result, fallbackItemId, estimate) {
+async function recordLink(userId, subId, productLinks, result, fallbackItemId, estimate, meta) {
   const first = (result && result.results && result.results[0]) || null;
   await linksRepo.saveLink({
     userId,
@@ -31,6 +31,12 @@ async function recordLink(userId, subId, productLinks, result, fallbackItemId, e
     affiliateUrl: first ? first.shortLink || first.longLink : null,
     estimatedAmount: estimate ? estimate.userAmount : null,
     estimatedPct: estimate ? estimate.userPct : null,
+    itemName: meta ? meta.itemName : null,
+    catId: meta ? meta.catId : null,
+    catName: meta ? meta.catName : null,
+    shopName: meta ? meta.shopName : null,
+    priceValue: meta ? meta.priceValue : null,
+    imageUrl: meta ? meta.imageUrl : null,
   });
 }
 
