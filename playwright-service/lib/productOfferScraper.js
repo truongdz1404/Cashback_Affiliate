@@ -139,11 +139,17 @@ async function goToNextPage(page) {
 // (even for the default "Tất cả") so the run doesn't depend on whatever tab
 // Shopee's own UI happened to leave selected from a previous session.
 async function selectTab(page, tabName) {
-  const tab = page.getByRole('tab', { name: tabName, exact: true });
-  if ((await tab.count()) === 0) {
+  const tab = page.getByRole('tab', { name: tabName, exact: true }).first();
+  try {
+    // The tab bar is rendered client-side after the initial page load, so it
+    // isn't there yet right after page.goto() - wait for it instead of just
+    // checking count() immediately (which is what produced a false "tab not
+    // found" failure on a real production run).
+    await tab.waitFor({ state: 'visible', timeout: 15000 });
+  } catch {
     throw new Error(`product-offer tab "${tabName}" not found on the page`);
   }
-  await tab.first().click();
+  await tab.click();
   await page.waitForTimeout(1500);
   await browserManager.dismissBlockingModals(page);
 }
@@ -153,6 +159,7 @@ async function selectTab(page, tabName) {
 // <button>, just a clickable div, confirmed against a live DOM dump).
 async function performSearch(page, searchText, sortLabel) {
   const searchInput = page.getByPlaceholder('Tìm kiếm tất cả sản phẩm Shopee');
+  await searchInput.waitFor({ state: 'visible', timeout: 15000 });
   await searchInput.fill(searchText);
   await page.locator('.ant-input-group-addon', { hasText: 'Tìm kiếm' }).first().click();
   await page.waitForTimeout(1500);
@@ -164,11 +171,13 @@ async function performSearch(page, searchText, sortLabel) {
   // selectTab above. Left alone (Shopee's own default, "Liên quan") if no
   // sortLabel is given.
   if (sortLabel) {
-    const sortOption = page.locator('label.ant-radio-button-wrapper', { hasText: sortLabel });
-    if ((await sortOption.count()) === 0) {
+    const sortOption = page.locator('label.ant-radio-button-wrapper', { hasText: sortLabel }).first();
+    try {
+      await sortOption.waitFor({ state: 'visible', timeout: 10000 });
+    } catch {
       throw new Error(`product-offer sort option "${sortLabel}" not found on the page`);
     }
-    await sortOption.first().click();
+    await sortOption.click();
     await page.waitForTimeout(1500);
   }
 }
