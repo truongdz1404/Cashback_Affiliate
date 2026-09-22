@@ -14,6 +14,22 @@ type SyncResult = { pagesVisited: number; scraped: number; saved: number; stoppe
 
 const SORT_LABELS = ["Liên quan", "Hoa hồng (%)", "Bán chạy", "Giá: Thấp đến Cao"];
 
+// The tab bar's actual labels (confirmed against a live DOM dump of
+// affiliate.shopee.vn/offer/product_offer) - fixed list rather than fetched
+// live, since it would need a logged-in browser round trip just to populate
+// a settings dropdown. Re-check against the live page if Shopee adds/renames
+// a category and this list drifts out of sync.
+const TAB_LABELS = [
+  "Tất cả",
+  "Hoa hồng Xtra",
+  "Bán chạy nhất",
+  "Thể Thao & Du Lịch",
+  "Thiết Bị Điện Gia Dụng",
+  "Máy Tính & Laptop",
+  "Bách Hóa Online",
+  "Sắc Đẹp",
+];
+
 type SyncStatus = {
   status: "idle" | "running" | "done" | "error";
   startedAt: string | null;
@@ -155,7 +171,7 @@ function ProductOfferMaxPagesSection() {
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState("");
   const [syncMsg, setSyncMsg] = useState("");
-  const [tabName, setTabName] = useState("");
+  const [tabName, setTabName] = useState(TAB_LABELS[0]);
   const [startPage, setStartPage] = useState("");
   const [searchText, setSearchText] = useState("");
   const [sortLabel, setSortLabel] = useState("");
@@ -238,7 +254,7 @@ function ProductOfferMaxPagesSection() {
     setSyncMsg("Đang cào dữ liệu, có thể mất vài phút...");
     try {
       const status = await clientApi.post<SyncStatus>("/api/product-offer-sync", {
-        tabName: tabName.trim() || undefined,
+        tabName,
         startPage: startPage ? Number(startPage) : undefined,
         searchText: searchText.trim() || undefined,
         sortLabel: searchText.trim() ? sortLabel || undefined : undefined,
@@ -275,10 +291,26 @@ function ProductOfferMaxPagesSection() {
           Tuỳ chọn cho lần chạy tay này (không áp dụng cho lịch tự động 6h sáng):
         </p>
         <div className="flex flex-wrap items-end gap-2">
-          <TextField name="tabName" value={tabName} onChange={setTabName} className="w-56" aria-label="Tab danh mục">
+          <Select
+            aria-label="Tab danh mục"
+            selectedKey={tabName}
+            onSelectionChange={(key) => setTabName(String(key ?? TAB_LABELS[0]))}
+          >
             <Label className="text-xs">Tab danh mục</Label>
-            <Input placeholder="Tất cả (mặc định)" />
-          </TextField>
+            <Select.Trigger className="min-w-[200px]">
+              <Select.Value />
+              <Select.Indicator />
+            </Select.Trigger>
+            <Select.Popover>
+              <ListBox>
+                {TAB_LABELS.map((label) => (
+                  <ListBox.Item key={label} id={label}>
+                    {label}
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </Select.Popover>
+          </Select>
           <TextField name="startPage" value={startPage} onChange={setStartPage} className="w-32" aria-label="Bắt đầu từ trang">
             <Label className="text-xs">Bắt đầu từ trang</Label>
             <Input placeholder="1" />
