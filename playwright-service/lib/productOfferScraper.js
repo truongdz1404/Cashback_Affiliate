@@ -146,26 +146,40 @@ async function selectTab(page, tabName) {
   // (e.g. a count badge) that breaks an exact match. `.rc-tabs-tab` + hasText
   // only needs the label as a substring, which tolerates that.
   const tab = page.locator('.rc-tabs-tab', { hasText: tabName }).first();
-  try {
-    // The tab bar is rendered client-side after the initial page load, so it
-    // isn't there yet right after page.goto() - wait for it instead of just
-    // checking count() immediately.
-    await tab.waitFor({ state: 'visible', timeout: 15000 });
-  } catch {
-    // Surface what tabs (if any) actually rendered - without this, a
-    // selector mismatch just says "not found" with no way to tell whether
-    // the tab bar rendered at all or rendered with different labels.
-    const seen = await page
-      .locator('.rc-tabs-tab')
-      .allTextContents()
-      .catch(() => []);
-    throw new Error(
-      `product-offer tab "${tabName}" not found on the page (tabs seen: ${seen.length ? seen.join(', ') : 'none'})`
-    );
+
+  // Two attempts: a run kicked off right after a prior multi-page crawl just
+  // finished (confirmed live: 25-page crawl finished, and a new run starting
+  // ~15s later found the tab bar entirely absent) can hit the page before it
+  // has actually finished loading, even past the visibility timeout - a
+  // reload gives it a clean second chance instead of failing the whole run
+  // over what's most likely just slow load timing.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      // The tab bar is rendered client-side after the initial page load, so it
+      // isn't there yet right after page.goto() - wait for it instead of just
+      // checking count() immediately.
+      await tab.waitFor({ state: 'visible', timeout: 15000 });
+      await tab.click();
+      await page.waitForTimeout(1500);
+      await browserManager.dismissBlockingModals(page);
+      return;
+    } catch {
+      if (attempt === 2) {
+        // Surface what tabs (if any) actually rendered - without this, a
+        // selector mismatch just says "not found" with no way to tell whether
+        // the tab bar rendered at all or rendered with different labels.
+        const seen = await page
+          .locator('.rc-tabs-tab')
+          .allTextContents()
+          .catch(() => []);
+        throw new Error(
+          `product-offer tab "${tabName}" not found on the page (tabs seen: ${seen.length ? seen.join(', ') : 'none'})`
+        );
+      }
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+    }
   }
-  await tab.click();
-  await page.waitForTimeout(1500);
-  await browserManager.dismissBlockingModals(page);
 }
 
 // Free-text search box above the grid (`input[placeholder="Tìm kiếm tất cả
