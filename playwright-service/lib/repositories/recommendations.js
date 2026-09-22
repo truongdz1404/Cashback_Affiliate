@@ -1,4 +1,5 @@
 const prisma = require('../prisma');
+const searchHistoryRepo = require('./searchHistory');
 
 // How far back into a user's "Tạo link" history to look for signal. Capped
 // (not "all links ever") so a long-time user's taste can drift - their most
@@ -14,6 +15,20 @@ const LINK_HISTORY_LIMIT = 50;
 // past this cap, revisit with a real pre-filter (e.g. by shop/category)
 // instead of raising the number.
 const CANDIDATE_POOL_SIZE = 5000;
+
+// Recent Shopping-tab search terms are a weaker, noisier signal than an
+// actual "Tạo link" action (a search doesn't mean a purchase), so they fold
+// into keywordWeights at the same tier as a link's own category tokens
+// rather than its item-name tokens.
+const SEARCH_TERM_WEIGHT = 0.5;
+
+// "Trending" nudge for scoreProduct: freshly-scraped products get a small,
+// linearly-decaying bonus so new arrivals surface a bit above older items
+// with an otherwise similar score. Capped well below a single shop/category/
+// keyword match so it can only ever be a tie-breaker, never override a real
+// match.
+const TREND_WINDOW_DAYS = 14;
+const TREND_MAX_BONUS = 0.8;
 
 // Vietnamese product titles are noisy with size/color/generic-hype words that
 // would otherwise dominate the keyword overlap score (e.g. "chính hãng",
@@ -65,14 +80,17 @@ async function fallbackProducts(limit, excludeIds = new Set()) {
 // affinity can drive both the Home-tab "Gợi ý cho bạn" widget and the
 // Shopping-tab personalized ordering, without scoring twice differently.
 async function buildAffinity(userId) {
-  const links = await prisma.link.findMany({
-    where: { userId: Number(userId) },
-    orderBy: { createdAt: 'desc' },
-    take: LINK_HISTORY_LIMIT,
-  });
+  const [links, recentSearchTerms] = await Promise.all([
+    prisma.link.findMany({
+      where: { userId: Number(userId) },
+      orderBy: { createdAt: 'desc' },
+      take: LINK_HISTORY_LIMIT,
+    }),
+    searchHistoryRepo.recentTerms(userId),
+  ]);
 
   const withSignal = links.filter((l) => l.catName || l.shopName || l.itemName);
-  if (withSignal.length === 0) {
+  if (withSignal.length === 0 && recentSearchTerms.length === 0) {
     return { hasSignal: false, alreadyLinkedItemIds: new Set() };
   }
 
@@ -95,6 +113,13 @@ async function buildAffinity(userId) {
       keywordWeights.set(token, (keywordWeights.get(token) || 0) + weight * 0.5);
     }
     if (link.priceValue != null) prices.push(link.priceValue);
+  });
+
+  recentSearchTerms.forEach((term, index) => {
+    const weight = weightAt(index) * SEARCH_TERM_WEIGHT;
+    for (const token of tokenize(term)) {
+      keywordWeights.set(token, (keywordWeights.get(token) || 0) + weight);
+    }
   });
 
   const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null;
@@ -131,6 +156,12 @@ function scoreProduct(product, affinity) {
   }
   if (product.commissionRateValue != null) {
     score += Math.min(product.commissionRateValue / 20, 1.5);
+  }
+  if (product.scrapedAt) {
+    const ageDays = (Date.now() - new Date(product.scrapedAt).getTime()) / 86400000;
+    if (ageDays < TREND_WINDOW_DAYS) {
+      score += TREND_MAX_BONUS * (1 - ageDays / TREND_WINDOW_DAYS);
+    }
   }
   return score;
 }

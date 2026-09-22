@@ -29,6 +29,7 @@ model User {
   referredUsers       User[]   @relation("UserReferredBy")
 
   links               Link[]
+  searchHistory       SearchHistory[]
   orders              Order[]
   campaignRewards     CampaignReward[]
   referralsAsReferrer Referral[]           @relation("ReferralReferrer")
@@ -74,6 +75,24 @@ model Link {
   user          User     @relation(fields: [userId], references: [id])
 
   @@map("links")
+}
+
+// Recent Shopping-tab search terms per user - a lightweight session-behavior
+// signal (see lib/repositories/recommendations.js's buildAffinity) alongside
+// the link-history one. One row per completed search; server.js only writes
+// a row when the term looks intentional (not every debounced keystroke), and
+// buildAffinity only reads the most recent handful, so this table is
+// expected to stay small - revisit with pruning if usage ever makes it not.
+model SearchHistory {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  term      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@map("search_history")
 }
 
 model Order {

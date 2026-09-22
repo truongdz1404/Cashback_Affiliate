@@ -20,6 +20,7 @@ const withdrawalsRepo = require('./lib/repositories/withdrawals');
 const banksRepo = require('./lib/repositories/banks');
 const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
 const recommendationsRepo = require('./lib/repositories/recommendations');
+const searchHistoryRepo = require('./lib/repositories/searchHistory');
 const shoppingProductImport = require('./lib/shoppingProductImport');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
 const zaloBot = require('./lib/zaloBot');
@@ -645,6 +646,12 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
           sort,
         })
       : await recommendationsRepo.rankProductsForUser(req.appUserId, { search, limit, offset });
+
+    if (search) {
+      // Fire-and-forget: feeds the "session-based" signal in buildAffinity()
+      // (lib/repositories/recommendations.js), never blocks/fails the response.
+      searchHistoryRepo.record(req.appUserId, search).catch(() => {});
+    }
 
     res.json(products.map((p) => ({
       ...p,
