@@ -1,14 +1,18 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Button, Card, Chip, toast } from "@heroui/react";
+import { toast } from "@heroui/react";
 import { appClient, AppRequestError } from "@/lib/appClient";
+import { openAuthDialog } from "@/lib/authDialog";
 import { formatPct, formatVnd } from "@/lib/format";
 import type { ShoppingProduct, ShoppingProductOpenResult } from "@/lib/appTypes";
-import { BoltIcon, FireIcon, ImageIcon } from "@/components/icons";
+import { ArrowRightIcon, ImageIcon } from "@/components/icons";
 
+// One card = one tap. The whole card opens the affiliate link, so there is no
+// separate CTA button and no "log in to earn" copy competing with the product
+// itself. A guest still gets the product (plain Shopee URL in a new tab) and
+// the sign-in dialog on this tab explaining why the tap did not earn cashback.
 export default function ProductCard({
   product,
   isAuthenticated,
@@ -18,18 +22,26 @@ export default function ProductCard({
   isAuthenticated: boolean;
   className?: string;
 }) {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
 
   const pct = product.userCommissionRateValue;
   const amount = product.userCommissionValue;
+  const hasPct = pct != null && pct > 0;
+  const hasAmount = amount != null && amount > 0;
+  const tags = [product.isBestSeller && "Bán chạy", product.isXtraCommission && "Xtra"].filter(Boolean) as string[];
 
   async function open() {
     if (loading) return;
 
     if (!isAuthenticated) {
-      const next = encodeURIComponent(window.location.pathname + window.location.search);
-      router.push(`/login?next=${next}`);
+      const plainUrl = product.productUrl ?? product.offerUrl;
+      if (plainUrl) window.open(plainUrl, "_blank", "noopener,noreferrer");
+      openAuthDialog({
+        title: "Đăng nhập để đơn này được hoàn tiền",
+        description: plainUrl
+          ? "Shopee đã mở ở tab mới, nhưng đơn mua qua link đó chưa được hoàn tiền. Đăng nhập rồi bấm lại sản phẩm để mua qua link hoàn tiền của bạn."
+          : "Đăng nhập để mua sản phẩm qua link hoàn tiền của bạn.",
+      });
       return;
     }
 
@@ -49,74 +61,83 @@ export default function ProductCard({
   }
 
   return (
-    <Card className={`group flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white shadow-none transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-[0_18px_38px_-28px_rgba(20,49,34,0.55)] ${className}`}>
+    <article
+      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl bg-white ring-1 ring-[var(--border)] transition duration-200 hover:ring-[var(--accent)] hover:shadow-[0_14px_32px_-24px_rgba(20,49,34,0.45)] ${className}`}
+    >
       <button
         type="button"
         onClick={open}
         disabled={loading}
         aria-label={`Mua ${product.name} và nhận hoàn tiền`}
-        className="relative block aspect-square w-full overflow-hidden bg-[var(--surface-secondary)]"
+        className="flex flex-1 flex-col text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
       >
-        {product.imageUrl ? (
-          <Image
-            src={product.imageUrl}
-            alt={product.name}
-            fill
-            sizes="(max-width: 640px) 45vw, (max-width: 1024px) 30vw, 220px"
-            className="object-cover transition duration-300 group-hover:scale-105"
-          />
-        ) : (
-          <span className="flex h-full w-full items-center justify-center text-[var(--muted)]">
-            <ImageIcon className="h-8 w-8" />
-          </span>
-        )}
-
-        {pct != null && pct > 0 && (
-          <Chip size="sm" color="success" variant="primary" className="absolute left-2 top-2 h-6 px-2 text-[10px] font-extrabold text-white">
-            Hoàn {formatPct(pct)}%
-          </Chip>
-        )}
-
-        <span className="absolute right-2 top-2 flex flex-col items-end gap-1">
-          {product.isBestSeller && (
-            <Chip size="sm" color="danger" variant="primary" className="h-6 px-2 text-[10px] font-bold text-white">
-              <FireIcon className="h-3 w-3" /> Bán chạy
-            </Chip>
+        <span className="relative block aspect-square w-full overflow-hidden bg-[#f6f7f6]">
+          {product.imageUrl ? (
+            <Image
+              src={product.imageUrl}
+              alt={product.name}
+              fill
+              sizes="(max-width: 640px) 45vw, (max-width: 1024px) 30vw, 220px"
+              className="object-cover transition duration-300 group-hover:scale-[1.03]"
+            />
+          ) : (
+            <span className="flex h-full w-full items-center justify-center text-[var(--muted)]">
+              <ImageIcon className="h-8 w-8" />
+            </span>
           )}
-          {product.isXtraCommission && (
-            <Chip size="sm" color="warning" variant="primary" className="h-6 px-2 text-[10px] font-bold text-white">
-              <BoltIcon className="h-3 w-3" /> Xtra
-            </Chip>
+
+          {hasPct && (
+            <span className="absolute left-2 top-2 rounded-full bg-white/95 px-2 py-0.5 text-[11px] font-extrabold text-[var(--accent)] shadow-sm backdrop-blur">
+              Hoàn {formatPct(pct)}
+            </span>
+          )}
+
+          {loading && (
+            <span className="absolute inset-0 flex items-center justify-center bg-black/40 text-xs font-bold text-white">
+              Đang mở Shopee…
+            </span>
           )}
         </span>
 
-        {loading && (
-          <span className="absolute inset-0 flex items-center justify-center bg-black/42 text-xs font-bold text-white">
-            Đang tạo link...
-          </span>
-        )}
-      </button>
+        <span className="flex flex-1 flex-col px-3 pb-3 pt-2.5">
+          {(product.shopName || tags.length > 0) && (
+            <span className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-[var(--muted)]">
+              {product.shopName && <span className="truncate">{product.shopName}</span>}
+              {tags.map((tag) => (
+                <span
+                  key={tag}
+                  className={`shrink-0 rounded px-1 py-px text-[10px] font-bold ${
+                    tag === "Xtra" ? "bg-[#fff4d6] text-[#a36b00]" : "bg-[#ffe9e6] text-[#c4342f]"
+                  }`}
+                >
+                  {tag}
+                </span>
+              ))}
+            </span>
+          )}
 
-      <Card.Content className="flex flex-1 flex-col gap-1.5 p-3">
-        <button type="button" onClick={open} className="text-left">
-          <h3 className="line-clamp-2 min-h-[2.35rem] text-[13px] font-semibold leading-[1.35rem] text-[var(--foreground)] transition group-hover:text-[var(--accent)]">
+          <span className="line-clamp-2 min-h-[2.5rem] text-[13px] font-semibold leading-5 text-[var(--foreground)]">
             {product.name}
-          </h3>
-        </button>
+          </span>
 
-        {product.shopName && <p className="truncate text-[11px] font-medium text-[var(--muted)]">{product.shopName}</p>}
-
-        <div className="mt-auto pt-1">
-          <p className="text-sm font-extrabold text-[var(--danger)]">
-            {product.priceValue != null ? formatVnd(product.priceValue) : product.priceText || "Xem giá"}
-          </p>
-          {amount != null && amount > 0 && <p className="mt-0.5 text-xs font-extrabold text-[var(--accent)]">Hoàn {formatVnd(amount)}</p>}
-        </div>
-
-        <Button type="button" onPress={open} isDisabled={loading} isPending={loading} size="sm" variant="tertiary" className="mt-2 h-9 rounded-full bg-[var(--accent-soft)] text-xs font-extrabold text-[var(--accent)]">
-          {isAuthenticated ? "Mua & nhận hoàn tiền" : "Đăng nhập để hoàn tiền"}
-        </Button>
-      </Card.Content>
-    </Card>
+          <span className="mt-auto flex items-end justify-between gap-2 pt-2.5">
+            <span className="min-w-0">
+              <span className="block text-sm font-extrabold leading-5 text-[var(--foreground)]">
+                {product.priceValue != null ? formatVnd(product.priceValue) : product.priceText || "Xem giá"}
+              </span>
+              <span className="block truncate text-xs font-bold leading-4 text-[var(--accent)]">
+                {hasAmount ? `Hoàn ${formatVnd(amount)}` : hasPct ? `Hoàn ${formatPct(pct)}` : "Có hoàn tiền"}
+              </span>
+            </span>
+            <span
+              aria-hidden
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)] transition group-hover:bg-[var(--accent)] group-hover:text-white"
+            >
+              <ArrowRightIcon className="h-3.5 w-3.5" />
+            </span>
+          </span>
+        </span>
+      </button>
+    </article>
   );
 }

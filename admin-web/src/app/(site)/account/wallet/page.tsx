@@ -3,25 +3,13 @@ import type { Metadata } from "next";
 import { appFetchSafe, getSessionUser } from "@/lib/appApi";
 import type { WalletSummary, WithdrawalRequest } from "@/lib/appTypes";
 import { formatDateTime, formatVnd, WITHDRAWAL_STATUS_LABELS } from "@/lib/format";
-import { SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
+import { EMPTY_WALLET } from "@/lib/wallet";
+import { PageHeading, SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
 import WithdrawForm from "@/components/account/WithdrawForm";
 import { WalletIcon } from "@/components/icons";
 import type { PillTone } from "@/components/account/ui";
 
-export const metadata: Metadata = { title: "Ví hoàn tiền | Rewally" };
-
-const EMPTY_WALLET: WalletSummary = {
-  paidOrders: 0,
-  paidAmount: 0,
-  unpaidOrders: 0,
-  unpaidAmount: 0,
-  pendingOrders: 0,
-  pendingAmount: 0,
-  paidThisMonth: 0,
-  availableAmount: 0,
-  minWithdrawAmount: 0,
-  pendingWithdrawal: null,
-};
+export const metadata: Metadata = { title: "Rút tiền | Rewally" };
 
 const STATUS_TONE: Record<string, PillTone> = {
   pending: "warning",
@@ -42,18 +30,15 @@ export default async function WalletPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-xl font-extrabold text-[var(--foreground)]">Thanh toán</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">Chọn ví và nhập số tiền muốn thanh toán</p>
-      </div>
+      <PageHeading title="Rút tiền" description="Nhập số tiền muốn rút về tài khoản ngân hàng đã thiết lập." />
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatTile label="Đã duyệt" value={formatVnd(wallet.availableAmount)} tone="accent" hint="Số dư khả dụng" />
-        <StatTile label="Chờ đối soát" value={formatVnd(wallet.pendingAmount)} hint={`${wallet.pendingOrders} đơn`} />
-        <StatTile label="Đã nhận" value={formatVnd(wallet.paidAmount)} hint={`${wallet.paidOrders} đơn`} />
+        <StatTile label="Số dư khả dụng" value={formatVnd(wallet.availableAmount)} tone="accent" hint="Có thể rút ngay" />
+        <StatTile label="Chờ xác nhận" value={formatVnd(wallet.pendingAmount)} hint={`${wallet.pendingOrders} đơn`} />
+        <StatTile label="Đã rút về ngân hàng" value={formatVnd(wallet.paidAmount)} hint={`${wallet.paidOrders} đơn`} />
       </div>
 
-      <SectionCard title="Tạo yêu cầu thanh toán">
+      <SectionCard title="Tạo yêu cầu rút tiền">
         <WithdrawForm wallet={wallet} user={user} />
       </SectionCard>
 
@@ -62,7 +47,7 @@ export default async function WalletPage() {
           <EmptyState
             icon={WalletIcon}
             title="Chưa có yêu cầu rút tiền nào."
-            description="Khi số dư khả dụng đạt mức tối thiểu, bạn có thể tạo yêu cầu thanh toán ở trên."
+            description="Khi số dư khả dụng đạt mức tối thiểu, bạn có thể tạo yêu cầu rút tiền ở trên."
           />
         ) : (
           <ul className="divide-y divide-[var(--border)]">
@@ -88,8 +73,8 @@ export default async function WalletPage() {
       </SectionCard>
 
       <p className="text-xs leading-relaxed text-[var(--muted)]">
-        Tiền hoàn chỉ chuyển sang trạng thái &ldquo;Đã duyệt&rdquo; sau khi Shopee đối soát xong đơn hàng. Yêu cầu
-        thanh toán được admin duyệt và chuyển khoản thủ công.
+        Tiền hoàn chỉ được cộng vào số dư khả dụng sau khi Shopee đối soát xong đơn hàng. Yêu cầu rút tiền được
+        Rewally kiểm tra và chuyển khoản thủ công về tài khoản ngân hàng của bạn.
       </p>
     </div>
   );

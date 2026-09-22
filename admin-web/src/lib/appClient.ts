@@ -1,9 +1,11 @@
 "use client";
 
+import { openAuthDialog } from "@/lib/authDialog";
+
 // Client-side counterpart of lib/appApi.ts: talks to the local /api/user/*
 // proxy, which attaches the httpOnly user_token. A 401 means the session
-// expired - send the visitor to /login (NOT /admin/login, which is what
-// lib/clientApi.ts does for the dashboard).
+// expired - open the sign-in dialog over the current page (NOT a redirect to
+// /admin/login, which is what lib/clientApi.ts does for the dashboard).
 export class AppRequestError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -24,8 +26,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (res.status === 401) {
-    const next = encodeURIComponent(window.location.pathname + window.location.search);
-    window.location.href = `/login?next=${next}`;
+    openAuthDialog({
+      title: "Phiên đăng nhập đã hết hạn",
+      description: "Đăng nhập lại để tiếp tục, bạn vẫn ở nguyên trang này.",
+    });
     throw new AppRequestError(401, "Phiên đăng nhập đã hết hạn.");
   }
 

@@ -18,14 +18,15 @@ const COLUMNS = [
     links: [
       { href: "/login", label: "Đăng nhập" },
       { href: "/register", label: "Đăng ký" },
-      { href: "/account/wallet", label: "Ví hoàn tiền" },
-      { href: "/account/orders", label: "Đơn hàng" },
+      { href: "/account/wallet", label: "Rút tiền" },
+      { href: "/account/orders", label: "Tiền hoàn của tôi" },
       { href: "/account/referral", label: "Giới thiệu bạn bè" },
     ],
   },
   {
     title: "Hỗ trợ",
     links: [
+      { href: "/support", label: "Hỗ trợ & Hỏi đáp" },
       { href: "/guide", label: "Hướng dẫn sử dụng" },
       { href: "/app/legal/privacy", label: "Chính sách quyền riêng tư", external: true },
       { href: "/app/legal/data-deletion", label: "Yêu cầu xóa dữ liệu", external: true },

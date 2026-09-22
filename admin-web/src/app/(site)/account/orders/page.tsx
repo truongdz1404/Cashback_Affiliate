@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import { appFetchSafe } from "@/lib/appApi";
 import type { Order } from "@/lib/appTypes";
 import { formatVnd } from "@/lib/format";
-import { StatTile } from "@/components/account/ui";
+import { PageHeading, StatTile } from "@/components/account/ui";
 import OrdersList from "@/components/account/OrdersList";
 
-export const metadata: Metadata = { title: "Đơn hàng | Rewally" };
+export const metadata: Metadata = { title: "Tiền hoàn của tôi | Rewally" };
 
 // 200 is the backend's own cap on /app/orders (see server.js). Pulling one
 // page of that size lets the list filter and search without a round trip per
@@ -20,12 +20,10 @@ export default async function OrdersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-xl font-extrabold text-[var(--foreground)]">Đơn hàng</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Đơn mua qua Rewally được ghi nhận sau khoảng 6 giờ.
-        </p>
-      </div>
+      <PageHeading
+        title="Tiền hoàn của tôi"
+        description="Đơn mua qua Rewally được ghi nhận sau khoảng 6 giờ, kèm số tiền hoàn của từng đơn."
+      />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <StatTile label="Tổng đơn" value={String(orders.length)} />

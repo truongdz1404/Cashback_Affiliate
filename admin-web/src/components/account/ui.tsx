@@ -3,6 +3,17 @@
 // need them can import them just the same.
 import Link from "next/link";
 
+// Title block above each account page's content. Hidden on phones: the
+// sidebar's compact header already names the page there.
+export function PageHeading({ title, description }: { title: string; description?: string }) {
+  return (
+    <div className="hidden lg:block">
+      <h2 className="text-xl font-extrabold text-[var(--foreground)]">{title}</h2>
+      {description && <p className="mt-1 text-sm text-[var(--muted)]">{description}</p>}
+    </div>
+  );
+}
+
 export function SectionCard({
   title,
   action,

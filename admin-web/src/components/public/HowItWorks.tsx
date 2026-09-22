@@ -1,63 +1,94 @@
-import Link from "next/link";
-import { Card } from "@heroui/react";
-import { BagIcon, ClockIcon, ReceiptIcon, WalletIcon } from "@/components/icons";
+"use client";
 
+import Image from "next/image";
+import { useState } from "react";
+
+// Illustrations are 880x700 (the 440/350 frame the reference layout uses).
+// TODO: these are temporary reference images; replace with Rewally-owned
+// artwork before the public launch.
 const STEPS = [
   {
-    icon: BagIcon,
-    title: "Bấm vào sản phẩm",
-    description: "Rewally chuyển bạn sang Shopee. Hãy đặt hàng ngay trong phiên vừa mở để đơn được ghi nhận hoàn tiền.",
+    title: "Tìm kiếm sản phẩm hoặc cửa hàng yêu thích",
+    description: "Tìm deal, ngành hàng hoặc sản phẩm đang có hoàn tiền trên Rewally.",
+    image: "/marketing/how-it-works-step1.png",
+    alt: "Minh họa thanh tìm kiếm cửa hàng yêu thích",
   },
   {
-    icon: ClockIcon,
-    title: "Sau khoảng 6 giờ",
-    description: "Đơn hàng được cập nhật vào mục Đơn hàng, kèm số tiền hoàn dự kiến.",
+    title: "Mua sắm trên Shopee như mọi khi",
+    description: "Bấm qua Rewally rồi mua hàng như bình thường để đơn được ghi nhận.",
+    image: "/marketing/how-it-works-step2.png",
+    alt: "Minh họa các thẻ hoàn tiền và nút đặt ngay",
   },
   {
-    icon: ReceiptIcon,
-    title: "Khi đơn giao thành công",
-    description: "Đơn chuyển sang trạng thái chờ đối soát với Shopee.",
-  },
-  {
-    icon: WalletIcon,
-    title: "7 ngày sau đó",
-    description: "Tiền hoàn được cộng vào ví của bạn và có thể rút về tài khoản ngân hàng.",
+    title: "Hãy yên tâm tận hưởng trong khi Rewally ghi nhận hoàn tiền",
+    description: "Tiền hoàn được cộng vào ví sau khi đơn hoàn tất và đối soát.",
+    image: "/marketing/how-it-works-step3.png",
+    alt: "Minh họa số dư có thể rút và nút rút tiền",
   },
 ];
 
-export default function HowItWorks() {
+export default function HowItWorks({ className = "" }: { className?: string }) {
+  const [active, setActive] = useState(0);
+  const current = STEPS[active];
+
   return (
-    <section className="mt-8 rounded-[28px] bg-[var(--surface-secondary)] px-5 py-9 sm:px-10">
-      <div className="text-center">
-        <h2 className="text-2xl font-extrabold text-[var(--foreground)]">Mua sắm hoàn tiền thế nào?</h2>
-        <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--muted)]">
-          Bốn bước gọn, không cần mã giảm giá, không cần nhập thêm thông tin ở Shopee.
-        </p>
-      </div>
+    <section className={`py-14 sm:py-16 ${className}`}>
+      <div className="grid min-h-[430px] items-center gap-10 lg:grid-cols-[0.98fr_1fr] lg:gap-16">
+        <div className="relative mx-auto aspect-[440/350] w-full max-w-[440px]">
+          <Image
+            key={current.image}
+            src={current.image}
+            alt={current.alt}
+            fill
+            sizes="(max-width: 1024px) 100vw, 440px"
+            className="object-contain transition-opacity duration-500"
+            priority={active === 0}
+          />
+        </div>
 
-      <ol className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {STEPS.map(({ icon: Icon, title, description }, index) => (
-          <li key={title}>
-            <Card className="h-full rounded-2xl border border-[var(--border)] shadow-none">
-              <Card.Content className="p-5">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
-                    <Icon className="h-5 w-5" />
+        <div className="lg:pl-4">
+          <h2 className="text-2xl font-extrabold leading-tight text-[var(--foreground)] sm:text-3xl">Cách hoạt động</h2>
+
+          <div className="mt-7">
+            {STEPS.map((step, index) => {
+              const isActive = active === index;
+
+              return (
+                <button
+                  key={step.title}
+                  type="button"
+                  onClick={() => setActive(index)}
+                  aria-current={isActive ? "step" : undefined}
+                  className="group grid w-full grid-cols-[2.75rem_1fr] gap-4 text-left"
+                >
+                  <span className="flex flex-col items-center">
+                    <span
+                      className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-extrabold transition ${
+                        isActive ? "bg-black text-white" : "bg-[#f1f3f5] text-[#8c95a1] group-hover:bg-[var(--accent-soft)] group-hover:text-[var(--accent)]"
+                      }`}
+                    >
+                      {index + 1}
+                    </span>
+                    {index < STEPS.length - 1 && <span className="h-12 w-px bg-[#dde2e7]" />}
                   </span>
-                  <span className="text-xs font-extrabold uppercase text-[var(--muted)]">Bước {index + 1}</span>
-                </div>
-                <h3 className="mt-3 text-sm font-extrabold text-[var(--foreground)]">{title}</h3>
-                <p className="mt-1.5 text-sm leading-6 text-[var(--muted)]">{description}</p>
-              </Card.Content>
-            </Card>
-          </li>
-        ))}
-      </ol>
 
-      <div className="mt-7 text-center">
-        <Link href="/guide" className="text-sm font-extrabold text-[var(--accent)] hover:underline">
-          Xem hướng dẫn chi tiết và câu hỏi thường gặp
-        </Link>
+                  <span className="pb-8 pt-2">
+                    <span
+                      className={`block text-sm font-extrabold transition sm:text-base ${
+                        isActive ? "text-[var(--foreground)]" : "text-[#a9b0bc] group-hover:text-[var(--foreground)]"
+                      }`}
+                    >
+                      {step.title}
+                    </span>
+                    <span className={`mt-1 block max-w-md text-sm leading-6 ${isActive ? "text-[var(--muted)]" : "sr-only"}`}>
+                      {step.description}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </section>
   );

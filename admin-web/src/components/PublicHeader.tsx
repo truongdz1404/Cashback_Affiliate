@@ -1,7 +1,9 @@
 import { Suspense } from "react";
 import { appFetchSafe, getSessionUser } from "@/lib/appApi";
-import type { ShoppingCategory } from "@/lib/appTypes";
-import PublicHeaderClient from "@/components/PublicHeaderClient";
+import type { ShoppingCategory, WalletSummary } from "@/lib/appTypes";
+import { EMPTY_WALLET, walletTotals } from "@/lib/wallet";
+import { accountFacts } from "@/components/account/menu";
+import PublicHeaderClient, { type HeaderUser } from "@/components/PublicHeaderClient";
 
 // Only categories with a meaningful number of products make it into the nav:
 // the `category` column is backfilled gradually by the crawler, so a
@@ -15,10 +17,23 @@ export default async function PublicHeader() {
     appFetchSafe<ShoppingCategory[]>(`/shopping-categories?minCount=${NAV_CATEGORY_MIN_COUNT}`, []),
   ]);
 
+  // The balance pill in the header needs the wallet, but only for members.
+  const wallet = user ? await appFetchSafe<WalletSummary>("/wallet", EMPTY_WALLET) : EMPTY_WALLET;
+
+  const headerUser: HeaderUser = user
+    ? {
+        fullName: user.fullName,
+        phone: user.phone,
+        email: user.email,
+        totals: walletTotals(wallet),
+        facts: accountFacts(user, wallet),
+      }
+    : null;
+
   return (
     <Suspense fallback={<div className="h-[69px] border-b border-[var(--border)] bg-[var(--surface)]" />}>
       <PublicHeaderClient
-        user={user ? { fullName: user.fullName, phone: user.phone, email: user.email } : null}
+        user={headerUser}
         categories={categories.slice(0, NAV_CATEGORY_LIMIT).map((c) => c.category)}
       />
     </Suspense>

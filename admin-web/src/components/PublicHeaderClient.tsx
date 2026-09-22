@@ -3,12 +3,18 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { Button, Chip } from "@heroui/react";
+import type { WalletTotals } from "@/lib/wallet";
+import { formatVnd } from "@/lib/format";
+import BalanceCard from "@/components/account/BalanceCard";
+import { accountMenu, isMenuActive, type AccountFacts, type AccountMenuItem } from "@/components/account/menu";
 import {
   ArrowRightIcon,
   BagIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   CloseIcon,
   GiftIcon,
   HomeIcon,
@@ -17,31 +23,49 @@ import {
   LogoutIcon,
   MenuIcon,
   SearchIcon,
-  UsersIcon,
-  WalletIcon,
 } from "@/components/icons";
 
-export type HeaderUser = { fullName: string | null; phone: string | null; email: string | null } | null;
+export type HeaderUser = {
+  fullName: string | null;
+  phone: string | null;
+  email: string | null;
+  totals: WalletTotals;
+  facts: AccountFacts;
+} | null;
 
+// "Tạo link" is the money-making action, so it sits in the primary nav for
+// guests and members alike (highlighted, see `emphasis`) rather than being
+// tucked away under the account menu.
 const NAV = [
   { href: "/", label: "Trang chủ", icon: HomeIcon },
   { href: "/products", label: "Mua sắm", icon: BagIcon },
+  { href: "/link", label: "Tạo link", icon: LinkIcon, emphasis: true },
   { href: "/campaigns", label: "Ưu đãi", icon: GiftIcon },
   { href: "/guide", label: "Cách hoạt động", icon: InfoIcon },
 ];
 
-const ACCOUNT_MENU = [
-  { href: "/account", label: "Tổng quan", icon: HomeIcon },
-  { href: "/account/wallet", label: "Ví hoàn tiền", icon: WalletIcon },
-  { href: "/account/orders", label: "Đơn hàng", icon: BagIcon },
-  { href: "/account/links", label: "Tạo link", icon: LinkIcon },
-  { href: "/account/referral", label: "Giới thiệu bạn bè", icon: UsersIcon },
-  { href: "/account/profile", label: "Tài khoản", icon: UsersIcon },
-];
+const BADGE_DOT = {
+  danger: "bg-[var(--danger)]",
+  warning: "bg-[var(--warning)]",
+  accent: "bg-[var(--accent)]",
+} as const;
 
 function initialOf(user: NonNullable<HeaderUser>) {
   const source = user.fullName || user.phone || user.email || "R";
   return source.trim().charAt(0).toUpperCase();
+}
+
+// The dropdown mirrors ShopBack's grouping: promotions, then the account
+// pages, then "how it works", then help + sign out.
+function menuGroups(items: AccountMenuItem[]): AccountMenuItem[][] {
+  const byHref = new Map(items.map((item) => [item.href, item]));
+  const pick = (...hrefs: string[]) => hrefs.map((href) => byHref.get(href)).filter((i): i is AccountMenuItem => Boolean(i));
+  return [
+    [{ href: "/campaigns", label: "Ưu đãi & sự kiện", icon: GiftIcon }],
+    pick("/account", "/account/profile", "/account/bank", "/account/password", "/account/wallet", "/account/orders", "/account/referral"),
+    [{ href: "/guide", label: "Cách Rewally hoạt động", icon: InfoIcon }],
+    pick("/support"),
+  ];
 }
 
 export default function PublicHeaderClient({ user, categories }: { user: HeaderUser; categories: string[] }) {
@@ -54,6 +78,10 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
 
+  const accountItems = useMemo(() => (user ? accountMenu(user.facts) : []), [user]);
+  const groups = useMemo(() => menuGroups(accountItems), [accountItems]);
+  const attention = accountItems.filter((item) => item.badge && item.badge.tone !== "accent").length;
+
   useEffect(() => {
     setQuery(searchParams.get("search") ?? "");
   }, [searchParams]);
@@ -64,13 +92,33 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
   }, [pathname]);
 
   useEffect(() => {
-    if (!accountOpen) return;
+    if (!accountOpen && !menuOpen) return;
     function onClick(e: MouseEvent) {
       if (accountRef.current && !accountRef.current.contains(e.target as Node)) setAccountOpen(false);
     }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setAccountOpen(false);
+        setMenuOpen(false);
+      }
+    }
     document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, [accountOpen]);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [accountOpen, menuOpen]);
+
+  // The drawer covers the page; stop the page scrolling underneath it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [menuOpen]);
 
   function submitSearch(e: FormEvent) {
     e.preventDefault();
@@ -106,16 +154,19 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
         </Link>
 
         <nav className="hidden items-center gap-1 lg:flex">
-          {NAV.map(({ href, label }) => (
+          {NAV.map(({ href, label, icon: Icon, emphasis }) => (
             <Link
               key={href}
               href={href}
-              className={`rounded-full px-3 py-1.5 text-sm font-bold transition ${
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-bold transition ${
                 isActive(href)
                   ? "bg-[var(--accent-soft)] text-[var(--accent)]"
-                  : "text-[var(--foreground)] hover:bg-[var(--surface-secondary)]"
+                  : emphasis
+                    ? "text-[var(--accent-dark)] ring-1 ring-[var(--accent)]/45 hover:bg-[var(--accent-soft)]"
+                    : "text-[var(--foreground)] hover:bg-[var(--surface-secondary)]"
               }`}
             >
+              {emphasis && <Icon className="h-3.5 w-3.5" />}
               {label}
             </Link>
           ))}
@@ -127,13 +178,15 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Tìm sản phẩm hoàn tiền..."
+            placeholder="Tìm sản phẩm..."
             aria-label="Tìm sản phẩm hoàn tiền"
-            className="h-10 w-full rounded-full border border-[var(--border)] bg-[var(--background)] pl-10 pr-20 text-sm font-medium text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:bg-white"
+            className="h-10 w-full rounded-full border border-[var(--border)] bg-[var(--background)] pl-10 pr-3 text-sm font-medium text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:bg-white sm:pr-20"
           />
+          {/* On phones the field is only a few characters wide, so the
+              keyboard's search key submits instead of a visible button. */}
           <button
             type="submit"
-            className="absolute right-1 top-1/2 h-8 -translate-y-1/2 rounded-full bg-[var(--accent)] px-3 text-xs font-extrabold text-white transition hover:brightness-105"
+            className="absolute right-1 top-1/2 hidden h-8 -translate-y-1/2 rounded-full bg-[var(--accent)] px-3 text-xs font-extrabold text-white transition hover:brightness-105 sm:block"
           >
             Tìm
           </button>
@@ -141,43 +194,83 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
 
         {user ? (
           <div ref={accountRef} className="relative shrink-0">
-            <Button
+            {/* Trigger: avatar + available balance, like ShopBack's "0đ ▾" pill. */}
+            <button
               type="button"
-              onPress={() => setAccountOpen((v) => !v)}
+              onClick={() => setAccountOpen((v) => !v)}
               aria-expanded={accountOpen}
-              variant="outline"
-              size="sm"
-              className="h-10 rounded-full px-1.5 pr-2.5"
+              aria-haspopup="menu"
+              aria-label="Tài khoản và số dư"
+              className={`relative inline-flex h-10 items-center gap-2 rounded-full border pl-1 pr-2.5 text-sm font-extrabold text-[var(--foreground)] transition ${
+                accountOpen
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                  : "border-[var(--border)] bg-white hover:border-[var(--accent)]"
+              }`}
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-extrabold text-white">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-extrabold text-white">
                 {initialOf(user)}
               </span>
-              <span className="hidden max-w-[8rem] truncate text-sm font-bold sm:inline">
-                {user.fullName || user.phone || "Tài khoản"}
-              </span>
-              <ChevronDownIcon className="h-4 w-4 text-[var(--muted)]" />
-            </Button>
+              <span className="tabular-nums">{formatVnd(user.totals.available)}</span>
+              <ChevronDownIcon className={`h-4 w-4 text-[var(--muted)] transition ${accountOpen ? "rotate-180" : ""}`} />
+              {attention > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[var(--danger)] ring-2 ring-white" />
+              )}
+            </button>
 
             {accountOpen && (
-              <div className="absolute right-0 mt-2 w-60 overflow-hidden rounded-2xl border border-[var(--border)] bg-white py-1.5 shadow-[0_22px_56px_-30px_rgba(20,49,34,0.7)]">
-                {ACCOUNT_MENU.map(({ href, label, icon: Icon }) => (
-                  <Link
-                    key={href}
-                    href={href}
-                    className="flex items-center gap-3 px-4 py-2.5 text-sm font-semibold text-[var(--foreground)] transition hover:bg-[var(--surface-secondary)]"
+              <div
+                role="menu"
+                className="absolute right-0 mt-3 w-[min(20rem,calc(100vw-2rem))] rounded-[22px] border border-[var(--border)] bg-white p-3 shadow-[0_22px_56px_-30px_rgba(20,49,34,0.7)]"
+              >
+                {/* Caret */}
+                <span className="absolute -top-1.5 right-6 h-3 w-3 rotate-45 border-l border-t border-[var(--border)] bg-white" />
+
+                <Link href="/account" className="flex items-center gap-3 rounded-2xl px-2 py-1.5 transition hover:bg-[var(--background)]">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-sm font-extrabold text-[var(--accent-dark)]">
+                    {initialOf(user)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-extrabold text-[var(--foreground)]">
+                      {user.fullName || user.phone || "Tài khoản Rewally"}
+                    </span>
+                    <span className="block truncate text-xs text-[var(--muted)]">{user.phone ?? user.email ?? "Xem tài khoản"}</span>
+                  </span>
+                  <ChevronRightIcon className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+                </Link>
+
+                <div className="mt-2">
+                  <BalanceCard totals={user.totals} variant="compact" />
+                </div>
+
+                <div className="mt-2 max-h-[min(24rem,calc(100vh-22rem))] overflow-y-auto">
+                  {groups.map((group, index) => (
+                    <div key={index} className={index > 0 ? "mt-1 border-t border-[var(--border)] pt-1" : ""}>
+                      {group.map(({ href, label, short, icon: Icon, badge }) => (
+                        <Link
+                          key={href}
+                          href={href}
+                          role="menuitem"
+                          className={`flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-semibold transition hover:bg-[var(--background)] ${
+                            isMenuActive(pathname, href) ? "text-[var(--accent-dark)]" : "text-[var(--foreground)]"
+                          }`}
+                        >
+                          <Icon className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+                          <span className="min-w-0 flex-1 truncate">{href.startsWith("/account/") ? label : short ?? label}</span>
+                          {badge && <span className={`h-2 w-2 shrink-0 rounded-full ${BADGE_DOT[badge.tone]}`} title={badge.label} />}
+                        </Link>
+                      ))}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={logout}
+                    className="mt-1 flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/6"
                   >
-                    <Icon className="h-4 w-4 text-[var(--muted)]" />
-                    {label}
-                  </Link>
-                ))}
-                <button
-                  type="button"
-                  onClick={logout}
-                  className="mt-1 flex w-full items-center gap-3 border-t border-[var(--border)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:bg-[var(--surface-secondary)]"
-                >
-                  <LogoutIcon className="h-4 w-4" />
-                  Đăng xuất
-                </button>
+                    <LogoutIcon className="h-4 w-4" />
+                    Đăng xuất
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -211,10 +304,13 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
         </div>
       )}
 
-      {menuOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+      {/* Portalled: the header's backdrop-blur makes it the containing block
+          for fixed descendants, which would clip the drawer to header height. */}
+      {menuOpen &&
+        createPortal(
+        <div className="fixed inset-0 z-[60] lg:hidden">
           <div className="absolute inset-0 bg-black/40" onClick={() => setMenuOpen(false)} />
-          <div className="absolute left-0 top-0 flex h-full w-72 flex-col bg-white p-5 shadow-2xl">
+          <div className="absolute left-0 top-0 flex h-full w-[min(20rem,85vw)] flex-col overflow-y-auto bg-white p-5 shadow-2xl">
             <div className="flex items-center justify-between">
               <Link href="/" className="flex items-center gap-2">
                 <Image src="/logo.png" alt="Rewally" width={32} height={32} className="rounded-lg" />
@@ -225,13 +321,37 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
               </Button>
             </div>
 
+            {user && (
+              <Link href="/account" className="mt-5 flex items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-sm font-extrabold text-white">
+                  {initialOf(user)}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-extrabold text-[var(--foreground)]">
+                    {user.fullName || user.phone || "Tài khoản Rewally"}
+                  </span>
+                  <span className="block truncate text-xs text-[var(--muted)]">{user.phone ?? user.email ?? ""}</span>
+                </span>
+                <ChevronRightIcon className="h-4 w-4 text-[var(--muted)]" />
+              </Link>
+            )}
+            {user && (
+              <div className="mt-3">
+                <BalanceCard totals={user.totals} variant="compact" />
+              </div>
+            )}
+
             <div className="mt-5 flex flex-col gap-1">
-              {NAV.map(({ href, label, icon: Icon }) => (
+              {NAV.map(({ href, label, icon: Icon, emphasis }) => (
                 <Link
                   key={href}
                   href={href}
                   className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold ${
-                    isActive(href) ? "bg-[var(--accent-soft)] text-[var(--accent)]" : "text-[var(--foreground)]"
+                    isActive(href)
+                      ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                      : emphasis
+                        ? "text-[var(--accent-dark)] ring-1 ring-[var(--accent)]/45"
+                        : "text-[var(--foreground)]"
                   }`}
                 >
                   <Icon className="h-4.5 w-4.5" />
@@ -243,10 +363,17 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
             {user ? (
               <div className="mt-5 border-t border-[var(--border)] pt-4">
                 <p className="px-3 pb-2 text-xs font-bold uppercase text-[var(--muted)]">Tài khoản</p>
-                {ACCOUNT_MENU.map(({ href, label, icon: Icon }) => (
-                  <Link key={href} href={href} className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-[var(--foreground)]">
-                    <Icon className="h-4.5 w-4.5 text-[var(--muted)]" />
-                    {label}
+                {accountItems.map(({ href, label, icon: Icon, badge }) => (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold ${
+                      isMenuActive(pathname, href) ? "bg-[var(--accent-soft)] text-[var(--accent-dark)]" : "text-[var(--foreground)]"
+                    }`}
+                  >
+                    <Icon className="h-4.5 w-4.5 shrink-0 text-[var(--muted)]" />
+                    <span className="min-w-0 flex-1">{label}</span>
+                    {badge && <span className={`h-2 w-2 shrink-0 rounded-full ${BADGE_DOT[badge.tone]}`} title={badge.label} />}
                   </Link>
                 ))}
                 <button type="button" onClick={logout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-[var(--danger)]">
@@ -261,6 +388,10 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
                 </Link>
                 <Link href="/register" className="rounded-full bg-[var(--foreground)] px-4 py-2.5 text-center text-sm font-extrabold text-white">
                   Đăng ký miễn phí
+                </Link>
+                <Link href="/support" className="mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-[var(--foreground)]">
+                  <InfoIcon className="h-4.5 w-4.5 text-[var(--muted)]" />
+                  Hỗ trợ &amp; Hỏi đáp
                 </Link>
               </div>
             )}
@@ -282,7 +413,8 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </header>
   );

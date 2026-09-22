@@ -10,7 +10,8 @@ import ProductRail from "@/components/public/ProductRail";
 import CampaignCard from "@/components/public/CampaignCard";
 import HowItWorks from "@/components/public/HowItWorks";
 import MarketingHome from "@/components/public/MarketingHome";
-import { BoltIcon, FireIcon, GiftIcon, StarIcon } from "@/components/icons";
+import LinkTool from "@/components/public/LinkTool";
+import { ArrowRightIcon, BoltIcon, FireIcon, GiftIcon, StarIcon } from "@/components/icons";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,23 @@ export default async function HomePage() {
     <main className="mx-auto max-w-6xl px-4 pb-14 sm:px-6">
       <section className="pt-5">
         <BannerCarousel banners={slides} />
+      </section>
+
+      {/* The paste-a-link tool is the main revenue action, so it sits right under the banner. */}
+      <section className="mt-5 rounded-[26px] bg-[var(--accent-soft)] p-4 ring-1 ring-[var(--accent)]/25 sm:p-6">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-extrabold text-[var(--foreground)] sm:text-xl">Dán link Shopee, nhận link hoàn tiền</h2>
+            <p className="mt-0.5 text-sm text-[var(--muted)]">
+              Mua bất kỳ sản phẩm nào trên Shopee và vẫn được hoàn tiền, không cần tìm trong danh sách.
+            </p>
+          </div>
+          <Link href="/link" className="inline-flex items-center gap-1 text-sm font-extrabold text-[var(--accent-dark)] hover:underline">
+            Xem hướng dẫn & link gần đây
+            <ArrowRightIcon className="h-4 w-4" />
+          </Link>
+        </div>
+        <LinkTool isAuthenticated variant="hero" />
       </section>
 
       {categories.length > 0 && (

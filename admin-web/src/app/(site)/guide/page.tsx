@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Metadata } from "next";
+import { FAQ_GROUPS } from "@/lib/faq";
 import HowItWorks from "@/components/public/HowItWorks";
 import { BagIcon, BoltIcon, CheckIcon, ChevronDownIcon, LinkIcon, ReceiptIcon } from "@/components/icons";
 
@@ -39,30 +40,8 @@ const STEPS = [
   },
 ];
 
-const FAQS = [
-  {
-    question: "Làm thế nào để biết đơn hàng đã lên?",
-    answer: "Đơn hàng thường xuất hiện sau khi sàn xác nhận giao dịch hợp lệ qua link hoàn tiền.",
-  },
-  {
-    question: "Khi nào tôi nhận được ưu đãi?",
-    answer: "Tiền hoàn được cộng vào ví sau khi đơn hoàn tất và qua bước đối soát.",
-  },
-  {
-    question: "Tôi có thể tạo link ở sàn nào?",
-    answer: "Hiện tại Shopee đã sẵn sàng. Các nền tảng khác sẽ được mở dần trong các bản cập nhật.",
-  },
-  {
-    question: "Vì sao tôi phải bấm vào sản phẩm trên Rewally thay vì mở Shopee trực tiếp?",
-    answer:
-      "Rewally tạo một liên kết riêng gắn mã theo dõi của bạn. Nếu bạn mở Shopee bằng đường khác, đơn hàng sẽ không được ghi nhận và không có tiền hoàn.",
-  },
-  {
-    question: "Tôi rút tiền về đâu?",
-    answer:
-      "Vào Ví hoàn tiền, thêm tài khoản ngân hàng rồi tạo yêu cầu thanh toán khi số dư khả dụng đạt mức tối thiểu. Mỗi lần chỉ có một yêu cầu đang chờ duyệt.",
-  },
-];
+// The guide only shows the most common questions; /support has the full list.
+const FAQS = FAQ_GROUPS.flatMap((group) => group.items).slice(0, 5);
 
 export default function GuidePage() {
   return (
@@ -104,7 +83,12 @@ export default function GuidePage() {
       <HowItWorks />
 
       <section className="mt-10">
-        <h2 className="text-xl font-extrabold text-[var(--foreground)]">Câu hỏi thường gặp</h2>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="text-xl font-extrabold text-[var(--foreground)]">Câu hỏi thường gặp</h2>
+          <Link href="/support" className="text-sm font-bold text-[var(--accent-dark)] underline-offset-4 hover:underline">
+            Xem toàn bộ Hỗ trợ &amp; Hỏi đáp
+          </Link>
+        </div>
         <div className="mt-4 space-y-2.5">
           {FAQS.map((faq, index) => (
             // <details> keeps the accordion working without any client JS.

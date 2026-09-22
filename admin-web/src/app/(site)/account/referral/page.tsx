@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { appFetchSafe } from "@/lib/appApi";
 import type { ReferralInvitee, ReferralView } from "@/lib/appTypes";
 import { formatDate, formatVnd, maskPhone } from "@/lib/format";
-import { SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
+import { PageHeading, SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
 import type { PillTone } from "@/components/account/ui";
 import ReferralShare from "@/components/account/ReferralShare";
 import { UsersIcon } from "@/components/icons";
@@ -26,12 +26,10 @@ export default async function ReferralPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-xl font-extrabold text-[var(--foreground)]">Giới thiệu bạn bè</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Bạn bè đăng ký bằng mã của bạn và hoàn tất đơn đầu tiên, cả hai cùng nhận thưởng.
-        </p>
-      </div>
+      <PageHeading
+        title="Giới thiệu bạn bè & nhận thưởng"
+        description="Bạn bè đăng ký bằng mã của bạn và hoàn tất đơn đầu tiên, cả hai cùng nhận thưởng."
+      />
 
       <SectionCard>
         <ReferralShare code={referral?.referralCode ?? "------"} />

@@ -1,6 +1,6 @@
-import Link from "next/link";
 import type { Campaign } from "@/lib/appTypes";
 import { formatDate, formatVnd } from "@/lib/format";
+import { AuthDialogTrigger } from "@/components/public/AuthDialog";
 import { CheckIcon, GiftIcon } from "@/components/icons";
 
 // Mirrors the mobile app's campaign card (tiers, progress, unlocked rewards).
@@ -71,9 +71,13 @@ export default function CampaignCard({
         </>
       ) : (
         <p className="mt-5 rounded-xl bg-[var(--accent-soft)] px-4 py-3 text-xs font-semibold text-[var(--accent)]">
-          <Link href="/login" className="underline">
+          <AuthDialogTrigger
+            className="underline"
+            title="Đăng nhập để theo dõi sự kiện"
+            description={`Tiến độ và mốc thưởng của bạn trong “${campaign.title}” sẽ hiển thị sau khi đăng nhập.`}
+          >
             Đăng nhập
-          </Link>{" "}
+          </AuthDialogTrigger>{" "}
           để theo dõi tiến độ của bạn trong sự kiện này.
         </p>
       )}

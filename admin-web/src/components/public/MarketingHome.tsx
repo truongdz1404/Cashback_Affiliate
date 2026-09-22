@@ -5,6 +5,8 @@ import { Card, Chip } from "@heroui/react";
 import ProductRail from "@/components/public/ProductRail";
 import CampaignCard from "@/components/public/CampaignCard";
 import PlaceholderImage from "@/components/public/PlaceholderImage";
+import HowItWorks from "@/components/public/HowItWorks";
+import LinkTool from "@/components/public/LinkTool";
 import { PLAY_STORE_URL } from "@/lib/site";
 import { formatPct, formatVnd } from "@/lib/format";
 import type { Campaign, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
@@ -114,21 +116,15 @@ export default function MarketingHome({
             </div>
           </div>
 
-          <div className="relative mx-auto h-[340px] w-full max-w-[520px] lg:h-[390px]">
-            <div className="absolute left-3 top-6 rotate-[-7deg] rounded-[22px] bg-white p-3 shadow-[0_24px_60px_-28px_rgba(20,49,34,0.65)] sm:left-8">
-              <HeroMiniCard title="Mua sắm" subtitle="Hoàn đến 12%" icon={BagIcon} tone="green" />
-            </div>
-            <div className="absolute right-2 top-2 rotate-[8deg] rounded-[22px] bg-white p-3 shadow-[0_24px_60px_-28px_rgba(20,49,34,0.65)] sm:right-10">
-              <HeroMiniCard title="Săn deal" subtitle="Ưu đãi mỗi ngày" icon={GiftIcon} tone="warm" />
-            </div>
-            <div className="absolute inset-x-8 bottom-4 rounded-[28px] bg-white p-4 text-[var(--foreground)] shadow-[0_28px_70px_-30px_rgba(20,49,34,0.75)] sm:inset-x-16">
-              <div className="relative mx-auto flex aspect-[4/3] max-w-[300px] items-center justify-center overflow-hidden rounded-2xl bg-[var(--accent-soft)]">
-                <Image src="/mascot.png" alt="" width={220} height={220} priority className="w-44 sm:w-52" />
-                <div className="absolute bottom-4 left-4 rounded-full bg-white px-3 py-1 text-xs font-extrabold text-[var(--accent)] shadow">
-                  + Hoàn tiền
-                </div>
-              </div>
-            </div>
+          <div className="relative mx-auto aspect-[16/9] w-full max-w-[620px] overflow-hidden rounded-[30px] shadow-[0_28px_76px_-36px_rgba(20,49,34,0.7)]">
+            <Image
+              src="/marketing/cashback-hero.png"
+              alt="Minh họa hoàn tiền Rewally với ví, đồng xu và các danh mục mua sắm"
+              fill
+              priority
+              sizes="(max-width: 1024px) 100vw, 620px"
+              className="object-cover object-center"
+            />
           </div>
         </div>
       </section>
@@ -154,6 +150,25 @@ export default function MarketingHome({
       )}
 
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        {/* The paste-a-link tool is the main revenue action: give it the first
+            slot after the hero, on both the guest and the signed-in home. */}
+        <section className="mt-12 grid items-center gap-6 rounded-[28px] bg-white p-5 shadow-[0_24px_60px_-40px_rgba(20,49,34,0.6)] ring-1 ring-[var(--border)] sm:p-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-10">
+          <div>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-extrabold text-[var(--accent-dark)]">
+              <BoltIcon className="h-3.5 w-3.5" />
+              Hoàn tiền cho mọi sản phẩm Shopee
+            </span>
+            <h2 className="mt-3 text-2xl font-extrabold leading-tight text-[var(--foreground)] sm:text-3xl">
+              Đã có sản phẩm muốn mua? Dán link vào đây
+            </h2>
+            <p className="mt-3 max-w-md text-sm leading-6 text-[var(--muted)]">
+              Không cần tìm trong danh sách. Sao chép link sản phẩm từ Shopee, dán vào Rewally và nhận link hoàn tiền
+              kèm số tiền hoàn dự kiến.
+            </p>
+          </div>
+          <LinkTool isAuthenticated={false} variant="hero" />
+        </section>
+
         {topCashback.length > 0 && (
           <section className="pt-12">
             <SectionHeading title="Thương hiệu nổi bật" href="/products?sort=commission_desc" />
@@ -193,71 +208,19 @@ export default function MarketingHome({
           title="Mua sắm, đặt đơn và nhận hoàn tiền"
           description="Không cần tích điểm hay nhập mã. Chọn sản phẩm trên Rewally, mua hàng ở Shopee, phần hoàn tiền sẽ tự cập nhật sau đối soát."
           cta={{ href: "/products", label: "Mua sắm ngay" }}
-          image={{ label: "Minh họa các danh mục mua sắm", icon: BagIcon }}
+          image={{ label: "Minh họa các danh mục mua sắm", icon: BagIcon, src: "/marketing/shopping-categories.png" }}
         />
         <SplitPanel
           tone="mint"
           title="Nhiều cách nhận thưởng hơn"
           description="Ngoài hoàn tiền theo đơn, bạn còn có thể nhận thêm thưởng theo chiến dịch và giới thiệu bạn bè."
           cta={{ href: "/campaigns", label: "Xem ưu đãi" }}
-          image={{ label: "Minh họa thưởng hoàn tiền", icon: GiftIcon }}
+          image={{ label: "Minh họa thưởng hoàn tiền", icon: GiftIcon, src: "/marketing/reward-ways.png" }}
         />
       </section>
 
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
-        <section className="grid items-center gap-10 py-16 lg:grid-cols-[0.95fr_1.05fr]">
-          <div className="mx-auto w-full max-w-md">
-            <div className="relative h-72">
-              <Card className="absolute left-4 top-8 w-52 rotate-[-5deg] rounded-2xl shadow-[0_18px_44px_-28px_rgba(20,49,34,0.55)]">
-                <Card.Content className="p-4">
-                  <p className="text-xs font-bold text-[var(--muted)]">Đơn Shopee</p>
-                  <p className="mt-1 text-2xl font-extrabold text-[var(--foreground)]">đến 30%</p>
-                  <p className="text-xs font-semibold text-[var(--accent)]">Hoàn tiền</p>
-                </Card.Content>
-              </Card>
-              <Card className="absolute right-4 top-20 w-48 rotate-[5deg] rounded-2xl shadow-[0_18px_44px_-28px_rgba(20,49,34,0.55)]">
-                <Card.Content className="p-4">
-                  <p className="text-xs font-bold text-[var(--muted)]">Ưu đãi Xtra</p>
-                  <p className="mt-1 text-2xl font-extrabold text-[var(--foreground)]">+22%</p>
-                  <p className="text-xs font-semibold text-[var(--accent)]">Tỷ lệ cao hơn</p>
-                </Card.Content>
-              </Card>
-              <Link
-                href="/products"
-                className="absolute bottom-8 left-1/2 inline-flex -translate-x-1/2 rounded-full bg-[var(--foreground)] px-5 py-2.5 text-xs font-extrabold text-white shadow"
-              >
-                Đặt ngay
-              </Link>
-            </div>
-          </div>
-
-          <div>
-            <h2 className="text-2xl font-extrabold leading-tight text-[var(--foreground)] sm:text-3xl">Cách hoạt động</h2>
-            <ol className="mt-7 space-y-5">
-              {STEPS.map((step, index) => (
-                <li key={step.title} className="grid grid-cols-[2rem_1fr] gap-4">
-                  <span
-                    className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-extrabold ${
-                      index === 1 ? "bg-[var(--foreground)] text-white" : "bg-[var(--surface)] text-[var(--muted)]"
-                    }`}
-                  >
-                    {index + 1}
-                  </span>
-                  <div>
-                    <h3 className="text-sm font-extrabold text-[var(--foreground)]">{step.title}</h3>
-                    <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{step.description}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-            <Link
-              href="/guide"
-              className="mt-7 inline-flex rounded-full bg-[var(--accent)] px-5 py-2.5 text-sm font-extrabold text-white transition hover:brightness-105"
-            >
-              Xem hướng dẫn chi tiết
-            </Link>
-          </div>
-        </section>
+        <HowItWorks />
 
         <ProductRail
           title="Ưu đãi hoàn tiền tốt nhất"
@@ -346,6 +309,7 @@ export default function MarketingHome({
               label="Ảnh chụp màn hình ứng dụng"
               icon={WalletIcon}
               tone="surface"
+              src="/marketing/app-wallet-mockup.png"
               className="mx-auto h-72 w-full max-w-[300px] rounded-[26px]"
             />
           </div>
@@ -371,7 +335,7 @@ function SectionHeading({ title, href }: { title: string; href?: string }) {
 function FeaturedTile({ product }: { product: ShoppingProduct }) {
   const pct = product.userCommissionRateValue;
   const amount = product.userCommissionValue;
-  const reward = amount != null && amount > 0 ? formatVnd(amount) : pct != null && pct > 0 ? `${formatPct(pct)}%` : "Có hoàn tiền";
+  const reward = amount != null && amount > 0 ? formatVnd(amount) : pct != null && pct > 0 ? formatPct(pct) : "Có hoàn tiền";
 
   return (
     <Link
@@ -391,34 +355,6 @@ function FeaturedTile({ product }: { product: ShoppingProduct }) {
   );
 }
 
-function HeroMiniCard({
-  title,
-  subtitle,
-  icon: Icon,
-  tone,
-}: {
-  title: string;
-  subtitle: string;
-  icon: ComponentType<{ className?: string }>;
-  tone: "green" | "warm";
-}) {
-  return (
-    <div className="flex w-40 items-center gap-3">
-      <span
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-          tone === "green" ? "bg-[var(--accent-soft)] text-[var(--accent)]" : "bg-[#fff0c2] text-[#b77900]"
-        }`}
-      >
-        <Icon className="h-5 w-5" />
-      </span>
-      <div>
-        <p className="text-sm font-extrabold text-[var(--foreground)]">{title}</p>
-        <p className="text-xs font-semibold text-[var(--muted)]">{subtitle}</p>
-      </div>
-    </div>
-  );
-}
-
 function SplitPanel({
   tone,
   title,
@@ -430,13 +366,19 @@ function SplitPanel({
   title: string;
   description: string;
   cta: { href: string; label: string };
-  image: { label: string; icon: ComponentType<{ className?: string }> };
+  image: { label: string; icon: ComponentType<{ className?: string }>; src?: string };
 }) {
   const background = tone === "blue" ? "bg-[#e6f7fb]" : "bg-[#e8f8ee]";
 
   return (
     <div className={`${background} px-6 py-14 text-center sm:px-10`}>
-      <PlaceholderImage label={image.label} icon={image.icon} tone="surface" className="mx-auto h-36 w-full max-w-[320px]" />
+      <PlaceholderImage
+        label={image.label}
+        icon={image.icon}
+        tone="surface"
+        src={image.src}
+        className="mx-auto h-56 w-full max-w-[360px] rounded-[24px]"
+      />
       <h2 className="mx-auto mt-7 max-w-md text-2xl font-extrabold leading-tight text-[var(--foreground)]">{title}</h2>
       <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--muted)]">{description}</p>
       <Link href={cta.href} className="mt-6 inline-flex rounded-full bg-[var(--foreground)] px-5 py-2.5 text-sm font-extrabold text-white">

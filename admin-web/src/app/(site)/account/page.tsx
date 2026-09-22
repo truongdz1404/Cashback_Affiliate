@@ -3,24 +3,13 @@ import type { Metadata } from "next";
 import { appFetchSafe, getSessionUser } from "@/lib/appApi";
 import type { Order, ReferralView, WalletSummary } from "@/lib/appTypes";
 import { formatDate, formatVnd, orderStatusLabel } from "@/lib/format";
-import { SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
+import { EMPTY_WALLET } from "@/lib/wallet";
+import { hasBankAccount } from "@/components/account/menu";
+import { PageHeading, SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
 import { orderStatusTone } from "@/components/account/orderStatus";
 import { ArrowRightIcon, BagIcon, LinkIcon, UsersIcon, WalletIcon } from "@/components/icons";
 
 export const metadata: Metadata = { title: "Tổng quan | Rewally" };
-
-const EMPTY_WALLET: WalletSummary = {
-  paidOrders: 0,
-  paidAmount: 0,
-  unpaidOrders: 0,
-  unpaidAmount: 0,
-  pendingOrders: 0,
-  pendingAmount: 0,
-  paidThisMonth: 0,
-  availableAmount: 0,
-  minWithdrawAmount: 0,
-  pendingWithdrawal: null,
-};
 
 const SHORTCUTS = [
   { href: "/account/wallet", label: "Rút tiền", icon: WalletIcon },
@@ -37,20 +26,22 @@ export default async function AccountOverviewPage() {
     appFetchSafe<ReferralView | null>("/referral?limit=1", null),
   ]);
 
-  const missingBank = !user?.bankName || !user?.bankAccountNumber || !user?.bankAccountHolder;
+  const missingBank = !user || !hasBankAccount(user);
 
   return (
     <div className="flex flex-col gap-6">
+      <PageHeading title="Tổng quan" description="Số dư, đơn hàng gần đây và các lối tắt hay dùng." />
+
       {missingBank && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[var(--danger)]/30 bg-[var(--danger)]/8 px-4 py-3.5">
           <p className="min-w-0 flex-1 text-sm font-semibold text-[var(--foreground)]">
-            Bạn cần cập nhật thông tin ngân hàng trước khi thanh toán.
+            Bạn cần thiết lập tài khoản ngân hàng trước khi rút tiền.
           </p>
           <Link
-            href="/account/profile"
+            href="/account/bank"
             className="rounded-full bg-[var(--danger)] px-4 py-2 text-xs font-extrabold text-white"
           >
-            Cập nhật
+            Thiết lập ngay
           </Link>
         </div>
       )}

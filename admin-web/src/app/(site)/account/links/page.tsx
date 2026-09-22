@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { appFetchSafe } from "@/lib/appApi";
 import type { LinkHistoryItem } from "@/lib/appTypes";
 import { formatDateTime, formatPct, formatVnd } from "@/lib/format";
-import { SectionCard, EmptyState } from "@/components/account/ui";
-import LinkCreator from "@/components/account/LinkCreator";
+import { PageHeading, SectionCard, EmptyState } from "@/components/account/ui";
+import LinkTool from "@/components/public/LinkTool";
 import LinkHistoryRow from "@/components/account/LinkHistoryRow";
 import { LinkIcon } from "@/components/icons";
 
@@ -14,15 +14,11 @@ export default async function LinksPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-xl font-extrabold text-[var(--foreground)]">Tạo link hoàn tiền</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Dán link sản phẩm, nhận link hoàn tiền để mua hàng.
-        </p>
-      </div>
+      <PageHeading title="Tạo link hoàn tiền" description="Dán link sản phẩm Shopee, nhận link hoàn tiền để mua hàng." />
 
       <SectionCard>
-        <LinkCreator />
+        {/* /account/* is behind proxy.js, so a visitor here is always signed in. */}
+        <LinkTool isAuthenticated variant="card" />
       </SectionCard>
 
       <SectionCard title="Lịch sử tạo link" action={<span className="text-sm text-[var(--muted)]">{history.length} link</span>}>

@@ -16,7 +16,24 @@ function safeNext(next: string | undefined): string {
   return next;
 }
 
-export default function AuthForm({ mode, next, referralCode }: { mode: "login" | "register"; next?: string; referralCode?: string }) {
+export default function AuthForm({
+  mode,
+  next,
+  referralCode,
+  embedded = false,
+  onSuccess,
+  onSwitchMode,
+}: {
+  mode: "login" | "register";
+  next?: string;
+  referralCode?: string;
+  /** Inside the sign-in dialog: tighter spacing, smaller heading. */
+  embedded?: boolean;
+  /** When given, a successful sign-in calls this instead of navigating to `next`. */
+  onSuccess?: () => void;
+  /** When given, "Chưa có tài khoản?" switches mode in place instead of linking to the other page. */
+  onSwitchMode?: (mode: "login" | "register") => void;
+}) {
   const isRegister = mode === "register";
 
   const [phone, setPhone] = useState("");
@@ -31,6 +48,11 @@ export default function AuthForm({ mode, next, referralCode }: { mode: "login" |
   const showSocial = hasSocialLogin(useOAuthConfig());
 
   function done() {
+    // The dialog refreshes the router itself and keeps the visitor on the page.
+    if (onSuccess) {
+      onSuccess();
+      return;
+    }
     // A full navigation, not router.push: the session cookie was just set by
     // the API route and every server component must re-render with it.
     window.location.href = safeNext(next);
@@ -76,18 +98,20 @@ export default function AuthForm({ mode, next, referralCode }: { mode: "login" |
     }
   }
 
+  const Heading = embedded ? "h2" : "h1";
+
   return (
     <div>
-      <h1 className="text-2xl font-extrabold text-[var(--foreground)]">
+      <Heading className={`font-extrabold text-[var(--foreground)] ${embedded ? "text-xl" : "text-2xl"}`}>
         {isRegister ? "Tạo tài khoản Rewally" : "Chào mừng trở lại"}
-      </h1>
+      </Heading>
       <p className="mt-1.5 text-sm text-[var(--muted)]">
         {isRegister
           ? "Đăng ký miễn phí để bắt đầu nhận hoàn tiền cho mọi đơn hàng."
           : "Đăng nhập để xem ví hoàn tiền, đơn hàng và tạo link của bạn."}
       </p>
 
-      <form onSubmit={submit} className="mt-7 flex flex-col gap-4">
+      <form onSubmit={submit} className={`flex flex-col ${embedded ? "mt-5 gap-3.5" : "mt-7 gap-4"}`}>
         <TextField
           label="Số điện thoại"
           value={phone}
@@ -154,7 +178,7 @@ export default function AuthForm({ mode, next, referralCode }: { mode: "login" |
 
       {showSocial && (
         <>
-          <div className="my-7 flex items-center gap-3">
+          <div className={`flex items-center gap-3 ${embedded ? "my-5" : "my-7"}`}>
             <span className="h-px flex-1 bg-[var(--border)]" />
             <span className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Hoặc</span>
             <span className="h-px flex-1 bg-[var(--border)]" />
@@ -167,18 +191,28 @@ export default function AuthForm({ mode, next, referralCode }: { mode: "login" |
         </>
       )}
 
-      <p className="mt-8 text-center text-sm text-[var(--muted)]">
+      <p className={`text-center text-sm text-[var(--muted)] ${embedded ? "mt-5" : "mt-8"}`}>
         {isRegister ? "Đã có tài khoản? " : "Chưa có tài khoản? "}
-        <Link
-          href={isRegister ? `/login${next ? `?next=${encodeURIComponent(next)}` : ""}` : `/register${next ? `?next=${encodeURIComponent(next)}` : ""}`}
-          className="font-extrabold text-[var(--accent)] hover:underline"
-        >
-          {isRegister ? "Đăng nhập" : "Đăng ký miễn phí"}
-        </Link>
+        {onSwitchMode ? (
+          <button
+            type="button"
+            onClick={() => onSwitchMode(isRegister ? "login" : "register")}
+            className="font-extrabold text-[var(--accent)] hover:underline"
+          >
+            {isRegister ? "Đăng nhập" : "Đăng ký miễn phí"}
+          </button>
+        ) : (
+          <Link
+            href={isRegister ? `/login${next ? `?next=${encodeURIComponent(next)}` : ""}` : `/register${next ? `?next=${encodeURIComponent(next)}` : ""}`}
+            className="font-extrabold text-[var(--accent)] hover:underline"
+          >
+            {isRegister ? "Đăng nhập" : "Đăng ký miễn phí"}
+          </Link>
+        )}
       </p>
 
       {isRegister && (
-        <p className="mt-4 text-center text-xs leading-relaxed text-[var(--muted)]">
+        <p className={`text-center text-xs leading-relaxed text-[var(--muted)] ${embedded ? "mt-3" : "mt-4"}`}>
           Khi đăng ký, bạn đồng ý với{" "}
           <a href="/app/legal/privacy" target="_blank" rel="noopener noreferrer" className="underline">
             Chính sách quyền riêng tư
