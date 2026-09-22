@@ -60,25 +60,11 @@ async function fallbackProducts(limit, excludeIds = new Set()) {
   return products;
 }
 
-/**
- * Recommends shopping_products for a user based on their "Tạo link" history
- * (the links table) - the only per-user signal this app has, since there's no
- * browsing/wishlist tracking. Each Link row carries a best-effort content
- * snapshot (itemName/catName/shopName/priceValue) taken for free off the same
- * addlivetag commission lookup /app/link already makes (see lib/commission.js),
- * so this works even for links whose item was never scraped into the catalog -
- * unlike a plain itemId join, which would only match products we happened to
- * scrape.
- *
- * Scoring is a simple additive heuristic (shop match + category-tab match +
- * keyword overlap + price-band proximity + a mild commission tie-breaker) -
- * deliberately not ML/embeddings, so it runs with zero extra infra on top of
- * data already being collected. Users with no usable link history (new
- * accounts, or every link's lookup fell back to the browser path and missed
- * the content snapshot) get the top-commission catalog instead, so the
- * section is never empty.
- */
-async function recommendForUser(userId, { limit = 10 } = {}) {
+// Builds the per-user weight maps off "Tạo link" history - the shared input
+// to scoreProduct() below. Extracted out of recommendForUser so the same
+// affinity can drive both the Home-tab "Gợi ý cho bạn" widget and the
+// Shopping-tab personalized ordering, without scoring twice differently.
+async function buildAffinity(userId) {
   const links = await prisma.link.findMany({
     where: { userId: Number(userId) },
     orderBy: { createdAt: 'desc' },
@@ -87,7 +73,7 @@ async function recommendForUser(userId, { limit = 10 } = {}) {
 
   const withSignal = links.filter((l) => l.catName || l.shopName || l.itemName);
   if (withSignal.length === 0) {
-    return { items: await fallbackProducts(limit), reason: 'no_history' };
+    return { hasSignal: false, alreadyLinkedItemIds: new Set() };
   }
 
   const alreadyLinkedItemIds = new Set(links.map((l) => l.itemId).filter(Boolean));
@@ -117,6 +103,63 @@ async function recommendForUser(userId, { limit = 10 } = {}) {
   const priceLow = avgPrice != null ? avgPrice * 0.4 : null;
   const priceHigh = avgPrice != null ? avgPrice * 2.5 : null;
 
+  return { hasSignal: true, alreadyLinkedItemIds, catWeights, shopWeights, keywordWeights, avgPrice, priceLow, priceHigh };
+}
+
+// Same additive heuristic used by both callers: shop match (x5) + category
+// match (x3) + keyword overlap (x2/token) + price-band proximity (+1) + a
+// mild commission tie-breaker. Returns 0 (never negative) for a total miss,
+// so callers can decide themselves whether a 0-score product gets dropped
+// (Home-tab widget) or just sinks to the bottom of a still-complete list
+// (Shopping-tab browse).
+function scoreProduct(product, affinity) {
+  if (!affinity.hasSignal) return 0;
+  const { shopWeights, catWeights, keywordWeights, avgPrice, priceLow, priceHigh } = affinity;
+  let score = 0;
+  const productShopName = normalizeName(product.shopName);
+  const productCategory = normalizeName(product.category);
+  if (productShopName && shopWeights.has(productShopName)) {
+    score += 5 * shopWeights.get(productShopName);
+  }
+  if (productCategory && catWeights.has(productCategory)) {
+    score += 3 * catWeights.get(productCategory);
+  }
+  const overlap = tokenize(product.name).filter((token) => keywordWeights.has(token));
+  for (const token of overlap) score += 2 * keywordWeights.get(token);
+  if (avgPrice != null && product.priceValue != null && product.priceValue >= priceLow && product.priceValue <= priceHigh) {
+    score += 1;
+  }
+  if (product.commissionRateValue != null) {
+    score += Math.min(product.commissionRateValue / 20, 1.5);
+  }
+  return score;
+}
+
+/**
+ * Recommends shopping_products for a user based on their "Tạo link" history
+ * (the links table) - the only per-user signal this app has, since there's no
+ * browsing/wishlist tracking. Each Link row carries a best-effort content
+ * snapshot (itemName/catName/shopName/priceValue) taken for free off the same
+ * addlivetag commission lookup /app/link already makes (see lib/commission.js),
+ * so this works even for links whose item was never scraped into the catalog -
+ * unlike a plain itemId join, which would only match products we happened to
+ * scrape.
+ *
+ * Scoring is a simple additive heuristic (shop match + category-tab match +
+ * keyword overlap + price-band proximity + a mild commission tie-breaker) -
+ * deliberately not ML/embeddings, so it runs with zero extra infra on top of
+ * data already being collected. Users with no usable link history (new
+ * accounts, or every link's lookup fell back to the browser path and missed
+ * the content snapshot) get the top-commission catalog instead, so the
+ * section is never empty.
+ */
+async function recommendForUser(userId, { limit = 10 } = {}) {
+  const affinity = await buildAffinity(userId);
+  if (!affinity.hasSignal) {
+    return { items: await fallbackProducts(limit), reason: 'no_history' };
+  }
+
+  const { alreadyLinkedItemIds } = affinity;
   const candidates = await prisma.shoppingProduct.findMany({
     where: alreadyLinkedItemIds.size ? { productId: { notIn: [...alreadyLinkedItemIds] } } : undefined,
     orderBy: { id: 'desc' },
@@ -124,26 +167,7 @@ async function recommendForUser(userId, { limit = 10 } = {}) {
   });
 
   const scored = candidates
-    .map((product) => {
-      let score = 0;
-      const productShopName = normalizeName(product.shopName);
-      const productCategory = normalizeName(product.category);
-      if (productShopName && shopWeights.has(productShopName)) {
-        score += 5 * shopWeights.get(productShopName);
-      }
-      if (productCategory && catWeights.has(productCategory)) {
-        score += 3 * catWeights.get(productCategory);
-      }
-      const overlap = tokenize(product.name).filter((token) => keywordWeights.has(token));
-      for (const token of overlap) score += 2 * keywordWeights.get(token);
-      if (avgPrice != null && product.priceValue != null && product.priceValue >= priceLow && product.priceValue <= priceHigh) {
-        score += 1;
-      }
-      if (product.commissionRateValue != null) {
-        score += Math.min(product.commissionRateValue / 20, 1.5);
-      }
-      return { product, score };
-    })
+    .map((product) => ({ product, score: scoreProduct(product, affinity) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score);
 
@@ -158,4 +182,48 @@ async function recommendForUser(userId, { limit = 10 } = {}) {
   return { items: top, reason: top.length ? 'personalized' : 'no_match' };
 }
 
-module.exports = { recommendForUser };
+/**
+ * Personalized ordering for the full Shopping-tab catalog browse (and its
+ * search box): unlike recommendForUser, this never drops a product - it
+ * scores the whole (optionally search-filtered) catalog and sorts matches to
+ * the top, letting 0-score products sink to the bottom in their existing
+ * `id desc` order rather than disappearing. Used only for the "no explicit
+ * filter/sort" and "search" branches of /app/shopping-products; as soon as
+ * the user sets a price/commission filter or picks a sort, the route falls
+ * back to the original DB-pushdown pagination untouched.
+ */
+async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = {}) {
+  const affinity = await buildAffinity(userId);
+  const where = {};
+  if (search && search.trim()) {
+    where.name = { contains: search.trim(), mode: 'insensitive' };
+  }
+
+  if (!affinity.hasSignal) {
+    // `id desc` tiebreak: most rows share a `scrapedAt` (one scrape batch),
+    // so ordering by scrapedAt alone leaves ties in an unstable order and
+    // skip/take pagination can repeat or skip rows across pages - same
+    // class of bug documented above on CANDIDATE_POOL_SIZE.
+    return prisma.shoppingProduct.findMany({
+      where,
+      orderBy: [{ scrapedAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+      skip: offset,
+    });
+  }
+
+  const candidates = await prisma.shoppingProduct.findMany({
+    where,
+    orderBy: { id: 'desc' },
+    take: CANDIDATE_POOL_SIZE,
+  });
+
+  const sorted = candidates
+    .map((product) => ({ product, score: scoreProduct(product, affinity) }))
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.product);
+
+  return sorted.slice(offset, offset + limit);
+}
+
+module.exports = { recommendForUser, rankProductsForUser, buildAffinity, scoreProduct };

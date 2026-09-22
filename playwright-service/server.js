@@ -616,18 +616,35 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
     const minCommissionValue = toRaw(req.query.minCommissionAmount !== undefined ? Number(req.query.minCommissionAmount) : undefined);
     const maxCommissionValue = toRaw(req.query.maxCommissionAmount !== undefined ? Number(req.query.maxCommissionAmount) : undefined);
 
-    const products = await shoppingProductsRepo.list({
-      limit,
-      offset,
-      search,
-      minPrice,
-      maxPrice,
-      minCommissionRateValue,
-      maxCommissionRateValue,
-      minCommissionValue,
-      maxCommissionValue,
-      sort,
-    });
+    // "Filter active" = the user touched the filter sheet (price/commission
+    // bounds) or explicitly picked a sort other than the default "newest" -
+    // in either case the original DB-pushdown listing must stay untouched.
+    // Otherwise (plain browse, or a search with no filter) the list is
+    // personalized: matches float to the top, non-matches just sink instead
+    // of disappearing. See lib/repositories/recommendations.js.
+    const hasFilter =
+      minPrice != null ||
+      maxPrice != null ||
+      minCommissionRateValue != null ||
+      maxCommissionRateValue != null ||
+      minCommissionValue != null ||
+      maxCommissionValue != null ||
+      (sort != null && sort !== 'newest');
+
+    const products = hasFilter
+      ? await shoppingProductsRepo.list({
+          limit,
+          offset,
+          search,
+          minPrice,
+          maxPrice,
+          minCommissionRateValue,
+          maxCommissionRateValue,
+          minCommissionValue,
+          maxCommissionValue,
+          sort,
+        })
+      : await recommendationsRepo.rankProductsForUser(req.appUserId, { search, limit, offset });
 
     res.json(products.map((p) => ({
       ...p,
