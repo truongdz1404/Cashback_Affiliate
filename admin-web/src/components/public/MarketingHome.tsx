@@ -213,7 +213,7 @@ export default function MarketingHome({
         <SplitPanel
           tone="mint"
           title="Nhiều cách nhận thưởng hơn"
-          description="Ngoài hoàn tiền theo đơn, bạn còn có thể nhận thêm thưởng theo chiến dịch và giới thiệu bạn bè."
+          description="Ngoài hoàn tiền theo đơn, bạn còn nhận thưởng theo chiến dịch và hoa hồng trên mỗi đơn hàng của bạn bè do bạn giới thiệu."
           cta={{ href: "/campaigns", label: "Xem ưu đãi" }}
           image={{ label: "Minh họa thưởng hoàn tiền", icon: GiftIcon, src: "/marketing/reward-ways.png" }}
         />

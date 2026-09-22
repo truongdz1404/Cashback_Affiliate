@@ -1,18 +1,18 @@
 import type { Metadata } from "next";
 import { appFetchSafe } from "@/lib/appApi";
-import type { ReferralInvitee, ReferralView } from "@/lib/appTypes";
-import { formatDate, formatVnd, maskPhone } from "@/lib/format";
+import type { ReferralInvitee, ReferralProgram, ReferralView } from "@/lib/appTypes";
+import { formatDate, formatPct, formatVnd, maskPhone } from "@/lib/format";
 import { PageHeading, SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
 import type { PillTone } from "@/components/account/ui";
 import ReferralShare from "@/components/account/ReferralShare";
-import { UsersIcon } from "@/components/icons";
+import { GiftIcon, ReceiptIcon, UsersIcon } from "@/components/icons";
 
 export const metadata: Metadata = { title: "Giới thiệu bạn bè | Rewally" };
 
 const STATUS_LABEL: Record<ReferralInvitee["status"], string> = {
-  pending: "Chờ hoàn tất",
-  qualified: "Đã đủ điều kiện",
-  rewarded: "Đã nhận thưởng",
+  pending: "Chưa có đơn",
+  qualified: "Đã mua hàng",
+  rewarded: "Đã mua hàng",
 };
 
 const STATUS_TONE: Record<ReferralInvitee["status"], PillTone> = {
@@ -21,28 +21,79 @@ const STATUS_TONE: Record<ReferralInvitee["status"], PillTone> = {
   rewarded: "success",
 };
 
+const EMPTY_PROGRAM: ReferralProgram = { commissionPct: 0, commissionMonths: 0, firstOrderBonus: 0 };
+
+// Order purchaseTime is a unix timestamp as a string (seconds, or ms for a
+// few older rows); formatDate cannot parse that shape on its own.
+function orderDate(purchaseTime: string | null, fallback: string | null): string {
+  const n = Number(purchaseTime);
+  if (purchaseTime && Number.isFinite(n) && n > 0) return formatDate(n > 1e12 ? n : n * 1000);
+  return formatDate(fallback);
+}
+
+function programTerm(program: ReferralProgram): string {
+  return program.commissionMonths > 0 ? `trong ${program.commissionMonths} tháng` : "trọn đời";
+}
+
 export default async function ReferralPage() {
   const referral = await appFetchSafe<ReferralView | null>("/referral?limit=100", null);
+  const program = referral?.program ?? EMPTY_PROGRAM;
+  const stats = referral?.stats;
+  const hasCommission = program.commissionPct > 0;
+  const hasBonus = program.firstOrderBonus > 0;
+
+  const headline = hasCommission
+    ? `Nhận ${formatPct(program.commissionPct)} hoa hồng ${programTerm(program)} trên mỗi đơn hàng bạn bè đặt qua Rewally.`
+    : hasBonus
+      ? `Nhận ${formatVnd(program.firstOrderBonus)} khi bạn bè hoàn tất đơn hàng đầu tiên.`
+      : "Mời bạn bè dùng Rewally bằng mã giới thiệu của bạn.";
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading
-        title="Giới thiệu bạn bè & nhận thưởng"
-        description="Bạn bè đăng ký bằng mã của bạn và hoàn tất đơn đầu tiên, cả hai cùng nhận thưởng."
-      />
+      <PageHeading title="Giới thiệu bạn bè & nhận hoa hồng" description={headline} />
 
       <SectionCard>
-        <ReferralShare code={referral?.referralCode ?? "------"} />
+        <ReferralShare code={referral?.referralCode ?? "------"} program={program} />
       </SectionCard>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <StatTile label="Đã mời" value={String(referral?.stats.totalInvited ?? 0)} />
-        <StatTile label="Đủ điều kiện" value={String(referral?.stats.qualified ?? 0)} />
+      {(hasCommission || hasBonus) && (
+        <SectionCard title="Cách tính thưởng">
+          <ol className="grid gap-3 sm:grid-cols-3">
+            <li className="rounded-2xl bg-[var(--surface-secondary)] p-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-[var(--muted)]">Bước 1</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">Bạn bè đăng ký bằng mã của bạn</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">Nhập mã khi tạo tài khoản, hoặc mở link mời để mã được điền sẵn.</p>
+            </li>
+            <li className="rounded-2xl bg-[var(--surface-secondary)] p-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-[var(--muted)]">Bước 2</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">Họ mua sắm Shopee qua Rewally</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">Họ vẫn nhận đủ hoàn tiền như mọi người dùng khác, không bị trừ một đồng nào.</p>
+            </li>
+            <li className="rounded-2xl bg-[var(--accent-soft)] p-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-[var(--accent-soft-foreground)]">Bước 3</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">
+                {hasCommission
+                  ? `Bạn nhận ${formatPct(program.commissionPct)} số tiền hoàn của họ`
+                  : `Bạn nhận ${formatVnd(program.firstOrderBonus)}`}
+              </p>
+              <p className="mt-1 text-xs text-[var(--accent-soft-foreground)]">
+                {hasCommission
+                  ? `Tính trên mỗi đơn hoàn thành, ${programTerm(program)}${hasBonus ? `, cộng thêm ${formatVnd(program.firstOrderBonus)} cho đơn đầu tiên` : ""}. Cộng thẳng vào số dư khả dụng.`
+                  : "Cộng vào số dư khả dụng khi đơn đầu tiên của họ hoàn thành."}
+              </p>
+            </li>
+          </ol>
+        </SectionCard>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatTile label="Đã mời" value={String(stats?.totalInvited ?? 0)} />
+        <StatTile label="Đã mua hàng" value={String(stats?.qualified ?? 0)} hint={`${stats?.orderCount ?? 0} đơn hoàn thành`} />
+        <StatTile label="Hoa hồng tích luỹ" value={formatVnd(stats?.commissionTotal)} tone="accent" hint="Đã cộng vào số dư khả dụng" />
         <StatTile
           label="Tổng thưởng"
-          value={formatVnd(referral?.stats.totalReward)}
-          tone="accent"
-          hint="Đã cộng vào số dư ví của bạn"
+          value={formatVnd(stats?.totalReward)}
+          hint={stats?.bonusTotal ? `Gồm ${formatVnd(stats.bonusTotal)} thưởng đơn đầu` : "Hoa hồng + thưởng đơn đầu"}
         />
       </div>
 
@@ -51,7 +102,11 @@ export default async function ReferralPage() {
           <EmptyState
             icon={UsersIcon}
             title="Bạn chưa mời ai"
-            description="Chia sẻ mã ngay để nhận thưởng!"
+            description={
+              hasCommission
+                ? `Chia sẻ mã ngay, mỗi đơn bạn bè đặt là bạn có thêm ${formatPct(program.commissionPct)} hoa hồng.`
+                : "Chia sẻ mã ngay để nhận thưởng!"
+            }
           />
         ) : (
           <ul className="divide-y divide-[var(--border)]">
@@ -60,14 +115,47 @@ export default async function ReferralPage() {
                 <div className="min-w-0 flex-1">
                   {/* Someone else's phone number - only the last 2 digits are shown. */}
                   <p className="text-sm font-bold text-[var(--foreground)]">{maskPhone(invitee.referredPhone)}</p>
-                  <p className="text-xs text-[var(--muted)]">{formatDate(invitee.createdAt)}</p>
-                </div>
-                {invitee.rewardAmount != null && (
-                  <p className="shrink-0 text-sm font-extrabold tabular-nums text-[var(--accent)]">
-                    {formatVnd(invitee.rewardAmount)}
+                  <p className="text-xs text-[var(--muted)]">
+                    Tham gia {formatDate(invitee.createdAt)}
+                    {invitee.orderCount > 0 ? ` · ${invitee.orderCount} đơn` : ""}
                   </p>
-                )}
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-sm font-extrabold tabular-nums text-[var(--accent)]">
+                    {formatVnd((invitee.commissionTotal ?? 0) + (invitee.status !== "pending" ? invitee.rewardAmount ?? 0 : 0))}
+                  </p>
+                  <p className="text-[11px] text-[var(--muted)]">bạn nhận</p>
+                </div>
                 <StatusPill label={STATUS_LABEL[invitee.status] ?? invitee.status} tone={STATUS_TONE[invitee.status] ?? "neutral"} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Hoa hồng gần đây">
+        {!referral || referral.commissions.length === 0 ? (
+          <EmptyState
+            icon={ReceiptIcon}
+            title="Chưa có hoa hồng"
+            description="Khi bạn bè hoàn thành đơn hàng qua Rewally, từng khoản hoa hồng sẽ hiện ở đây."
+          />
+        ) : (
+          <ul className="divide-y divide-[var(--border)]">
+            {referral.commissions.map((c) => (
+              <li key={c.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)]">
+                  <GiftIcon className="h-4 w-4 text-[var(--accent-soft-foreground)]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-[var(--foreground)]">
+                    {c.productName || `Đơn ${c.orderSn}`}
+                  </p>
+                  <p className="text-xs text-[var(--muted)]">
+                    {maskPhone(c.referredPhone)} · {orderDate(c.purchaseTime, c.createdAt)} · {formatPct(c.pct)} của {formatVnd(c.baseAmount)}
+                  </p>
+                </div>
+                <p className="shrink-0 text-sm font-extrabold tabular-nums text-[var(--accent)]">+{formatVnd(c.amount)}</p>
               </li>
             ))}
           </ul>

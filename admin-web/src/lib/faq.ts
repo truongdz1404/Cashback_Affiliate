@@ -80,7 +80,7 @@ export const FAQ_GROUPS: { title: string; items: Faq[] }[] = [
       {
         question: "Mã giới thiệu hoạt động thế nào?",
         answer:
-          "Bạn bè đăng ký bằng mã của bạn và hoàn tất đơn đầu tiên, cả hai cùng được cộng thưởng vào số dư khả dụng. Xem chi tiết trong mục Giới thiệu bạn bè.",
+          "Bạn bè đăng ký bằng mã của bạn, sau đó mỗi đơn hoàn thành của họ đều mang về cho bạn một phần trăm số tiền hoàn của đơn đó (tỷ lệ hiện tại xem trong mục Giới thiệu bạn bè). Khoản này được cộng vào số dư khả dụng của bạn và không làm giảm hoàn tiền của người bạn mời.",
       },
     ],
   },

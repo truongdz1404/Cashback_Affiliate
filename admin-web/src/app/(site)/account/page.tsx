@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { appFetchSafe, getSessionUser } from "@/lib/appApi";
 import type { Order, ReferralView, WalletSummary } from "@/lib/appTypes";
-import { formatDate, formatVnd, orderStatusLabel } from "@/lib/format";
+import { formatDate, formatPct, formatVnd, orderStatusLabel } from "@/lib/format";
 import { EMPTY_WALLET } from "@/lib/wallet";
 import { hasBankAccount } from "@/components/account/menu";
 import { PageHeading, SectionCard, StatTile, StatusPill, EmptyState } from "@/components/account/ui";
@@ -146,7 +146,7 @@ export default async function AccountOverviewPage() {
             </div>
             <div>
               <p className="text-lg font-extrabold text-[var(--foreground)]">{referral?.stats.qualified ?? 0}</p>
-              <p className="text-xs text-[var(--muted)]">Đủ điều kiện</p>
+              <p className="text-xs text-[var(--muted)]">Đã mua hàng</p>
             </div>
             <div>
               <p className="text-lg font-extrabold text-[var(--accent)]">{formatVnd(referral?.stats.totalReward)}</p>
@@ -154,6 +154,13 @@ export default async function AccountOverviewPage() {
             </div>
           </div>
         </div>
+        {referral && referral.program.commissionPct > 0 && (
+          <p className="mt-4 rounded-xl bg-[var(--accent-soft)] px-3.5 py-2.5 text-xs font-semibold text-[var(--accent-soft-foreground)]">
+            Bạn nhận {formatPct(referral.program.commissionPct)} hoa hồng{" "}
+            {referral.program.commissionMonths > 0 ? `trong ${referral.program.commissionMonths} tháng` : "trọn đời"} trên mỗi đơn
+            hàng bạn bè đặt qua Rewally.
+          </p>
+        )}
       </SectionCard>
     </div>
   );

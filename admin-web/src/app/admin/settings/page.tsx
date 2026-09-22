@@ -7,6 +7,8 @@ import { clientApi } from "@/lib/clientApi";
 type Settings = {
   commissionPct?: number | null;
   referralRewardAmount?: number | null;
+  referralCommissionPct?: number | null;
+  referralCommissionMonths?: number | null;
   productOfferMaxPages?: number | null;
 };
 
@@ -115,15 +117,27 @@ function CommissionSection() {
   );
 }
 
-function ReferralRewardSection() {
-  const [amount, setAmount] = useState("");
+// Referral programme: the referrer earns `referralCommissionPct` % of the
+// cashback on every completed order their invitee places, for
+// `referralCommissionMonths` months after the invitee registers (0 = no
+// limit). Paid from the operator's share - the invitee's cashback is never
+// reduced. `referralRewardAmount` is the legacy fixed first-order bonus,
+// kept as an optional extra (0 = off).
+function ReferralProgramSection() {
+  const [pct, setPct] = useState("");
+  const [months, setMonths] = useState("");
+  const [bonus, setBonus] = useState("");
+  const [customerPct, setCustomerPct] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
     try {
       const data = await clientApi.get<Settings>("/api/settings");
-      setAmount(String(data.referralRewardAmount ?? ""));
+      setPct(String(data.referralCommissionPct ?? ""));
+      setMonths(String(data.referralCommissionMonths ?? ""));
+      setBonus(String(data.referralRewardAmount ?? ""));
+      setCustomerPct(data.commissionPct ?? null);
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Không tải được");
     }
@@ -133,12 +147,30 @@ function ReferralRewardSection() {
     load();
   }, [load]);
 
+  const pctNum = Number(pct);
+  const monthsNum = Number(months);
+  const bonusNum = Number(bonus);
+  const valid =
+    pct !== "" && Number.isFinite(pctNum) && pctNum >= 0 && pctNum <= 100 &&
+    months !== "" && Number.isInteger(monthsNum) && monthsNum >= 0 &&
+    bonus !== "" && Number.isFinite(bonusNum) && bonusNum >= 0;
+
+  // What the operator actually gives up, in points of the Shopee commission:
+  // referrer % × customer cashback %. Shown so the admin sees the margin
+  // impact before saving.
+  const operatorCost = customerPct !== null && Number.isFinite(pctNum) ? (pctNum * customerPct) / 100 : null;
+  const operatorLeft = customerPct !== null && operatorCost !== null ? 100 - customerPct - operatorCost : null;
+
   async function save() {
     setSaving(true);
     setMsg("");
     try {
-      await clientApi.put("/api/settings", { referralRewardAmount: Number(amount) });
-      setMsg("Đã lưu.");
+      await clientApi.put("/api/settings", {
+        referralCommissionPct: pctNum,
+        referralCommissionMonths: monthsNum,
+        referralRewardAmount: bonusNum,
+      });
+      setMsg("Đã lưu. Áp dụng cho các đơn hàng được đối soát từ bây giờ; hoa hồng đã ghi nhận trước đó không đổi.");
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Lưu thất bại");
     } finally {
@@ -148,19 +180,57 @@ function ReferralRewardSection() {
 
   return (
     <SectionCard
-      title="Thưởng giới thiệu bạn bè"
-      description="Số tiền cộng cho người giới thiệu khi bạn được mời hoàn tất đơn hàng đầu tiên."
+      title="Chương trình giới thiệu bạn bè"
+      description="Người giới thiệu nhận % trên số tiền hoàn của mỗi đơn hoàn thành do người được giới thiệu đặt. Khoản này lấy từ phần của hệ thống, không trừ vào hoàn tiền của người được giới thiệu."
     >
-      <div className="flex items-center gap-2">
-        <TextField name="referralRewardAmount" value={amount} onChange={setAmount} className="w-32" aria-label="Thưởng giới thiệu">
-          <Input placeholder="10000" />
-        </TextField>
-        <span className="text-sm text-[var(--muted)]">đ</span>
-        <Button onPress={save} isPending={saving} isDisabled={amount === ""}>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div>
+          <p className="mb-1.5 text-xs font-semibold text-[var(--muted)]">% hoa hồng cho người giới thiệu</p>
+          <div className="flex items-center gap-2">
+            <TextField name="referralCommissionPct" value={pct} onChange={setPct} className="w-24" aria-label="% hoa hồng giới thiệu">
+              <Input placeholder="15" inputMode="decimal" />
+            </TextField>
+            <span className="text-sm text-[var(--muted)]">% số tiền hoàn của bạn được mời</span>
+          </div>
+        </div>
+        <div>
+          <p className="mb-1.5 text-xs font-semibold text-[var(--muted)]">Thời hạn hưởng hoa hồng</p>
+          <div className="flex items-center gap-2">
+            <TextField name="referralCommissionMonths" value={months} onChange={setMonths} className="w-24" aria-label="Số tháng hưởng hoa hồng">
+              <Input placeholder="0" inputMode="numeric" />
+            </TextField>
+            <span className="text-sm text-[var(--muted)]">tháng kể từ khi đăng ký (0 = trọn đời)</span>
+          </div>
+        </div>
+        <div>
+          <p className="mb-1.5 text-xs font-semibold text-[var(--muted)]">Thưởng thêm đơn đầu tiên (tuỳ chọn)</p>
+          <div className="flex items-center gap-2">
+            <TextField name="referralRewardAmount" value={bonus} onChange={setBonus} className="w-32" aria-label="Thưởng đơn đầu tiên">
+              <Input placeholder="0" inputMode="numeric" />
+            </TextField>
+            <span className="text-sm text-[var(--muted)]">đ (0 = tắt)</span>
+          </div>
+        </div>
+      </div>
+
+      {operatorCost !== null && operatorLeft !== null && (
+        <p className="mt-3 rounded-xl bg-[var(--surface-secondary)] px-3 py-2 text-xs text-[var(--muted)]">
+          Với khách nhận {customerPct}% hoa hồng Shopee: mỗi đơn của người được giới thiệu, hệ thống trả thêm{" "}
+          <span className="font-semibold text-[var(--foreground)]">{Math.round(operatorCost * 100) / 100} điểm %</span> cho
+          người giới thiệu, còn lại{" "}
+          <span className={`font-semibold ${operatorLeft < 10 ? "text-[var(--danger)]" : "text-[var(--foreground)]"}`}>
+            {Math.round(operatorLeft * 100) / 100}%
+          </span>{" "}
+          hoa hồng Shopee cho hệ thống.
+        </p>
+      )}
+
+      <div className="mt-3 flex items-center gap-2">
+        <Button onPress={save} isPending={saving} isDisabled={!valid}>
           Lưu
         </Button>
+        {msg && <p className="text-xs text-[var(--muted)]">{msg}</p>}
       </div>
-      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
     </SectionCard>
   );
 }
@@ -494,7 +564,7 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <h1 className="text-lg font-semibold text-[var(--foreground)]">Cài đặt</h1>
       <CommissionSection />
-      <ReferralRewardSection />
+      <ReferralProgramSection />
       <ProductOfferMaxPagesSection />
       <SecretsSection />
       <SessionSection />

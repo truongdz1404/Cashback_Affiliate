@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   BagIcon,
   GearIcon,
+  GiftIcon,
   GridIcon,
   HomeIcon,
   ImageIcon,
@@ -26,6 +27,7 @@ const LINKS = [
   { href: "/admin/products", label: "Sản phẩm", icon: BagIcon },
   { href: "/admin/banners", label: "Banner", icon: ImageIcon },
   { href: "/admin/withdrawals", label: "Rút tiền", icon: WalletIcon },
+  { href: "/admin/referrals", label: "Giới thiệu", icon: GiftIcon },
   { href: "/admin/settings", label: "Cài đặt", icon: GearIcon },
 ];
 

@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { toast } from "@heroui/react";
 import { CheckIcon, CopyIcon } from "@/components/icons";
+import type { ReferralProgram } from "@/lib/appTypes";
 
 // The invite link has to be built in the browser: the server renders this page
 // for any host the deployment answers on, and hardcoding one would break the
 // other.
-export default function ReferralShare({ code }: { code: string }) {
+export default function ReferralShare({ code, program }: { code: string; program?: ReferralProgram }) {
   const [inviteLink, setInviteLink] = useState("");
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -27,7 +28,10 @@ export default function ReferralShare({ code }: { code: string }) {
   }
 
   async function share() {
-    const message = `Tham gia hoàn tiền Shopee cùng mình! Dùng mã giới thiệu ${code} khi đăng ký nhé.\n${inviteLink}`;
+    // The invitee's own benefit is what makes them click - their cashback is
+    // untouched by the referral, so say so rather than advertising our cut.
+    const bonus = program && program.firstOrderBonus > 0 ? ` Cả hai mình đều có lợi.` : "";
+    const message = `Mua Shopee qua Rewally được hoàn tiền về tài khoản mỗi đơn đó! Đăng ký với mã giới thiệu ${code} của mình nhé.${bonus}\n${inviteLink}`;
     // navigator.share only exists on mobile browsers and secure contexts;
     // copying the same text is the honest fallback everywhere else.
     if (typeof navigator !== "undefined" && navigator.share) {

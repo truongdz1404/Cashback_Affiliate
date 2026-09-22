@@ -129,23 +129,74 @@ export type Campaign = {
 };
 
 // referrals.listForReferrer returns the whole Referral row with the invitee's
-// phone folded in as referredPhone - not a `phone` field.
+// phone folded in as referredPhone - not a `phone` field. commissionTotal /
+// orderCount are the per-order referral commissions this invitee has earned
+// the referrer so far (revoked rows excluded).
 export type ReferralInvitee = {
   id: number;
   referrerUserId: number;
   referredUserId: number;
   referredPhone: string | null;
   status: "pending" | "qualified" | "rewarded";
+  // Legacy fixed first-order bonus snapshotted at registration; 0 when the
+  // programme runs on percentage only.
   rewardAmount: number | null;
   payoutStatus?: string | null;
   createdAt: string | null;
   qualifiedAt?: string | null;
+  commissionTotal: number;
+  orderCount: number;
+};
+
+// One Completed order placed by an invitee -> one commission row for the
+// referrer: `pct` % of the invitee's cashback (`baseAmount`) = `amount`.
+export type ReferralCommission = {
+  id: number;
+  referralId: number;
+  referrerUserId: number;
+  referredUserId: number;
+  orderId: number;
+  pct: number;
+  baseAmount: number;
+  amount: number;
+  payoutStatus: "unpaid" | "paid" | "revoked";
+  paidAt: string | null;
+  createdAt: string | null;
+  referredPhone: string | null;
+  orderSn: string;
+  productName: string | null;
+  purchaseTime: string | null;
+};
+
+// What the programme currently pays, as configured by the admin:
+// commissionPct % of every invitee order's cashback, for commissionMonths
+// months after they register (0 = no limit), plus an optional fixed
+// firstOrderBonus (0 = off) on their first completed order.
+export type ReferralProgram = {
+  commissionPct: number;
+  commissionMonths: number;
+  firstOrderBonus: number;
+};
+
+export type ReferralStats = {
+  totalInvited: number;
+  qualified: number;
+  bonusTotal: number;
+  commissionTotal: number;
+  commissionUnpaid: number;
+  commissionPaid: number;
+  orderCount: number;
+  // bonusTotal + commissionTotal
+  totalReward: number;
 };
 
 export type ReferralView = {
   referralCode: string;
-  stats: { totalInvited: number; qualified: number; totalReward: number };
+  program: ReferralProgram;
+  stats: ReferralStats;
   invited: ReferralInvitee[];
+  // Recent per-order history, only sent with the first page (offset 0).
+  commissions: ReferralCommission[];
 };
 
 export type LinkResult = {

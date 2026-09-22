@@ -40,6 +40,7 @@ model User {
   campaignRewards     CampaignReward[]
   referralsAsReferrer Referral[]           @relation("ReferralReferrer")
   referralAsReferred  Referral?            @relation("ReferralReferred")
+  referralCommissions ReferralCommission[] @relation("ReferralCommissionReferrer")
   withdrawalRequests  WithdrawalRequest[]
   clawbackFlags       ClawbackFlag[]
   emailVerifications  EmailVerification[]
@@ -120,6 +121,7 @@ model Order {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   user                User?    @relation(fields: [userId], references: [id])
+  referralCommission  ReferralCommission?
 
   @@map("orders")
 }
@@ -185,9 +187,41 @@ model Referral {
 
   referrer          User     @relation("ReferralReferrer", fields: [referrerUserId], references: [id])
   referred          User     @relation("ReferralReferred", fields: [referredUserId], references: [id])
+  commissions       ReferralCommission[]
 
   @@index([referrerUserId, payoutStatus])
   @@map("referrals")
+}
+
+// One row per Completed order placed by a referred user: the referrer's cut
+// of that order, taken as `pct` % of the referee's own cashback
+// (orders.user_commission) and funded from the operator's share - the
+// referee's cashback is never reduced. Created/refreshed by
+// lib/repositories/referralCommissions.js syncForCompletedOrder during
+// reconciliation, revoked (or clawback-flagged when already paid) when the
+// order is later Cancelled. Counted in the withdrawable balance by
+// lib/walletBalance.js while unpaid; admin marks rows paid after transfer.
+model ReferralCommission {
+  id             Int      @id @default(autoincrement())
+  referralId     Int      @map("referral_id")
+  referrerUserId Int      @map("referrer_user_id")
+  referredUserId Int      @map("referred_user_id")
+  orderId        Int      @unique @map("order_id")
+  pct            Float
+  baseAmount     Float    @map("base_amount")
+  amount         Float
+  payoutStatus   String   @default("unpaid") @map("payout_status")
+  paidAt         String?  @map("paid_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  referral       Referral @relation(fields: [referralId], references: [id])
+  referrer       User     @relation("ReferralCommissionReferrer", fields: [referrerUserId], references: [id])
+  order          Order    @relation(fields: [orderId], references: [id])
+
+  @@index([referrerUserId, payoutStatus])
+  @@index([referredUserId])
+  @@map("referral_commissions")
 }
 
 model WithdrawalRequest {

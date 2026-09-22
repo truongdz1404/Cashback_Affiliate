@@ -16,6 +16,7 @@ const settingsRepo = require('./lib/repositories/settings');
 const campaignsRepo = require('./lib/repositories/campaigns');
 const bannersRepo = require('./lib/repositories/banners');
 const referralsRepo = require('./lib/repositories/referrals');
+const referralCommissionsRepo = require('./lib/repositories/referralCommissions');
 const withdrawalsRepo = require('./lib/repositories/withdrawals');
 const banksRepo = require('./lib/repositories/banks');
 const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
@@ -833,15 +834,46 @@ app.get('/app/recommendations', appAuth.optionalAppUser, async (req, res) => {
   }
 });
 
+// Referral programme: `program` is what the app/web quote to the user (the
+// % of every invitee order they earn, for how long, plus any optional fixed
+// first-order bonus); `stats` merge the legacy per-referral bonus with the
+// per-order commissions so "Tổng thưởng" is one number; each invitee row
+// carries its own commission total; `commissions` is the recent per-order
+// history.
 app.get('/app/referral', appAuth.requireAppUser, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const offset = Number(req.query.offset) || 0;
-    const referralCode = await usersRepo.ensureReferralCode(req.appUserId);
+    const [referralCode, commissionPct, commissionMonths, firstOrderBonus, bonusStats, commissionStats, invited] =
+      await Promise.all([
+        usersRepo.ensureReferralCode(req.appUserId),
+        settingsRepo.getReferralCommissionPct(),
+        settingsRepo.getReferralCommissionMonths(),
+        settingsRepo.getReferralReward(),
+        referralsRepo.statsForReferrer(req.appUserId),
+        referralCommissionsRepo.statsForReferrer(req.appUserId),
+        referralsRepo.listForReferrer(req.appUserId, { limit, offset }),
+      ]);
+    const totals = await referralCommissionsRepo.totalsByReferral(invited.map((r) => r.id));
+    const commissions = offset === 0 ? await referralCommissionsRepo.listForReferrer(req.appUserId, { limit: 20 }) : [];
     res.json({
       referralCode,
-      stats: await referralsRepo.statsForReferrer(req.appUserId),
-      invited: await referralsRepo.listForReferrer(req.appUserId, { limit, offset }),
+      program: { commissionPct, commissionMonths, firstOrderBonus },
+      stats: {
+        totalInvited: bonusStats.totalInvited,
+        qualified: bonusStats.qualified,
+        bonusTotal: bonusStats.totalReward,
+        commissionTotal: commissionStats.commissionTotal,
+        commissionUnpaid: commissionStats.commissionUnpaid,
+        commissionPaid: commissionStats.commissionPaid,
+        orderCount: commissionStats.orderCount,
+        totalReward: bonusStats.totalReward + commissionStats.commissionTotal,
+      },
+      invited: invited.map((r) => {
+        const t = totals.get(r.id) || { commissionTotal: 0, orderCount: 0 };
+        return { ...r, commissionTotal: t.commissionTotal, orderCount: t.orderCount };
+      }),
+      commissions,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1067,6 +1099,8 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
     res.json({
       commissionPct: await settingsRepo.getCommissionPct(),
       referralRewardAmount: await settingsRepo.getReferralReward(),
+      referralCommissionPct: await settingsRepo.getReferralCommissionPct(),
+      referralCommissionMonths: await settingsRepo.getReferralCommissionMonths(),
       productOfferMaxPages: await settingsRepo.getProductOfferMaxPages(),
     });
   } catch (err) {
@@ -1090,6 +1124,20 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'body.referralRewardAmount must be a non-negative number' });
       }
       response.referralRewardAmount = await settingsRepo.setReferralReward(amount);
+    }
+    if (req.body.referralCommissionPct !== undefined) {
+      const pct = Number(req.body.referralCommissionPct);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        return res.status(400).json({ error: 'body.referralCommissionPct must be a number between 0 and 100' });
+      }
+      response.referralCommissionPct = await settingsRepo.setReferralCommissionPct(pct);
+    }
+    if (req.body.referralCommissionMonths !== undefined) {
+      const months = Number(req.body.referralCommissionMonths);
+      if (!Number.isInteger(months) || months < 0 || months > 1200) {
+        return res.status(400).json({ error: 'body.referralCommissionMonths must be an integer between 0 (no limit) and 1200' });
+      }
+      response.referralCommissionMonths = await settingsRepo.setReferralCommissionMonths(months);
     }
     if (req.body.productOfferMaxPages !== undefined) {
       const pages = Number(req.body.productOfferMaxPages);
@@ -1184,6 +1232,31 @@ app.put('/admin/orders/:id/payout', adminAuth.requireAdmin, async (req, res) => 
 app.put('/admin/referrals/:id/payout', adminAuth.requireAdmin, async (req, res) => {
   try {
     res.json(await referralsRepo.markPaid(req.params.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-order referral commissions (referral programme v2). Listed for the
+// admin payout queue, filterable by payout_status; marked paid one row at a
+// time after the bank transfer, like every other payout in this system.
+app.get('/admin/referral-commissions', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const { payoutStatus } = req.query;
+    if (payoutStatus && !['unpaid', 'paid', 'revoked'].includes(payoutStatus)) {
+      return res.status(400).json({ error: "query.payoutStatus must be one of 'unpaid'|'paid'|'revoked'" });
+    }
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const offset = Number(req.query.offset) || 0;
+    res.json(await referralCommissionsRepo.listAll({ payoutStatus, limit, offset }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/admin/referral-commissions/:id/payout', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    res.json(await referralCommissionsRepo.markPaid(req.params.id));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

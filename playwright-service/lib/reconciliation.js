@@ -5,6 +5,7 @@ const ordersRepo = require('./repositories/orders');
 const usersRepo = require('./repositories/users');
 const campaignsRepo = require('./repositories/campaigns');
 const referralsRepo = require('./repositories/referrals');
+const referralCommissionsRepo = require('./repositories/referralCommissions');
 const clawbackRepo = require('./repositories/clawback');
 const { getEffectivePct, splitAmount } = require('./commissionSplit');
 
@@ -144,6 +145,19 @@ async function reconcileOrders({ extraParams = {} } = {}) {
                 tx,
               );
             }
+            const revokedCommission = await referralCommissionsRepo.revokeForOrder(saved.id, tx);
+            if (revokedCommission?.needsClawback) {
+              await clawbackRepo.flag(
+                {
+                  userId: revokedCommission.commission.referrerUserId,
+                  sourceType: 'referralCommission',
+                  sourceId: revokedCommission.commission.id,
+                  previousPayoutStatus: revokedCommission.commission.payoutStatus,
+                  amount: revokedCommission.commission.amount ?? 0,
+                },
+                tx,
+              );
+            }
             const flaggedRewards = await campaignsRepo.reevaluateRewardsForUser(saved.userId, tx);
             for (const reward of flaggedRewards) {
               await clawbackRepo.flag(
@@ -162,13 +176,15 @@ async function reconcileOrders({ extraParams = {} } = {}) {
         });
         upserted += 1;
 
-        // Campaign tiers and referral qualification only care about orders
-        // that actually completed (display_order_status 2) - both calls are
-        // idempotent (UNIQUE constraint / pending-only guard) so re-processing
-        // the same order on a later reconcile run is safe.
+        // Campaign tiers, referral qualification and the referrer's per-order
+        // commission only care about orders that actually completed
+        // (display_order_status 2) - all three calls are idempotent (UNIQUE
+        // constraint / pending-only guard / upsert by order_id) so
+        // re-processing the same order on a later reconcile run is safe.
         if (savedOrder.displayOrderStatus === 2 && savedOrder.userId) {
           await campaignsRepo.grantRewardsForUser(savedOrder.userId);
           await referralsRepo.qualifyIfEligible(savedOrder.userId, savedOrder.id);
+          await referralCommissionsRepo.syncForCompletedOrder(savedOrder);
         }
       }
     }
