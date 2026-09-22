@@ -139,15 +139,29 @@ async function goToNextPage(page) {
 // (even for the default "Tất cả") so the run doesn't depend on whatever tab
 // Shopee's own UI happened to leave selected from a previous session.
 async function selectTab(page, tabName) {
-  const tab = page.getByRole('tab', { name: tabName, exact: true }).first();
+  // Matched by class + substring text rather than role/accessible-name: a
+  // first attempt using getByRole('tab', { name, exact: true }) failed on a
+  // real production run even after waiting for the tab bar to render, most
+  // likely because the tab's computed accessible name carries extra content
+  // (e.g. a count badge) that breaks an exact match. `.rc-tabs-tab` + hasText
+  // only needs the label as a substring, which tolerates that.
+  const tab = page.locator('.rc-tabs-tab', { hasText: tabName }).first();
   try {
     // The tab bar is rendered client-side after the initial page load, so it
     // isn't there yet right after page.goto() - wait for it instead of just
-    // checking count() immediately (which is what produced a false "tab not
-    // found" failure on a real production run).
+    // checking count() immediately.
     await tab.waitFor({ state: 'visible', timeout: 15000 });
   } catch {
-    throw new Error(`product-offer tab "${tabName}" not found on the page`);
+    // Surface what tabs (if any) actually rendered - without this, a
+    // selector mismatch just says "not found" with no way to tell whether
+    // the tab bar rendered at all or rendered with different labels.
+    const seen = await page
+      .locator('.rc-tabs-tab')
+      .allTextContents()
+      .catch(() => []);
+    throw new Error(
+      `product-offer tab "${tabName}" not found on the page (tabs seen: ${seen.length ? seen.join(', ') : 'none'})`
+    );
   }
   await tab.click();
   await page.waitForTimeout(1500);
