@@ -135,7 +135,7 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
 
   return (
     <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-white/95 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2.5 sm:px-6 lg:gap-4">
+      <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-2.5 sm:px-6 lg:gap-6 lg:py-3 xl:gap-8">
         <Button
           type="button"
           aria-label="Mở menu"
@@ -149,16 +149,16 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
         </Button>
 
         <Link href="/" className="flex shrink-0 items-center gap-2">
-          <Image src="/logo.png" alt="Rewally" width={34} height={34} className="rounded-lg" priority />
-          <span className="hidden text-base font-extrabold tracking-tight text-[var(--foreground)] sm:inline">Rewally</span>
+          <Image src="/logo.png" alt="Rewally" width={38} height={38} className="rounded-lg" priority />
+          <span className="hidden text-lg font-extrabold tracking-tight text-[var(--foreground)] sm:inline">Rewally</span>
         </Link>
 
-        <nav className="hidden items-center gap-1 lg:flex">
+        <nav className="hidden items-center gap-2 lg:flex xl:gap-3">
           {NAV.map(({ href, label, icon: Icon, emphasis }) => (
             <Link
               key={href}
               href={href}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-bold transition ${
+              className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-4 py-2 text-[15px] font-bold transition ${
                 isActive(href)
                   ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                   : emphasis
@@ -166,7 +166,7 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
                     : "text-[var(--foreground)] hover:bg-[var(--surface-secondary)]"
               }`}
             >
-              {emphasis && <Icon className="h-3.5 w-3.5" />}
+              {emphasis && <Icon className="h-4 w-4" />}
               {label}
             </Link>
           ))}
@@ -292,7 +292,7 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
 
       {categories.length > 0 && (
         <div className="hidden border-t border-[var(--border)] lg:block">
-          <div className="mx-auto flex max-w-6xl items-center gap-2 overflow-x-auto px-6 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mx-auto flex max-w-7xl items-center gap-2 overflow-x-auto px-6 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {categories.map((category) => (
               <Link key={category} href={`/products?category=${encodeURIComponent(category)}`} className="shrink-0">
                 <Chip variant="soft" size="sm" className="bg-[var(--surface-secondary)] text-[var(--foreground)]">
