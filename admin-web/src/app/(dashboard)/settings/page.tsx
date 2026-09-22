@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, Card, Chip, Input, Label, TextArea, TextField } from "@heroui/react";
+import { Button, Card, Chip, Input, Label, ListBox, Select, TextArea, TextField } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
 
 type Settings = {
@@ -10,7 +10,9 @@ type Settings = {
   productOfferMaxPages?: number | null;
 };
 
-type SyncResult = { pagesVisited: number; scraped: number; saved: number };
+type SyncResult = { pagesVisited: number; scraped: number; saved: number; stoppedEarly: string | null };
+
+const SORT_LABELS = ["Liên quan", "Hoa hồng (%)", "Bán chạy", "Giá: Thấp đến Cao"];
 
 type SyncStatus = {
   status: "idle" | "running" | "done" | "error";
@@ -153,6 +155,10 @@ function ProductOfferMaxPagesSection() {
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState("");
   const [syncMsg, setSyncMsg] = useState("");
+  const [tabName, setTabName] = useState("");
+  const [startPage, setStartPage] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [sortLabel, setSortLabel] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -166,7 +172,8 @@ function ProductOfferMaxPagesSection() {
   const describeStatus = useCallback((status: SyncStatus) => {
     if (status.status === "done" && status.result) {
       const r = status.result;
-      return `Xong: ${r.pagesVisited} trang, cào được ${r.scraped} sản phẩm, lưu ${r.saved} sản phẩm.`;
+      const base = `Xong: ${r.pagesVisited} trang, cào được ${r.scraped} sản phẩm, lưu ${r.saved} sản phẩm.`;
+      return r.stoppedEarly ? `${base} (dừng sớm: ${r.stoppedEarly})` : base;
     }
     if (status.status === "error") return status.error || "Chạy cào thất bại";
     return "Đang cào dữ liệu, có thể mất vài phút...";
@@ -230,7 +237,12 @@ function ProductOfferMaxPagesSection() {
     setSyncing(true);
     setSyncMsg("Đang cào dữ liệu, có thể mất vài phút...");
     try {
-      const status = await clientApi.post<SyncStatus>("/api/product-offer-sync", {});
+      const status = await clientApi.post<SyncStatus>("/api/product-offer-sync", {
+        tabName: tabName.trim() || undefined,
+        startPage: startPage ? Number(startPage) : undefined,
+        searchText: searchText.trim() || undefined,
+        sortLabel: searchText.trim() ? sortLabel || undefined : undefined,
+      });
       if (status.status !== "running") {
         setSyncing(false);
         setSyncMsg(describeStatus(status));
@@ -258,7 +270,46 @@ function ProductOfferMaxPagesSection() {
         </Button>
       </div>
       {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
-      <div className="mt-4 border-t border-[var(--border)] pt-3">
+      <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+        <p className="text-xs text-[var(--muted)]">
+          Tuỳ chọn cho lần chạy tay này (không áp dụng cho lịch tự động 6h sáng):
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <TextField name="tabName" value={tabName} onChange={setTabName} className="w-56" aria-label="Tab danh mục">
+            <Label className="text-xs">Tab danh mục</Label>
+            <Input placeholder="Tất cả (mặc định)" />
+          </TextField>
+          <TextField name="startPage" value={startPage} onChange={setStartPage} className="w-32" aria-label="Bắt đầu từ trang">
+            <Label className="text-xs">Bắt đầu từ trang</Label>
+            <Input placeholder="1" />
+          </TextField>
+          <TextField name="searchText" value={searchText} onChange={setSearchText} className="w-56" aria-label="Tìm kiếm">
+            <Label className="text-xs">Tìm kiếm</Label>
+            <Input placeholder="Để trống nếu không tìm" />
+          </TextField>
+          {searchText.trim() && (
+            <Select
+              aria-label="Sắp xếp theo"
+              selectedKey={sortLabel}
+              onSelectionChange={(key) => setSortLabel(String(key ?? ""))}
+            >
+              <Label className="text-xs">Sắp xếp theo</Label>
+              <Select.Trigger className="min-w-[160px]">
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  {SORT_LABELS.map((label) => (
+                    <ListBox.Item key={label} id={label}>
+                      {label}
+                    </ListBox.Item>
+                  ))}
+                </ListBox>
+              </Select.Popover>
+            </Select>
+          )}
+        </div>
         <Button variant="outline" onPress={syncNow} isPending={syncing}>
           Chạy cào ngay
         </Button>

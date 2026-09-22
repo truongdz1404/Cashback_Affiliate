@@ -13,18 +13,8 @@ const MAX_PAGES = parseInt(process.env.PRODUCT_OFFER_MAX_PAGES || '3', 10);
 // itself takes.
 const PAGE_DELAY_MS = parseInt(process.env.PRODUCT_OFFER_PAGE_DELAY_MS || '4000', 10);
 
-/**
- * Selects every product on the current page, opens the "Link Hoa hồng Sản
- * phẩm" bulk modal, submits it with Sub_id fields left blank (this is a
- * scheduled sync, not a per-user tracked link), and waits for the response
- * that carries the generated CSV's download URL - matched by JSON shape
- * (`{ code: 0, data: { result: "...csv" } }`) rather than by URL, since the
- * exact endpoint path wasn't confirmed ahead of time.
- *
- * NOTE: if Shopee changes this page's markup this is the first thing to
- * re-check - run `npx playwright codegen https://affiliate.shopee.vn/offer/product_offer`
- * (logged in, in your own browser) to inspect the live DOM.
- */
+const DEFAULT_TAB_NAME = 'Tất cả';
+
 /**
  * Best-effort product image capture. Shopee's own CSV export (what
  * scrapeCurrentPage below uses for name/price/commission) has no image
@@ -53,6 +43,27 @@ async function scrapeImageMap(page) {
   } catch {
     return [];
   }
+}
+
+// The CSV download (a plain GET, not the page's own JS) has been observed to
+// fail with a raw connection-level error ("socket hang up") rather than a
+// normal HTTP error status - transient, so a couple of retries with a short
+// pause clear it up without needing to abandon the whole run.
+async function fetchCsvText(page, csvUrl, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const csvResponse = await page.context().request.get(csvUrl);
+      if (!csvResponse.ok()) {
+        throw new Error(`product-offer CSV download failed with status ${csvResponse.status()}`);
+      }
+      return (await csvResponse.body()).toString('utf8');
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) await page.waitForTimeout(2000);
+    }
+  }
+  throw lastErr;
 }
 
 async function scrapeCurrentPage(page) {
@@ -92,11 +103,7 @@ async function scrapeCurrentPage(page) {
   const json = await response.json();
   const csvUrl = encodeURI(json.data.result);
 
-  const csvResponse = await page.context().request.get(csvUrl);
-  if (!csvResponse.ok()) {
-    throw new Error(`product-offer CSV download failed with status ${csvResponse.status()}`);
-  }
-  const csvText = (await csvResponse.body()).toString('utf8');
+  const csvText = await fetchCsvText(page, csvUrl);
 
   await browserManager.dismissBlockingModals(page);
 
@@ -123,6 +130,66 @@ async function goToNextPage(page) {
   return true;
 }
 
+// Category tabs above the product grid (confirmed against a live DOM dump:
+// `rc-tabs-tab-btn` elements, e.g. "Tất cả", "Bán chạy nhất", "Hoa hồng
+// Xtra", plus one tab per Shopee category). Matched by visible label text
+// rather than the underlying tab id, since those ids are Shopee category ids
+// that aren't guaranteed stable across accounts/time, while the label is
+// what an admin actually sees and picks from. Always clicks exactly once
+// (even for the default "Tất cả") so the run doesn't depend on whatever tab
+// Shopee's own UI happened to leave selected from a previous session.
+async function selectTab(page, tabName) {
+  const tab = page.getByRole('tab', { name: tabName, exact: true });
+  if ((await tab.count()) === 0) {
+    throw new Error(`product-offer tab "${tabName}" not found on the page`);
+  }
+  await tab.first().click();
+  await page.waitForTimeout(1500);
+  await browserManager.dismissBlockingModals(page);
+}
+
+// Free-text search box above the grid (`input[placeholder="Tìm kiếm tất cả
+// sản phẩm Shopee"]` + a "Tìm kiếm" submit button next to it - not a real
+// <button>, just a clickable div, confirmed against a live DOM dump).
+async function performSearch(page, searchText, sortLabel) {
+  const searchInput = page.getByPlaceholder('Tìm kiếm tất cả sản phẩm Shopee');
+  await searchInput.fill(searchText);
+  await page.locator('.ant-input-group-addon', { hasText: 'Tìm kiếm' }).first().click();
+  await page.waitForTimeout(1500);
+  await browserManager.dismissBlockingModals(page);
+
+  // The "Sắp xếp theo" (sort) filter only appears once a search has been
+  // run - matched by the sort option's own visible label text ("Liên quan",
+  // "Hoa hồng (%)", "Bán chạy", "Giá: Thấp đến Cao"), same reasoning as
+  // selectTab above. Left alone (Shopee's own default, "Liên quan") if no
+  // sortLabel is given.
+  if (sortLabel) {
+    const sortOption = page.locator('label.ant-radio-button-wrapper', { hasText: sortLabel });
+    if ((await sortOption.count()) === 0) {
+      throw new Error(`product-offer sort option "${sortLabel}" not found on the page`);
+    }
+    await sortOption.first().click();
+    await page.waitForTimeout(1500);
+  }
+}
+
+// Walks the pager forward to `startPage` before any scraping begins, at the
+// same pace as goToNextPage between real scraped pages (see
+// runProductOfferSync's own comment on why: hammering the pager with no
+// delay risks the same anti-fraud rejections customLink.js documents
+// elsewhere). Returns how many pages it actually reached, which can be less
+// than requested if the pager runs out first (e.g. a narrow search).
+async function skipToStartPage(page, startPage) {
+  let reached = 1;
+  while (reached < startPage) {
+    const moved = await goToNextPage(page);
+    if (!moved) break;
+    reached++;
+    await page.waitForTimeout(PAGE_DELAY_MS);
+  }
+  return reached;
+}
+
 /**
  * Drives the real product_offer page like a user would (same reasoning as
  * customLink.js's getCustomLinksViaBrowser: Shopee's own page JS should
@@ -131,12 +198,29 @@ async function goToNextPage(page) {
  * documents a raw-fetch approach that skipped these tokens as a suspected
  * contributor to commission-fraud rejections on this account; hammering
  * every page back-to-back with no delay would risk the same thing.
+ *
+ * Each page's products are saved to the DB as soon as that page is scraped,
+ * rather than batching everything to the end - a transient failure on a
+ * later page (the CSV download has been seen to fail outright with a
+ * connection-level "socket hang up") then only costs that page's data
+ * instead of discarding every page already gathered in this run. Such a
+ * failure stops the run early but still returns normally (`stoppedEarly`
+ * describes why) rather than throwing, since a partial result that's
+ * already safely saved isn't a failure worth alarming an admin over.
  */
-async function runProductOfferSync({ maxPages = MAX_PAGES } = {}) {
+async function runProductOfferSync({
+  maxPages = MAX_PAGES,
+  tabName,
+  startPage = 1,
+  searchText,
+  sortLabel,
+} = {}) {
   const context = await browserManager.getContext();
   const page = await context.newPage();
-  const collected = [];
   let pagesVisited = 0;
+  let totalScraped = 0;
+  let totalSaved = 0;
+  let stoppedEarly = null;
 
   try {
     await page.goto(PRODUCT_OFFER_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -144,8 +228,28 @@ async function runProductOfferSync({ maxPages = MAX_PAGES } = {}) {
       throw new Error('Not logged in - call POST /login with valid cookies first.');
     }
 
-    for (let i = 0; i < maxPages; i++) {
-      collected.push(...(await scrapeCurrentPage(page)));
+    await selectTab(page, (tabName && tabName.trim()) || DEFAULT_TAB_NAME);
+    if (searchText && searchText.trim()) {
+      await performSearch(page, searchText.trim(), sortLabel);
+    }
+    if (startPage > 1) {
+      const reached = await skipToStartPage(page, startPage);
+      if (reached < startPage) {
+        stoppedEarly = `only ${reached} page(s) available, could not reach start page ${startPage}`;
+      }
+    }
+
+    for (let i = 0; i < maxPages && !stoppedEarly; i++) {
+      let pageProducts;
+      try {
+        pageProducts = await scrapeCurrentPage(page);
+      } catch (err) {
+        stoppedEarly = err.message;
+        break;
+      }
+
+      totalScraped += pageProducts.length;
+      totalSaved += await shoppingProductsRepo.upsertMany(pageProducts);
       pagesVisited++;
 
       if (i < maxPages - 1) {
@@ -158,8 +262,7 @@ async function runProductOfferSync({ maxPages = MAX_PAGES } = {}) {
     await page.close().catch(() => {});
   }
 
-  const saved = await shoppingProductsRepo.upsertMany(collected);
-  return { pagesVisited, scraped: collected.length, saved };
+  return { pagesVisited, scraped: totalScraped, saved: totalSaved, stoppedEarly };
 }
 
 module.exports = { runProductOfferSync };

@@ -16,12 +16,12 @@ function getStatus() {
 // No-ops (returns the current/running state as-is) if a run is already in
 // progress - runProductOfferSync drives a single shared Playwright page, so
 // two overlapping runs would fight over the same browser tab.
-function start(maxPages) {
+function start(options) {
   if (state.status === 'running') return getStatus();
 
   state = { status: 'running', startedAt: new Date().toISOString(), finishedAt: null, result: null, error: null };
 
-  runProductOfferSync({ maxPages })
+  runProductOfferSync(options)
     .then((result) => {
       state = { ...state, status: 'done', finishedAt: new Date().toISOString(), result };
       console.log(`product-offer-sync: ${JSON.stringify(result)}`);

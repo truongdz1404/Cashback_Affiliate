@@ -1032,7 +1032,16 @@ app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
 app.post('/admin/product-offer-sync', adminAuth.requireAdmin, async (req, res) => {
   try {
     const maxPages = req.body?.maxPages ? Number(req.body.maxPages) : await settingsRepo.getProductOfferMaxPages();
-    res.status(202).json(productOfferSyncJob.start(maxPages));
+    const { tabName, startPage, searchText, sortLabel } = req.body || {};
+    res.status(202).json(
+      productOfferSyncJob.start({
+        maxPages,
+        tabName: tabName || undefined,
+        startPage: startPage ? Number(startPage) : undefined,
+        searchText: searchText || undefined,
+        sortLabel: sortLabel || undefined,
+      })
+    );
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
@@ -1236,7 +1245,7 @@ cron.schedule('*/30 * * * *', () => {
 cron.schedule('0 6 * * *', async () => {
   try {
     const maxPages = await settingsRepo.getProductOfferMaxPages();
-    productOfferSyncJob.start(maxPages);
+    productOfferSyncJob.start({ maxPages });
   } catch (err) {
     console.error('cron product-offer-sync failed', err.message);
   }
