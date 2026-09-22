@@ -13,6 +13,7 @@ import {
   LogoutIcon,
   MegaphoneIcon,
   ReceiptIcon,
+  SlidersIcon,
   UsersIcon,
   WalletIcon,
 } from "@/components/icons";
@@ -28,6 +29,7 @@ const LINKS = [
   { href: "/admin/banners", label: "Banner", icon: ImageIcon },
   { href: "/admin/withdrawals", label: "Rút tiền", icon: WalletIcon },
   { href: "/admin/referrals", label: "Giới thiệu", icon: GiftIcon },
+  { href: "/admin/app-config", label: "Cấu hình app", icon: SlidersIcon },
   { href: "/admin/settings", label: "Cài đặt", icon: GearIcon },
 ];
 

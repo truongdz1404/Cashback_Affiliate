@@ -13,6 +13,7 @@ const usersRepo = require('./lib/repositories/users');
 const linksRepo = require('./lib/repositories/links');
 const ordersRepo = require('./lib/repositories/orders');
 const settingsRepo = require('./lib/repositories/settings');
+const appConfigRepo = require('./lib/repositories/appConfig');
 const campaignsRepo = require('./lib/repositories/campaigns');
 const bannersRepo = require('./lib/repositories/banners');
 const referralsRepo = require('./lib/repositories/referrals');
@@ -193,6 +194,35 @@ app.get('/app/oauth-config', async (req, res) => {
       google: googleClientId ? { enabled: true, clientId: googleClientId } : { enabled: false },
       facebook: facebookAppId ? { enabled: true, appId: facebookAppId } : { enabled: false },
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remote config for the mobile app. Two routes on purpose:
+//
+//   GET /app/config/version -> { version }   (tiny, called on every launch)
+//   GET /app/config         -> { version, updatedAt, config }
+//
+// The app keeps the last document in AsyncStorage together with its version.
+// On launch (and when coming back to the foreground) it asks for the version
+// only; if that matches the cached one it stops there and spends no bandwidth.
+// Everything else is public marketing/config data, so no auth is required -
+// the login screen and the force-update gate both need it before a user
+// exists.
+app.get('/app/config/version', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json({ version: await appConfigRepo.getVersion() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/config', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await appConfigRepo.getPayload());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -498,7 +528,8 @@ app.get('/app/orders', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
-const MIN_WITHDRAW_AMOUNT = 50000;
+// Configurable in the admin dashboard (settings key `min_withdraw_amount`);
+// 50000 is only the fallback when the row has never been written.
 // How long the HTTP request waits for the worker to finish processing before
 // falling back to 202/processing - the worker's own work is just a couple of
 // DB round trips so this comfortably covers normal cases while still
@@ -510,10 +541,11 @@ app.get('/app/wallet', appAuth.requireAppUser, async (req, res) => {
   try {
     const { summary, available } = await availableAmountForUser(req.appUserId);
     const pendingWithdrawal = (await withdrawalsRepo.latestPendingForUser(req.appUserId)) ?? null;
+    const minWithdrawAmount = await settingsRepo.getMinWithdrawAmount();
     res.json({
       ...summary,
       availableAmount: available,
-      minWithdrawAmount: MIN_WITHDRAW_AMOUNT,
+      minWithdrawAmount,
       pendingWithdrawal,
     });
   } catch (err) {
@@ -538,8 +570,9 @@ app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: 'body.amount must be a positive number' });
     }
-    if (amount < MIN_WITHDRAW_AMOUNT) {
-      return res.status(400).json({ error: `so tien toi thieu la ${MIN_WITHDRAW_AMOUNT}` });
+    const minWithdrawAmount = await settingsRepo.getMinWithdrawAmount();
+    if (amount < minWithdrawAmount) {
+      return res.status(400).json({ error: `so tien toi thieu la ${minWithdrawAmount}` });
     }
 
     const user = await usersRepo.getById(req.appUserId);
@@ -1102,6 +1135,7 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
       referralCommissionPct: await settingsRepo.getReferralCommissionPct(),
       referralCommissionMonths: await settingsRepo.getReferralCommissionMonths(),
       productOfferMaxPages: await settingsRepo.getProductOfferMaxPages(),
+      minWithdrawAmount: await settingsRepo.getMinWithdrawAmount(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1146,7 +1180,42 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
       }
       response.productOfferMaxPages = await settingsRepo.setProductOfferMaxPages(pages);
     }
+    if (req.body.minWithdrawAmount !== undefined) {
+      const amount = Number(req.body.minWithdrawAmount);
+      if (!Number.isInteger(amount) || amount < 0 || amount > 100000000) {
+        return res.status(400).json({ error: 'body.minWithdrawAmount must be an integer between 0 and 100000000' });
+      }
+      response.minWithdrawAmount = await settingsRepo.setMinWithdrawAmount(amount);
+    }
     res.json(response);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Editable mobile-app config document. GET returns what is stored plus the
+// built-in defaults, so the dashboard can offer a "reset to default" per
+// section; PUT runs the same validator the app-facing route reads through, so
+// a bad edit can never reach a device.
+app.get('/admin/app-config', adminAuth.requireAdmin, async (_req, res) => {
+  try {
+    res.json({
+      version: await appConfigRepo.getVersion(),
+      config: await appConfigRepo.getDocument(),
+      defaults: appConfigRepo.DEFAULTS,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/admin/app-config', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ error: 'body must be a config object' });
+    }
+    const config = await appConfigRepo.saveDocument(req.body.config ?? req.body);
+    res.json({ version: await appConfigRepo.getVersion(), config });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

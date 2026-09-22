@@ -22,6 +22,11 @@ const REFERRAL_COMMISSION_MONTHS_KEY = 'referral_commission_months';
 // PRODUCT_OFFER_MAX_PAGES env var when nothing's been configured here yet.
 const DEFAULT_PRODUCT_OFFER_MAX_PAGES = parseInt(process.env.PRODUCT_OFFER_MAX_PAGES || '3', 10);
 const PRODUCT_OFFER_MAX_PAGES_KEY = 'product_offer_max_pages';
+// Smallest withdrawal a user may request, in VND. Used by the HTTP route, by
+// worker/withdrawalWorker.js as a backstop, and surfaced to the app through
+// GET /app/wallet and GET /app/config.
+const DEFAULT_MIN_WITHDRAW_AMOUNT = 50000;
+const MIN_WITHDRAW_AMOUNT_KEY = 'min_withdraw_amount';
 
 async function getNumber(key, fallback) {
   const row = await prisma.setting.findUnique({ where: { key } });
@@ -83,6 +88,16 @@ async function setProductOfferMaxPages(pages) {
   return getProductOfferMaxPages();
 }
 
+async function getMinWithdrawAmount() {
+  const value = await getNumber(MIN_WITHDRAW_AMOUNT_KEY, DEFAULT_MIN_WITHDRAW_AMOUNT);
+  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_MIN_WITHDRAW_AMOUNT;
+}
+
+async function setMinWithdrawAmount(amount) {
+  await setNumber(MIN_WITHDRAW_AMOUNT_KEY, amount);
+  return getMinWithdrawAmount();
+}
+
 module.exports = {
   getCommissionPct,
   setCommissionPct,
@@ -99,4 +114,12 @@ module.exports = {
   getProductOfferMaxPages,
   setProductOfferMaxPages,
   DEFAULT_PRODUCT_OFFER_MAX_PAGES,
+  getMinWithdrawAmount,
+  setMinWithdrawAmount,
+  DEFAULT_MIN_WITHDRAW_AMOUNT,
+  MIN_WITHDRAW_AMOUNT_KEY,
+  COMMISSION_PCT_KEY,
+  REFERRAL_REWARD_KEY,
+  REFERRAL_COMMISSION_PCT_KEY,
+  REFERRAL_COMMISSION_MONTHS_KEY,
 };

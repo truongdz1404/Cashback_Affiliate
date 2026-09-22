@@ -2,14 +2,11 @@ require('dotenv').config();
 
 const prisma = require('../lib/prisma');
 const withdrawalsRepo = require('../lib/repositories/withdrawals');
+const settingsRepo = require('../lib/repositories/settings');
 const { availableAmountForUser } = require('../lib/walletBalance');
 const { getConnection } = require('../lib/queue/connection');
 const { WITHDRAWAL_QUEUE, assertTopology } = require('../lib/queue/withdrawalQueue');
 
-// Keep in sync with server.js's MIN_WITHDRAW_AMOUNT - re-validated here only
-// as a defensive backstop; the HTTP route already rejects below-minimum
-// amounts before ever publishing to the queue.
-const MIN_WITHDRAW_AMOUNT = 50000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
 
@@ -40,7 +37,11 @@ async function processWithdrawalRequest({ clientRequestId, userId, amount, metho
       return withdrawalsRepo.createIdempotent({ userId, amount, method, clientRequestId, status: 'rejected' }, tx);
     }
 
-    if (amount < MIN_WITHDRAW_AMOUNT) {
+    // Same admin-configured minimum the HTTP route checked; re-validated here
+    // as a defensive backstop in case the request was published by anything
+    // else, and read per message so an admin change takes effect immediately.
+    const minWithdrawAmount = await settingsRepo.getMinWithdrawAmount();
+    if (amount < minWithdrawAmount) {
       return withdrawalsRepo.createIdempotent({ userId, amount, method, clientRequestId, status: 'rejected' }, tx);
     }
 

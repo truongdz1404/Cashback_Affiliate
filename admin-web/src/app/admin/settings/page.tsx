@@ -10,6 +10,7 @@ type Settings = {
   referralCommissionPct?: number | null;
   referralCommissionMonths?: number | null;
   productOfferMaxPages?: number | null;
+  minWithdrawAmount?: number | null;
 };
 
 type SyncResult = { pagesVisited: number; scraped: number; saved: number; stoppedEarly: string | null };
@@ -231,6 +232,62 @@ function ReferralProgramSection() {
         </Button>
         {msg && <p className="text-xs text-[var(--muted)]">{msg}</p>}
       </div>
+    </SectionCard>
+  );
+}
+
+// Smallest withdrawal the app accepts. Read by the wallet screen (through
+// GET /app/wallet), by the withdraw route and by the withdrawal worker, so
+// one edit here covers all three.
+function MinWithdrawSection() {
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get<Settings>("/api/settings");
+      setAmount(String(data.minWithdrawAmount ?? ""));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      await clientApi.put("/api/settings", { minWithdrawAmount: Number(amount) });
+      setMsg("Đã lưu.");
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionCard title="Số tiền rút tối thiểu" description="Áp dụng cho mọi yêu cầu thanh toán từ app, tính bằng đồng.">
+      <div className="flex items-center gap-2">
+        <TextField
+          name="minWithdrawAmount"
+          value={amount}
+          onChange={(next) => setAmount(next.replace(/[^\d]/g, ""))}
+          className="w-32"
+          aria-label="Số tiền rút tối thiểu"
+        >
+          <Input placeholder="50000" inputMode="numeric" />
+        </TextField>
+        <span className="text-sm text-[var(--muted)]">đ</span>
+        <Button onPress={save} isPending={saving} isDisabled={amount === ""}>
+          Lưu
+        </Button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
     </SectionCard>
   );
 }
@@ -565,6 +622,7 @@ export default function SettingsPage() {
       <h1 className="text-lg font-semibold text-[var(--foreground)]">Cài đặt</h1>
       <CommissionSection />
       <ReferralProgramSection />
+      <MinWithdrawSection />
       <ProductOfferMaxPagesSection />
       <SecretsSection />
       <SessionSection />

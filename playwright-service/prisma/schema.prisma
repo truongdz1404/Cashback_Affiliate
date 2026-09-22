@@ -50,8 +50,11 @@ model User {
 }
 
 model Setting {
-  key   String @id
-  value String
+  key       String   @id
+  value     String
+  // Bumped automatically on every write; the app config version is the newest
+  // updatedAt across the keys the mobile app cares about.
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@map("settings")
 }
