@@ -53,4 +53,20 @@ async function listByUser(userId, { limit = 20, offset = 0 } = {}) {
   });
 }
 
-module.exports = { generateSubId, saveLink, findBySubId, listByUser };
+// Lets the Shopping-tab "open product" route skip re-generating a custom
+// link (a real Shopee/Playwright round trip - see customLink.js) when this
+// user already has one for this item within maxAgeMs. Re-tapping/re-opening
+// the same product shouldn't multiply calls to Shopee's custom_link page.
+async function findRecentByUserAndItem(userId, itemId, maxAgeMs) {
+  if (!itemId) return null;
+  return prisma.link.findFirst({
+    where: {
+      userId: Number(userId),
+      itemId: String(itemId),
+      createdAt: { gte: new Date(Date.now() - maxAgeMs) },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+module.exports = { generateSubId, saveLink, findBySubId, listByUser, findRecentByUserAndItem };

@@ -5,7 +5,10 @@ const { CUSTOM_LINK_URL } = require('./constants');
 
 const STORAGE_STATE_PATH = process.env.STORAGE_STATE_PATH || './storage/storageState.json';
 const HEADLESS = process.env.HEADLESS !== 'false';
-const CUSTOM_LINK_POOL_SIZE = parseInt(process.env.CUSTOM_LINK_POOL_SIZE || '2', 10);
+// Bumped from 2 now that the Shopping tab also mints links through this pool
+// on every product tap (server.js POST /app/shopping-products/:id/open), on
+// top of the original /app/link "Tạo link" traffic.
+const CUSTOM_LINK_POOL_SIZE = parseInt(process.env.CUSTOM_LINK_POOL_SIZE || '4', 10);
 
 let browser = null;
 let context = null;

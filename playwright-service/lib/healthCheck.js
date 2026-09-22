@@ -13,7 +13,7 @@ const SERVICES = [
   { name: 'nginx + refundmoney.tro247.online', type: 'http', url: 'https://refundmoney.tro247.online/' },
   { name: 'nginx + n8n.tro247.online',         type: 'http', url: 'https://n8n.tro247.online/' },
   { name: 'PostgreSQL shopee-affiliate',       type: 'tcp',  host: 'shopee-affiliate-db', port: 5432 },
-  { name: 'PostgreSQL tro247 [:5432]',         type: 'tcp',  host: '103.161.17.137',      port: 5432 },
+  { name: 'PostgreSQL tro247 [:5432]',         type: 'tcp',  host: '42.96.13.38',      port: 5432 },
   { name: 'Zalo Bot API',                      type: 'zalo' },
 ];
 
@@ -92,8 +92,8 @@ async function sendAlert(items, subject, emoji) {
     from: `"VPS Monitor 247" <${from}>`,
     to,
     subject: `${emoji} ${subject}`,
-    text:  `${subject}\nThoi gian: ${now}\nVPS: 103.161.17.137\n\n${textList}`,
-    html:  `<h2>${emoji} ${subject}</h2><p>Thoi gian: <strong>${now}</strong> | VPS: 103.161.17.137</p><ul>${htmlList}</ul>`,
+    text:  `${subject}\nThoi gian: ${now}\nVPS: 42.96.13.38\n\n${textList}`,
+    html:  `<h2>${emoji} ${subject}</h2><p>Thoi gian: <strong>${now}</strong> | VPS: 42.96.13.38</p><ul>${htmlList}</ul>`,
   });
   console.log(`health-check: alert email sent to ${to}`);
 }
@@ -136,14 +136,14 @@ async function runHealthCheck() {
   if (newlyDown.length || reAlerts.length) {
     await sendAlert(
       [...newlyDown, ...reAlerts],
-      `[${newlyDown.length + reAlerts.length} dich vu loi] VPS 103.161.17.137`,
+      `[${newlyDown.length + reAlerts.length} dich vu loi] VPS 42.96.13.38`,
       '🚨'
     ).catch(err => console.error('health-check: email error', err.message));
   }
   if (recovered.length) {
     await sendAlert(
       recovered,
-      `[${recovered.length} dich vu phuc hoi] VPS 103.161.17.137`,
+      `[${recovered.length} dich vu phuc hoi] VPS 42.96.13.38`,
       '✅'
     ).catch(err => console.error('health-check: recovery email error', err.message));
   }

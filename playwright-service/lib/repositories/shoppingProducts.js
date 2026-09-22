@@ -76,4 +76,8 @@ async function remove(id) {
   }
 }
 
-module.exports = { upsertMany, list, count, remove };
+async function getById(id) {
+  return prisma.shoppingProduct.findUnique({ where: { id: Number(id) } });
+}
+
+module.exports = { upsertMany, list, count, remove, getById };

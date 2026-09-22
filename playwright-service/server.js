@@ -663,6 +663,66 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
+// A ShoppingProduct's own offerUrl/productUrl is scraped ONCE per day and is
+// identical for every app user (see lib/productOfferScraper.js) - unlike the
+// "Tạo link" flow, it carries no per-user subId, so a resulting Shopee order
+// can never be matched back to a userId in reconciliation.js (order.subId
+// only ever resolves through the Link table). This route mints a real
+// per-user tracked link on tap, the same way POST /app/link does, so the app
+// can redirect through THAT instead of the static scraped url.
+//
+// Repeat taps on the same product reuse a link generated in the last
+// SHOPPING_LINK_REUSE_WINDOW_MS instead of hitting Shopee's custom_link page
+// again - re-browsing/re-opening a product shouldn't multiply real Playwright
+// calls, since link generation shares a small page pool with /app/link
+// (CUSTOM_LINK_POOL_SIZE in lib/browserManager.js) and Shopee's own
+// anti-fraud flagging cares about automated-looking call volume, not just
+// correctness.
+const SHOPPING_LINK_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const product = await shoppingProductsRepo.getById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'not_found' });
+    if (!product.productUrl) return res.status(422).json({ error: 'product has no source url' });
+
+    const user = await usersRepo.getById(req.appUserId);
+    const pct = await getEffectivePct(user);
+    const estimate = product.commissionValue != null
+      ? {
+          userAmount: (product.commissionValue * pct) / 100,
+          userPct: product.commissionRateValue != null ? (product.commissionRateValue * pct) / 100 : null,
+        }
+      : null;
+
+    const reused = await linksRepo.findRecentByUserAndItem(req.appUserId, product.productId, SHOPPING_LINK_REUSE_WINDOW_MS);
+    if (reused && reused.affiliateUrl) {
+      return res.json({ affiliateUrl: reused.affiliateUrl, estimate, reused: true });
+    }
+
+    const tracking = await linkTracking.prepareSubId(user.zaloUserId, undefined);
+    const result = await getCustomLinks([product.productUrl], tracking.finalSubIds);
+    const first = (result.results || [])[0] || null;
+    const affiliateUrl = first ? first.shortLink || first.longLink : null;
+
+    if (tracking.userId && affiliateUrl) {
+      await linkTracking.recordLink(tracking.userId, tracking.subId, [product.productUrl], result, product.productId, estimate, {
+        itemName: product.name,
+        catId: null,
+        catName: product.category,
+        shopName: product.shopName,
+        priceValue: product.priceValue,
+        imageUrl: product.imageUrl,
+      });
+    }
+
+    if (!affiliateUrl) return res.status(502).json({ error: 'could not generate affiliate link' });
+    res.json({ affiliateUrl, estimate, reused: false });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // "Gợi ý cho bạn" on the Home tab - see lib/repositories/recommendations.js
 // for how this is scored off the user's "Tạo link" history.
 app.get('/app/recommendations', appAuth.requireAppUser, async (req, res) => {
