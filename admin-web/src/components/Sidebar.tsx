@@ -16,14 +16,14 @@ import {
 } from "@/components/icons";
 
 const LINKS = [
-  { href: "/", label: "Tổng quan", icon: GridIcon },
-  { href: "/orders", label: "Đơn hàng", icon: ReceiptIcon },
-  { href: "/customers", label: "Khách hàng", icon: UsersIcon },
-  { href: "/campaigns", label: "Sự kiện", icon: MegaphoneIcon },
-  { href: "/products", label: "Sản phẩm", icon: BagIcon },
-  { href: "/banners", label: "Banner", icon: ImageIcon },
-  { href: "/withdrawals", label: "Rút tiền", icon: WalletIcon },
-  { href: "/settings", label: "Cài đặt", icon: GearIcon },
+  { href: "/admin", label: "Tổng quan", icon: GridIcon },
+  { href: "/admin/orders", label: "Đơn hàng", icon: ReceiptIcon },
+  { href: "/admin/customers", label: "Khách hàng", icon: UsersIcon },
+  { href: "/admin/campaigns", label: "Sự kiện", icon: MegaphoneIcon },
+  { href: "/admin/products", label: "Sản phẩm", icon: BagIcon },
+  { href: "/admin/banners", label: "Banner", icon: ImageIcon },
+  { href: "/admin/withdrawals", label: "Rút tiền", icon: WalletIcon },
+  { href: "/admin/settings", label: "Cài đặt", icon: GearIcon },
 ];
 
 export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
@@ -32,7 +32,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   async function logout() {
     await clientApi.post("/api/logout");
-    router.replace("/login");
+    router.replace("/admin/login");
     router.refresh();
   }
 
@@ -50,7 +50,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       <nav className="flex-1 space-y-1 px-3">
         {LINKS.map((l) => {
-          const active = l.href === "/" ? pathname === "/" : pathname.startsWith(l.href);
+          const active = l.href === "/admin" ? pathname === "/admin" : pathname.startsWith(l.href);
           const Icon = l.icon;
           return (
             <Link

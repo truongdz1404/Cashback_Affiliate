@@ -32,11 +32,16 @@ const SORTS = {
 // columns) - the caller (server.js) is responsible for converting a user-
 // facing "what I actually get" range into this raw scale via the user's
 // effective commission %, since that % varies per user and isn't stored here.
-function buildWhere({ search, minPrice, maxPrice, minCommissionRateValue, maxCommissionRateValue, minCommissionValue, maxCommissionValue }) {
+function buildWhere({ search, minPrice, maxPrice, minCommissionRateValue, maxCommissionRateValue, minCommissionValue, maxCommissionValue, category, isBestSeller, isXtraCommission }) {
   const where = {};
   if (search && search.trim()) {
     where.name = { contains: search.trim(), mode: 'insensitive' };
   }
+  if (category) where.category = category;
+  // Only narrow on `true` - `false` would exclude rows scraped before these
+  // pseudo-tags existed rather than meaning anything useful.
+  if (isBestSeller === true) where.isBestSeller = true;
+  if (isXtraCommission === true) where.isXtraCommission = true;
   if (minPrice != null || maxPrice != null) {
     where.priceValue = {};
     if (minPrice != null) where.priceValue.gte = minPrice;
@@ -66,6 +71,22 @@ async function list({ limit = 20, offset = 0, sort, ...filters } = {}) {
 
 async function count(filters = {}) {
   return prisma.shoppingProduct.count({ where: buildWhere(filters) });
+}
+
+// Real Shopee taxonomy only, straight out of the `category` column - the
+// column is backfilled gradually by lib/categoryEnrichment.js, so this
+// legitimately returns few or no rows early on and callers must handle that
+// rather than fall back to an invented taxonomy.
+async function listCategories({ minCount = 1 } = {}) {
+  const rows = await prisma.shoppingProduct.groupBy({
+    by: ['category'],
+    where: { category: { not: null } },
+    _count: { category: true },
+    orderBy: { _count: { category: 'desc' } },
+  });
+  return rows
+    .filter((r) => r.category && r._count.category >= minCount)
+    .map((r) => ({ category: r.category, count: r._count.category }));
 }
 
 async function remove(id) {
@@ -112,4 +133,4 @@ async function ensureExists(productId, meta, commissionTable) {
   return true;
 }
 
-module.exports = { upsertMany, list, count, remove, getById, ensureExists };
+module.exports = { upsertMany, list, count, listCategories, remove, getById, ensureExists };

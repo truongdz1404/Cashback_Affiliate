@@ -587,7 +587,12 @@ app.get('/app/banks', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
-app.get('/app/banners', appAuth.requireAppUser, async (_req, res) => {
+// Banners/campaigns/shopping-products use optionalAppUser instead of
+// requireAppUser: the public website (admin-web) has to show real content to
+// logged-out visitors, otherwise its home page can only ever be a static
+// brochure. A token, when present, still unlocks the personalized behaviour
+// below.
+app.get('/app/banners', appAuth.optionalAppUser, async (_req, res) => {
   try {
     res.json(await bannersRepo.listActive());
   } catch (err) {
@@ -595,17 +600,21 @@ app.get('/app/banners', appAuth.requireAppUser, async (_req, res) => {
   }
 });
 
-app.get('/app/campaigns', appAuth.requireAppUser, async (req, res) => {
+app.get('/app/campaigns', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 100);
     const offset = Number(req.query.offset) || 0;
-    res.json(await campaignsRepo.viewForUser(req.appUserId, { limit, offset }));
+    // viewForUser() joins per-user reward/progress rows, which need a real
+    // userId - anonymous visitors get the same campaigns with empty progress.
+    res.json(req.appUserId
+      ? await campaignsRepo.viewForUser(req.appUserId, { limit, offset })
+      : await campaignsRepo.viewForAnonymous({ limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
+app.get('/app/shopping-products', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const offset = Number(req.query.offset) || 0;
@@ -613,8 +622,14 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
     const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
     const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
     const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+    const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
+    const parseBool = (v) => (v === undefined ? undefined : v === 'true' || v === '1');
+    const isBestSeller = parseBool(req.query.bestSeller);
+    const isXtraCommission = parseBool(req.query.xtra);
 
-    const user = await usersRepo.getById(req.appUserId);
+    // getEffectivePct(null) falls back to the global commission_pct setting,
+    // so anonymous visitors see the default cashback split.
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
     const pct = await getEffectivePct(user);
 
     // minCommissionPct/maxCommissionPct/minCommissionAmount/maxCommissionAmount
@@ -634,13 +649,19 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
     // Otherwise (plain browse, or a search with no filter) the list is
     // personalized: matches float to the top, non-matches just sink instead
     // of disappearing. See lib/repositories/recommendations.js.
+    // Anonymous visitors are forced down this path too: personalized ranking
+    // needs a userId to score against.
     const hasFilter =
+      req.appUserId == null ||
       minPrice != null ||
       maxPrice != null ||
       minCommissionRateValue != null ||
       maxCommissionRateValue != null ||
       minCommissionValue != null ||
       maxCommissionValue != null ||
+      category != null ||
+      isBestSeller != null ||
+      isXtraCommission != null ||
       (sort != null && sort !== 'newest');
 
     const products = hasFilter
@@ -654,11 +675,14 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
           maxCommissionRateValue,
           minCommissionValue,
           maxCommissionValue,
+          category,
+          isBestSeller,
+          isXtraCommission,
           sort,
         })
       : await recommendationsRepo.rankProductsForUser(req.appUserId, { search, limit, offset });
 
-    if (search) {
+    if (search && req.appUserId) {
       // Fire-and-forget: feeds the "session-based" signal in buildAffinity()
       // (lib/repositories/recommendations.js), never blocks/fails the response.
       searchHistoryRepo.record(req.appUserId, search).catch(() => {});
@@ -669,6 +693,53 @@ app.get('/app/shopping-products', appAuth.requireAppUser, async (req, res) => {
       userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,
       userCommissionValue: p.commissionValue != null ? (p.commissionValue * pct) / 100 : null,
     })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The listing route above returns a bare array with no total, which is fine
+// for the app's infinite scroll but not for the website's "N sản phẩm" /
+// numbered pagination. Same filter params, count only.
+app.get('/app/shopping-products/count', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
+    const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
+    const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
+    const parseBool = (v) => (v === undefined ? undefined : v === 'true' || v === '1');
+
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
+    const pct = await getEffectivePct(user);
+    const toRaw = (userFacing) => (userFacing != null && pct > 0 ? (userFacing * 100) / pct : undefined);
+
+    res.json({
+      total: await shoppingProductsRepo.count({
+        search,
+        minPrice,
+        maxPrice,
+        category,
+        isBestSeller: parseBool(req.query.bestSeller),
+        isXtraCommission: parseBool(req.query.xtra),
+        minCommissionRateValue: toRaw(req.query.minCommissionPct !== undefined ? Number(req.query.minCommissionPct) : undefined),
+        maxCommissionRateValue: toRaw(req.query.maxCommissionPct !== undefined ? Number(req.query.maxCommissionPct) : undefined),
+        minCommissionValue: toRaw(req.query.minCommissionAmount !== undefined ? Number(req.query.minCommissionAmount) : undefined),
+        maxCommissionValue: toRaw(req.query.maxCommissionAmount !== undefined ? Number(req.query.maxCommissionAmount) : undefined),
+      }),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Real Shopee categories present in the catalog right now, most-stocked
+// first. The `category` column is backfilled gradually, so this can be a
+// short list or empty - clients must render nothing rather than invent a
+// taxonomy (the mobile app deliberately has no category browser at all).
+app.get('/app/shopping-categories', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const minCount = Math.max(Number(req.query.minCount) || 1, 1);
+    res.json(await shoppingProductsRepo.listCategories({ minCount }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -736,12 +807,16 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, async (req, 
 
 // "Gợi ý cho bạn" on the Home tab - see lib/repositories/recommendations.js
 // for how this is scored off the user's "Tạo link" history.
-app.get('/app/recommendations', appAuth.requireAppUser, async (req, res) => {
+app.get('/app/recommendations', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 30);
-    const user = await usersRepo.getById(req.appUserId);
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
     const pct = await getEffectivePct(user);
-    const { items } = await recommendationsRepo.recommendForUser(req.appUserId, { limit });
+    // Nothing to personalize against for a logged-out visitor - the website
+    // shows the highest-cashback products instead, under a neutral heading.
+    const items = req.appUserId
+      ? (await recommendationsRepo.recommendForUser(req.appUserId, { limit })).items
+      : await shoppingProductsRepo.list({ limit, sort: 'commission_desc' });
     res.json(items.map((p) => ({
       ...p,
       userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,
@@ -913,6 +988,29 @@ app.post('/admin/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }), async
     if (!password) return res.status(400).json({ error: 'body.password is required' });
     if (!(await adminAuth.checkAdminPassword(password))) {
       return res.status(401).json({ error: 'invalid password' });
+    }
+    res.json({ token: await adminAuth.issueToken() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Same Google verification path as /app/login/google, but the result is
+// only ever an admin JWT (no user record is created) and only for the
+// allowlisted admin emails in ADMIN_EMAILS - see lib/adminAuth.js#isAdminEmail.
+app.post('/admin/login/google', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }), async (req, res) => {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) return res.status(400).json({ error: 'body.idToken is required' });
+    let profile;
+    try {
+      profile = await oauthLogin.verifyGoogleIdToken(idToken);
+    } catch (err) {
+      if (err.notConfigured) return res.status(501).json({ error: 'not_configured' });
+      return res.status(401).json({ error: err.message });
+    }
+    if (!adminAuth.isAdminEmail(profile.email)) {
+      return res.status(403).json({ error: 'email not authorized as admin' });
     }
     res.json({ token: await adminAuth.issueToken() });
   } catch (err) {

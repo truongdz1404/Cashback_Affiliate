@@ -210,6 +210,14 @@ async function viewForUser(userId, { limit, offset } = {}) {
   return results;
 }
 
+// Same payload as viewForUser() minus everything user-scoped, for the public
+// website's logged-out campaign list: the tiers/dates/titles are public
+// marketing info, only the progress is personal.
+async function viewForAnonymous({ limit, offset } = {}) {
+  const campaigns = await listActive({ limit, offset });
+  return campaigns.map((campaign) => ({ ...campaign, paidAmount: 0, rewardsEarned: [] }));
+}
+
 module.exports = {
   listActive,
   listAll,
@@ -221,6 +229,7 @@ module.exports = {
   grantRewardsForUser,
   rewardsForUser,
   viewForUser,
+  viewForAnonymous,
   unpaidTotalForUser,
   markRewardPaid,
   reevaluateRewardsForUser,

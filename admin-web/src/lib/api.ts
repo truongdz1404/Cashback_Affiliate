@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 export const TOKEN_COOKIE_NAME = "admin_token";
+export const USER_TOKEN_COOKIE_NAME = "user_token";
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://shopee-affiliate:4000";
 const BACKEND_API_KEY = process.env.BACKEND_API_KEY || "";

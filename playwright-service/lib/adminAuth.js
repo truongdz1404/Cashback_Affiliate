@@ -46,6 +46,18 @@ async function issueToken() {
   return jwt.sign({ role: 'admin' }, await getJwtSecret(), { expiresIn: '12h' });
 }
 
+// Google login for admins has no local user table to check against, so the
+// allowlist lives in an env var instead - defaults to the one known admin
+// account if the operator hasn't set ADMIN_EMAILS yet.
+function isAdminEmail(email) {
+  if (!email) return false;
+  const allowlist = (process.env.ADMIN_EMAILS || 'truongvq.se@gmail.com')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return allowlist.includes(email.toLowerCase());
+}
+
 // Protects /admin/* routes: expects "Authorization: Bearer <token>" from a
 // prior POST /admin/login. Also checks the `role` claim, not just the
 // signature - the app-user JWTs issued by lib/appAuth.js share this same
@@ -65,4 +77,4 @@ async function requireAdmin(req, res, next) {
   }
 }
 
-module.exports = { issueToken, requireAdmin, checkAdminPassword, setAdminPassword };
+module.exports = { issueToken, requireAdmin, checkAdminPassword, setAdminPassword, isAdminEmail };

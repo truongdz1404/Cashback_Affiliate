@@ -8,6 +8,8 @@
 :root {
   --accent: oklch(0.7091 0.1378 154.75); /* Palette.accent #4DBA7A */
   --accent-foreground: oklch(1 0 0);
+  --accent-dark: color-mix(in oklab, var(--accent) 78%, black 22%);
+  --accent-soft: oklch(0.9662 0.0189 157.88); /* Palette.accentSoft #EAF8EF */
 
   --background: oklch(0.9711 0.0034 145.55); /* Palette.background #F4F6F4 */
   --foreground: oklch(0.2716 0.0199 163.04); /* Palette.textPrimary #1E2A24 */
@@ -28,7 +30,7 @@
 html,
 body {
   height: 100%;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 * {

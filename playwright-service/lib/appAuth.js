@@ -33,4 +33,25 @@ async function requireAppUser(req, res, next) {
   }
 }
 
-module.exports = { issueAppToken, requireAppUser };
+// Same token check as requireAppUser, but never rejects: the public website
+// (admin-web) renders the catalog, banners and campaigns for logged-out
+// visitors too, and the same routes must serve personalized data the moment a
+// token IS present. Callers MUST treat req.appUserId === null as "anonymous"
+// and skip anything user-scoped (personalized ranking, search history).
+async function optionalAppUser(req, _res, next) {
+  const header = req.get('authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  req.appUserId = null;
+  if (!token) return next();
+
+  try {
+    const decoded = jwt.verify(token, await getJwtSecret());
+    if (decoded.role === 'app_user' && decoded.sub) req.appUserId = decoded.sub;
+  } catch {
+    // An expired/invalid token on a public route degrades to anonymous rather
+    // than 401 - a stale cookie must not break browsing the site.
+  }
+  next();
+}
+
+module.exports = { issueAppToken, requireAppUser, optionalAppUser };

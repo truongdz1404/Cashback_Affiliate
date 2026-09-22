@@ -1,0 +1,211 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import TextField from "@/components/public/TextField";
+import GoogleSignInButton from "@/components/GoogleSignInButton";
+import FacebookSignInButton from "@/components/FacebookSignInButton";
+import { hasSocialLogin, useOAuthConfig } from "@/lib/useOAuthConfig";
+import { LockIcon, PhoneIcon, UserPlusIcon } from "@/components/icons";
+
+// `next` comes from the URL (?next=/account/wallet, set by proxy.js when it
+// bounces a protected route). Only same-origin paths are honoured so a
+// crafted link cannot turn a successful login into an open redirect.
+function safeNext(next: string | undefined): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/account";
+  return next;
+}
+
+export default function AuthForm({ mode, next, referralCode }: { mode: "login" | "register"; next?: string; referralCode?: string }) {
+  const isRegister = mode === "register";
+
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [referral, setReferral] = useState(referralCode ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Don't draw a "Hoặc" divider over an empty space when the operator has
+  // switched every social provider off.
+  const showSocial = hasSocialLogin(useOAuthConfig());
+
+  function done() {
+    // A full navigation, not router.push: the session cookie was just set by
+    // the API route and every server component must re-render with it.
+    window.location.href = safeNext(next);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    const trimmedPhone = phone.trim();
+    if (!trimmedPhone || !password) {
+      setError("Vui lòng nhập số điện thoại và mật khẩu.");
+      return;
+    }
+    if (isRegister) {
+      if (password.length < 6) {
+        setError("Mật khẩu phải có ít nhất 6 ký tự.");
+        return;
+      }
+      if (password !== confirm) {
+        setError("Mật khẩu nhập lại không khớp.");
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(isRegister ? "/api/user/register" : "/api/user/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          isRegister
+            ? { phone: trimmedPhone, password, referralCode: referral.trim() || undefined }
+            : { phone: trimmedPhone, password },
+        ),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(translate(data?.error));
+      done();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Có lỗi xảy ra, vui lòng thử lại.");
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div>
+      <h1 className="text-2xl font-extrabold text-[var(--foreground)]">
+        {isRegister ? "Tạo tài khoản Rewally" : "Chào mừng trở lại"}
+      </h1>
+      <p className="mt-1.5 text-sm text-[var(--muted)]">
+        {isRegister
+          ? "Đăng ký miễn phí để bắt đầu nhận hoàn tiền cho mọi đơn hàng."
+          : "Đăng nhập để xem ví hoàn tiền, đơn hàng và tạo link của bạn."}
+      </p>
+
+      <form onSubmit={submit} className="mt-7 flex flex-col gap-4">
+        <TextField
+          label="Số điện thoại"
+          value={phone}
+          onChange={setPhone}
+          type="tel"
+          inputMode="tel"
+          placeholder="0901234567"
+          autoComplete="tel"
+          icon={PhoneIcon}
+          required
+          disabled={submitting}
+        />
+
+        <TextField
+          label="Mật khẩu"
+          value={password}
+          onChange={setPassword}
+          type="password"
+          placeholder={isRegister ? "Tối thiểu 6 ký tự" : "Nhập mật khẩu"}
+          autoComplete={isRegister ? "new-password" : "current-password"}
+          icon={LockIcon}
+          required
+          disabled={submitting}
+        />
+
+        {isRegister && (
+          <>
+            <TextField
+              label="Nhập lại mật khẩu"
+              value={confirm}
+              onChange={setConfirm}
+              type="password"
+              autoComplete="new-password"
+              icon={LockIcon}
+              required
+              disabled={submitting}
+            />
+            <TextField
+              label="Mã giới thiệu"
+              value={referral}
+              onChange={setReferral}
+              placeholder="Không bắt buộc"
+              icon={UserPlusIcon}
+              hint="Nếu được bạn bè mời, nhập mã của họ để cả hai cùng nhận thưởng."
+              disabled={submitting}
+            />
+          </>
+        )}
+
+        {error && (
+          <p role="alert" className="rounded-xl bg-[var(--danger)]/10 px-4 py-3 text-sm font-semibold text-[var(--danger)]">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={submitting}
+          className="mt-1 rounded-full bg-[var(--accent)] py-3.5 text-sm font-extrabold text-[var(--accent-foreground)] transition hover:brightness-105 disabled:opacity-60"
+        >
+          {submitting ? "Đang xử lý…" : isRegister ? "Đăng ký" : "Đăng nhập"}
+        </button>
+      </form>
+
+      {showSocial && (
+        <>
+          <div className="my-7 flex items-center gap-3">
+            <span className="h-px flex-1 bg-[var(--border)]" />
+            <span className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Hoặc</span>
+            <span className="h-px flex-1 bg-[var(--border)]" />
+          </div>
+
+          <div className="flex flex-col items-center gap-3">
+            <GoogleSignInButton loginEndpoint="/api/user/login/google" onSuccess={done} />
+            <FacebookSignInButton loginEndpoint="/api/user/login/facebook" onSuccess={done} />
+          </div>
+        </>
+      )}
+
+      <p className="mt-8 text-center text-sm text-[var(--muted)]">
+        {isRegister ? "Đã có tài khoản? " : "Chưa có tài khoản? "}
+        <Link
+          href={isRegister ? `/login${next ? `?next=${encodeURIComponent(next)}` : ""}` : `/register${next ? `?next=${encodeURIComponent(next)}` : ""}`}
+          className="font-extrabold text-[var(--accent)] hover:underline"
+        >
+          {isRegister ? "Đăng nhập" : "Đăng ký miễn phí"}
+        </Link>
+      </p>
+
+      {isRegister && (
+        <p className="mt-4 text-center text-xs leading-relaxed text-[var(--muted)]">
+          Khi đăng ký, bạn đồng ý với{" "}
+          <a href="/app/legal/privacy" target="_blank" rel="noopener noreferrer" className="underline">
+            Chính sách quyền riêng tư
+          </a>{" "}
+          của Rewally.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// The backend answers in English; these are the cases a visitor can actually
+// hit from this form.
+function translate(message: unknown): string {
+  const text = typeof message === "string" ? message : "";
+  switch (text) {
+    case "invalid phone or password":
+      return "Số điện thoại hoặc mật khẩu không đúng.";
+    case "phone already registered":
+      return "Số điện thoại này đã được đăng ký. Hãy đăng nhập.";
+    case "invalid referral code":
+      return "Mã giới thiệu không hợp lệ.";
+    case "password must be at least 6 characters":
+      return "Mật khẩu phải có ít nhất 6 ký tự.";
+    case "phone and password are required":
+      return "Vui lòng nhập số điện thoại và mật khẩu.";
+    default:
+      return text || "Có lỗi xảy ra, vui lòng thử lại.";
+  }
+}

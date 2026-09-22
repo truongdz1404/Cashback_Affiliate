@@ -3,7 +3,7 @@
 // Thin wrapper around the local /api/* routes (which proxy to
 // playwright-service's /admin/* API). A 401 here means the admin session
 // expired or was invalidated (e.g. the JWT secret was rotated) - send the
-// user back to /login instead of showing a broken page.
+// user back to /admin/login instead of showing a broken page.
 async function request<T = unknown>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...options,
@@ -11,7 +11,7 @@ async function request<T = unknown>(path: string, options?: RequestInit): Promis
   });
 
   if (res.status === 401) {
-    window.location.href = "/login";
+    window.location.href = "/admin/login";
     throw new Error("unauthorized");
   }
 
