@@ -3,16 +3,12 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { toast } from "@heroui/react";
+import { Button, Card, Chip, toast } from "@heroui/react";
 import { appClient, AppRequestError } from "@/lib/appClient";
 import { formatPct, formatVnd } from "@/lib/format";
 import type { ShoppingProduct, ShoppingProductOpenResult } from "@/lib/appTypes";
 import { BoltIcon, FireIcon, ImageIcon } from "@/components/icons";
 
-// NEVER link straight to product.productUrl: the cashback only exists because
-// the backend mints a per-user affiliate link (with the user's sub_id) at
-// POST /shopping-products/:id/open. Bypassing it loses attribution and the
-// visitor gets nothing back.
 export default function ProductCard({
   product,
   isAuthenticated,
@@ -37,8 +33,6 @@ export default function ProductCard({
       return;
     }
 
-    // The tab has to be opened inside the click handler or the browser treats
-    // the later window.open() as an unsolicited popup and blocks it.
     const tab = window.open("", "_blank", "noopener,noreferrer");
     setLoading(true);
     try {
@@ -55,9 +49,7 @@ export default function ProductCard({
   }
 
   return (
-    <article
-      className={`group flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-[0_18px_40px_-24px_rgba(30,42,36,0.45)] ${className}`}
-    >
+    <Card className={`group flex h-full flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white shadow-none transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-[0_18px_38px_-28px_rgba(20,49,34,0.55)] ${className}`}>
       <button
         type="button"
         onClick={open}
@@ -80,60 +72,51 @@ export default function ProductCard({
         )}
 
         {pct != null && pct > 0 && (
-          <span className="absolute left-2 top-2 rounded-full bg-[var(--accent)] px-2.5 py-1 text-[11px] font-extrabold text-[var(--accent-foreground)] shadow">
+          <Chip size="sm" color="success" variant="primary" className="absolute left-2 top-2 h-6 px-2 text-[10px] font-extrabold text-white">
             Hoàn {formatPct(pct)}%
-          </span>
+          </Chip>
         )}
 
         <span className="absolute right-2 top-2 flex flex-col items-end gap-1">
           {product.isBestSeller && (
-            <span className="flex items-center gap-1 rounded-full bg-[var(--danger)] px-2 py-0.5 text-[10px] font-bold text-white shadow">
+            <Chip size="sm" color="danger" variant="primary" className="h-6 px-2 text-[10px] font-bold text-white">
               <FireIcon className="h-3 w-3" /> Bán chạy
-            </span>
+            </Chip>
           )}
           {product.isXtraCommission && (
-            <span className="flex items-center gap-1 rounded-full bg-[var(--warning)] px-2 py-0.5 text-[10px] font-bold text-white shadow">
+            <Chip size="sm" color="warning" variant="primary" className="h-6 px-2 text-[10px] font-bold text-white">
               <BoltIcon className="h-3 w-3" /> Xtra
-            </span>
+            </Chip>
           )}
         </span>
 
         {loading && (
-          <span className="absolute inset-0 flex items-center justify-center bg-black/40 text-xs font-bold text-white">
-            Đang tạo link…
+          <span className="absolute inset-0 flex items-center justify-center bg-black/42 text-xs font-bold text-white">
+            Đang tạo link...
           </span>
         )}
       </button>
 
-      <div className="flex flex-1 flex-col gap-1.5 p-3">
+      <Card.Content className="flex flex-1 flex-col gap-1.5 p-3">
         <button type="button" onClick={open} className="text-left">
-          <h3 className="line-clamp-2 min-h-[2.5rem] text-[13px] font-semibold leading-5 text-[var(--foreground)] transition group-hover:text-[var(--accent)]">
+          <h3 className="line-clamp-2 min-h-[2.35rem] text-[13px] font-semibold leading-[1.35rem] text-[var(--foreground)] transition group-hover:text-[var(--accent)]">
             {product.name}
           </h3>
         </button>
 
-        {product.shopName && (
-          <p className="truncate text-[11px] text-[var(--muted)]">{product.shopName}</p>
-        )}
+        {product.shopName && <p className="truncate text-[11px] font-medium text-[var(--muted)]">{product.shopName}</p>}
 
-        <div className="mt-auto pt-1.5">
+        <div className="mt-auto pt-1">
           <p className="text-sm font-extrabold text-[var(--danger)]">
             {product.priceValue != null ? formatVnd(product.priceValue) : product.priceText || "Xem giá"}
           </p>
-          {amount != null && amount > 0 && (
-            <p className="mt-0.5 text-xs font-bold text-[var(--accent)]">Hoàn {formatVnd(amount)}</p>
-          )}
+          {amount != null && amount > 0 && <p className="mt-0.5 text-xs font-extrabold text-[var(--accent)]">Hoàn {formatVnd(amount)}</p>}
         </div>
 
-        <button
-          type="button"
-          onClick={open}
-          disabled={loading}
-          className="mt-2 w-full rounded-full bg-[var(--accent-soft)] py-2 text-xs font-extrabold text-[var(--accent)] transition hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)] disabled:opacity-60"
-        >
+        <Button type="button" onPress={open} isDisabled={loading} isPending={loading} size="sm" variant="tertiary" className="mt-2 h-9 rounded-full bg-[var(--accent-soft)] text-xs font-extrabold text-[var(--accent)]">
           {isAuthenticated ? "Mua & nhận hoàn tiền" : "Đăng nhập để hoàn tiền"}
-        </button>
-      </div>
-    </article>
+        </Button>
+      </Card.Content>
+    </Card>
   );
 }

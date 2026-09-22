@@ -1,12 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { PLAY_STORE_URL } from "@/lib/site";
+import { DownloadIcon } from "@/components/icons";
 
-// Deliberately links only to pages that really exist: the site's own routes
-// and the two legal pages served by playwright-service at /app/legal/*.
-// No social profiles, office address or hotline is listed here because
-// Rewally does not publish any - inventing them would be worse than an
-// honest, shorter footer.
 const COLUMNS = [
   {
     title: "Khám phá",
@@ -14,7 +10,7 @@ const COLUMNS = [
       { href: "/", label: "Trang chủ" },
       { href: "/products", label: "Mua sắm hoàn tiền" },
       { href: "/campaigns", label: "Ưu đãi & Sự kiện" },
-      { href: "/guide", label: "Hướng dẫn" },
+      { href: "/guide", label: "Cách hoạt động" },
     ],
   },
   {
@@ -28,51 +24,52 @@ const COLUMNS = [
     ],
   },
   {
-    title: "Hỗ trợ & Pháp lý",
+    title: "Hỗ trợ",
     links: [
       { href: "/guide", label: "Hướng dẫn sử dụng" },
       { href: "/app/legal/privacy", label: "Chính sách quyền riêng tư", external: true },
-      { href: "/app/legal/data-deletion", label: "Yêu cầu xoá dữ liệu", external: true },
+      { href: "/app/legal/data-deletion", label: "Yêu cầu xóa dữ liệu", external: true },
     ],
   },
 ];
 
 export default function PublicFooter() {
   return (
-    <footer className="border-t border-[var(--border)] bg-[var(--surface)]">
-      <div className="mx-auto grid max-w-7xl gap-10 px-5 py-12 sm:px-6 lg:grid-cols-[1.4fr_1fr_1fr_1fr]">
+    <footer className="bg-black text-white">
+      <div className="mx-auto grid max-w-6xl gap-8 px-5 py-10 sm:px-6 lg:grid-cols-[1.35fr_1fr_1fr_1fr]">
         <div>
           <Link href="/" className="flex items-center gap-2.5">
-            <Image src="/logo.png" alt="Rewally" width={40} height={40} className="rounded-xl" />
-            <span className="text-lg font-extrabold tracking-tight text-[var(--foreground)]">Rewally</span>
+            <Image src="/logo.png" alt="Rewally" width={36} height={36} className="rounded-lg bg-white" />
+            <span className="text-base font-extrabold tracking-tight">Rewally</span>
           </Link>
-          <p className="mt-4 max-w-sm text-sm leading-relaxed text-[var(--muted)]">
-            Mua sắm qua Rewally để nhận hoàn tiền cho đơn hàng Shopee. Tiền hoàn được cộng vào ví sau khi đơn hoàn tất
-            và đối soát, rút về tài khoản ngân hàng của bạn.
+          <p className="mt-4 max-w-sm text-sm leading-6 text-white/68">
+            Nền tảng hoàn tiền khi mua sắm Shopee. Mua qua Rewally, theo dõi đơn hàng và rút tiền về ngân hàng sau đối
+            soát.
           </p>
 
-          <div className="mt-5 flex items-center gap-4">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <Image
+              src="/play-store-qr.png"
+              alt="Mã QR tải app Rewally"
+              width={68}
+              height={68}
+              className="rounded-xl border border-white/12 bg-white p-1"
+            />
             <Link
               href={PLAY_STORE_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-full bg-[var(--accent)] px-5 py-2.5 text-sm font-bold text-[var(--accent-foreground)] transition hover:brightness-105"
+              className="inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-sm font-extrabold text-black transition hover:bg-white/90"
             >
-              Tải app trên Google Play
+              <DownloadIcon className="h-4 w-4" />
+              Tải app
             </Link>
-            <Image
-              src="/play-store-qr.png"
-              alt="Mã QR tải app Rewally trên Google Play"
-              width={64}
-              height={64}
-              className="rounded-lg border border-[var(--border)]"
-            />
           </div>
         </div>
 
         {COLUMNS.map((column) => (
           <div key={column.title}>
-            <h3 className="text-sm font-extrabold text-[var(--foreground)]">{column.title}</h3>
+            <h3 className="text-sm font-extrabold">{column.title}</h3>
             <ul className="mt-4 flex flex-col gap-2.5">
               {column.links.map((link) => (
                 <li key={link.label}>
@@ -81,12 +78,12 @@ export default function PublicFooter() {
                       href={link.href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-sm text-[var(--muted)] transition hover:text-[var(--accent)]"
+                      className="text-sm font-medium text-white/62 transition hover:text-white"
                     >
                       {link.label}
                     </a>
                   ) : (
-                    <Link href={link.href} className="text-sm text-[var(--muted)] transition hover:text-[var(--accent)]">
+                    <Link href={link.href} className="text-sm font-medium text-white/62 transition hover:text-white">
                       {link.label}
                     </Link>
                   )}
@@ -97,10 +94,10 @@ export default function PublicFooter() {
         ))}
       </div>
 
-      <div className="border-t border-[var(--border)]">
-        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-5 py-6 text-xs text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between sm:px-6">
+      <div className="border-t border-white/10">
+        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-5 text-xs text-white/54 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p>© {new Date().getFullYear()} Rewally. Nền tảng hoàn tiền mua sắm.</p>
-          <p>Rewally là đối tác tiếp thị liên kết, không phải Shopee. Tỉ lệ hoàn tiền do sàn quy định và có thể thay đổi.</p>
+          <p>Rewally là đối tác tiếp thị liên kết, không phải Shopee.</p>
         </div>
       </div>
     </footer>
