@@ -287,10 +287,21 @@ async function runProductOfferSync({
       }
 
       totalScraped += pageProducts.length;
-      // Recommendation engine's category signal (lib/repositories/recommendations.js)
-      // - free, since selectTab already told us which tab this page came from.
+      // `category` itself is left untouched here (no key in the spread below)
+      // so a re-scrape never clobbers a real taxonomy value already written by
+      // lib/categoryEnrichment.js's backfill or the /app/link insert-if-missing
+      // hook - both source category from addlivetag's catName exclusively, the
+      // same place Link.catName comes from (see prisma/migrations/
+      // 20260922120000_split_shopping_product_category). selectTab still tells
+      // us which tab this page came from for free, so keep that as a raw audit
+      // trail plus the two pseudo-tag flags worth querying on directly.
       totalSaved += await shoppingProductsRepo.upsertMany(
-        pageProducts.map((p) => ({ ...p, category: selectedTabName }))
+        pageProducts.map((p) => ({
+          ...p,
+          sourceTab: selectedTabName,
+          isBestSeller: /bán chạy/i.test(selectedTabName),
+          isXtraCommission: /xtra/i.test(selectedTabName),
+        }))
       );
       pagesVisited++;
 

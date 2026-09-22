@@ -1,6 +1,8 @@
 const { getContext } = require('./browserManager');
 
 const ADDLIVETAG_API_URL = 'https://data.addlivetag.com/product-data/product-data.php';
+const ADDLIVETAG_BATCH_API_URL = 'https://data.addlivetag.com/product-data/product-data-batch.php';
+const BATCH_MAX_ITEMS = 100;
 
 /**
  * Builds the "Mạng xã hội" commission row straight from the API response's
@@ -83,15 +85,23 @@ function formatAmount(n) {
  * below remains the fallback of record whenever this fails or returns
  * unusable data.
  */
-async function getCommissionViaApi(pid) {
-  const url = `${ADDLIVETAG_API_URL}?item_id=${encodeURIComponent(pid)}`;
-  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!response.ok) throw new Error(`addlivetag API status ${response.status}`);
+// Everything addlivetag hands back beyond the commission rates - already paid
+// for by this same request, so callers can snapshot it for free instead of
+// having only a bare itemId to work with (see server.js /app/link,
+// lib/linkTracking.js, lib/categoryEnrichment.js).
+function mapInfoToMeta(info) {
+  return {
+    itemName: info.productName ?? null,
+    catId: info.catId ?? null,
+    catName: info.catName ?? null,
+    shopName: info.shopName ?? null,
+    priceValue: parseNumber(info.price),
+    imageUrl: info.imageUrl ?? null,
+    isXtraCommission: typeof info.isXtra === 'boolean' ? info.isXtra : null,
+  };
+}
 
-  const json = await response.json().catch(() => null);
-  const info = json && json.status === 'success' && json.productInfo;
-  if (!info) throw new Error('addlivetag API did not return productInfo');
-
+function buildResultFromInfo(info) {
   const productData = {
     code: 0,
     msg: 'success',
@@ -110,19 +120,67 @@ async function getCommissionViaApi(pid) {
     source: 'api',
     product: productData,
     commissionTable: buildCommissionTable(productData),
-    // Everything addlivetag hands back beyond the commission rates - already
-    // paid for by this same request, so recordLink can snapshot it onto the
-    // Link row for free instead of the recommendation engine having only a
-    // bare itemId to work with (see server.js /app/link, lib/linkTracking.js).
-    meta: {
-      itemName: info.productName ?? null,
-      catId: info.catId ?? null,
-      catName: info.catName ?? null,
-      shopName: info.shopName ?? null,
-      priceValue: parseNumber(info.price),
-      imageUrl: info.imageUrl ?? null,
-    },
+    meta: mapInfoToMeta(info),
   };
+}
+
+async function getCommissionViaApi(pid) {
+  const url = `${ADDLIVETAG_API_URL}?item_id=${encodeURIComponent(pid)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error(`addlivetag API status ${response.status}`);
+
+  const json = await response.json().catch(() => null);
+  const info = json && json.status === 'success' && json.productInfo;
+  if (!info) throw new Error('addlivetag API did not return productInfo');
+
+  return buildResultFromInfo(info);
+}
+
+/**
+ * Bulk counterpart of getCommissionViaApi, backed by addlivetag's
+ * product-data-batch.php (added 22/09/2026) - purpose-built for scanning many
+ * items at once instead of looping the single-item endpoint. Quota is
+ * counted per product, not per request (source ~300/min, cache ~2000/min),
+ * and a cache-cold item still costs source quota just like the single-item
+ * endpoint would, so `maxApi` lets a caller cap how many of the (up to 100)
+ * requested items may hit the live source in this one call - the docs'
+ * own guidance for a cold cache is to trickle small `max_api` values rather
+ * than dump a huge batch.
+ *
+ * Returns a Map<itemId string, { status, reason, meta, commissionTable }> so
+ * callers can tell "no data at this item" (not_found/invalid) apart from
+ * "not attempted this round, retry later" (skipped - api_budget_exhausted,
+ * source_cooldown, etc), plus the batch-level `limits`/`summary` for
+ * logging/backoff decisions.
+ */
+async function getCommissionBatchViaApi(pids, { maxApi } = {}) {
+  const ids = (pids || []).map(String).filter(Boolean).slice(0, BATCH_MAX_ITEMS);
+  if (!ids.length) return { byItemId: new Map(), summary: null, limits: null };
+
+  const params = new URLSearchParams({ item_ids: ids.join(',') });
+  if (maxApi) params.set('max_api', String(maxApi));
+
+  const url = `${ADDLIVETAG_BATCH_API_URL}?${params.toString()}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error(`addlivetag batch API status ${response.status}`);
+
+  const json = await response.json().catch(() => null);
+  if (!json || json.status !== 'success' || !Array.isArray(json.products)) {
+    throw new Error('addlivetag batch API did not return products');
+  }
+
+  const byItemId = new Map();
+  for (const entry of json.products) {
+    const itemId = entry.itemId != null ? String(entry.itemId) : String(entry.input);
+    const hasUsableInfo = (entry.status === 'success' || entry.status === 'stale') && entry.productInfo;
+    byItemId.set(itemId, {
+      status: entry.status,
+      reason: entry.reason ?? null,
+      ...(hasUsableInfo ? buildResultFromInfo(entry.productInfo) : { meta: null, commissionTable: null }),
+    });
+  }
+
+  return { byItemId, summary: json.summary ?? null, limits: json.limits ?? null };
 }
 
 /**
@@ -191,4 +249,4 @@ async function getCommission(pid) {
   return { pid, ...result };
 }
 
-module.exports = { getCommission };
+module.exports = { getCommission, getCommissionViaApi, getCommissionBatchViaApi };

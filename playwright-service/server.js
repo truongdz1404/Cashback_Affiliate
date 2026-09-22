@@ -23,6 +23,7 @@ const recommendationsRepo = require('./lib/repositories/recommendations');
 const searchHistoryRepo = require('./lib/repositories/searchHistory');
 const shoppingProductImport = require('./lib/shoppingProductImport');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
+const { backfillMissingCategories } = require('./lib/categoryEnrichment');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
 const adminAuth = require('./lib/adminAuth');
@@ -452,6 +453,16 @@ app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
 
     if (tracking.userId) {
       await linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid, estimate, result.meta);
+    }
+
+    // Fire-and-forget: the commission lookup above already paid for this
+    // product's meta, so close the loop into the Shopping-tab catalog for
+    // free instead of waiting on the next scrape/backfill. Never blocks the
+    // response - a failure here shouldn't fail the user's "Tạo link" action.
+    if (result.pid && result.meta) {
+      shoppingProductsRepo
+        .ensureExists(result.pid, result.meta, result.commission?.commissionTable)
+        .catch((err) => console.error('[shopping-product] ensureExists from /app/link failed:', err.message));
     }
 
     res.json({ ...result, estimate });
@@ -1352,6 +1363,16 @@ cron.schedule('0 6 * * *', async () => {
   } catch (err) {
     console.error('cron product-offer-sync failed', err.message);
   }
+});
+
+// Category backfill for catalog rows missing it (post-migration and admin
+// CSV/XLSX imports never have one) - every 15 minutes in small batches, see
+// lib/categoryEnrichment.js for why this stays off the browser-automation
+// fallback and off one large sweep.
+cron.schedule('*/15 * * * *', () => {
+  backfillMissingCategories()
+    .then((result) => console.log(`cron category-backfill: ${JSON.stringify(result)}`))
+    .catch((err) => console.error('cron category-backfill failed', err.message));
 });
 
 process.on('SIGTERM', async () => {

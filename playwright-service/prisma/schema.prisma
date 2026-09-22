@@ -297,11 +297,25 @@ model ShoppingProduct {
   // productOfferScraper.js's scrapeImageMap. Null for admin CSV/XLSX imports,
   // which never have an image column.
   imageUrl           String?  @map("image_url")
-  // The product_offer tab this row was scraped under (e.g. "Thời trang nữ") -
-  // a coarse but free category signal (the scraper already knows it, see
-  // productOfferScraper.js) used by the recommendation engine to match against
-  // a user's linked-product categories. Null for admin CSV/XLSX imports.
+  // Real Shopee taxonomy only (e.g. "Thời trang nữ"), sourced exclusively from
+  // addlivetag's catName - lib/categoryEnrichment.js's cron backfill for rows
+  // missing it, or lib/repositories/shoppingProducts.js's ensureExists for a
+  // row created on the fly from a POST /app/link lookup (see server.js). Never
+  // written from the scraper's tab label any more (see sourceTab below) so it
+  // stays on the same source as Link.catName, which is what the recommendation
+  // engine's category-match signal actually compares against.
   category           String?  @map("category")
+  // The product_offer tab this row was scraped under, verbatim (e.g. "Tất cả",
+  // "Bán chạy nhất", "Hoa hồng Xtra", or a real category name) - kept as a raw
+  // audit trail of where the row came from. isBestSeller/isXtraCommission below
+  // are the two pseudo-tags worth querying on directly; everything else here is
+  // informational only. Null for admin CSV/XLSX imports.
+  sourceTab          String?  @map("source_tab")
+  // True when scraped under Shopee's "Bán chạy nhất" tab.
+  isBestSeller       Boolean  @default(false) @map("is_best_seller")
+  // True when scraped under Shopee's "Hoa hồng Xtra" tab, or when addlivetag's
+  // own `isXtra` flag says so (see commission.js's getCommissionViaApi meta).
+  isXtraCommission   Boolean  @default(false) @map("is_xtra_commission")
   scrapedAt          DateTime @default(now()) @map("scraped_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 

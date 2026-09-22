@@ -1,4 +1,5 @@
 const prisma = require('../prisma');
+const { mapMetaToProductFields } = require('../shoppingProductMapper');
 
 // One upsert per product, keyed by Shopee's own item id - keeps a re-scrape
 // idempotent (same product just gets fresher price/commission text and a
@@ -80,4 +81,35 @@ async function getById(id) {
   return prisma.shoppingProduct.findUnique({ where: { id: Number(id) } });
 }
 
-module.exports = { upsertMany, list, count, remove, getById };
+// Called fire-and-forget off POST /app/link (server.js) once a commission
+// lookup already happened for a productId that isn't in the catalog yet -
+// the lookup's `meta`/`commissionTable` is basically free data at that point,
+// so this closes the loop between "user linked a product" and "product is
+// browsable/recommendable in the Shopping tab" without a separate crawl.
+// Never overwrites an existing row (addlivetag's data is cached up to 24h,
+// the catalog's own scrape/backfill data is more authoritative once present).
+async function ensureExists(productId, meta, commissionTable) {
+  if (!productId) return false;
+  const existing = await prisma.shoppingProduct.findUnique({ where: { productId: String(productId) } });
+  if (existing) return false;
+
+  const fields = mapMetaToProductFields(meta, commissionTable);
+  if (!fields.name) return false; // not enough data to justify a catalog row
+
+  await prisma.shoppingProduct.create({
+    data: {
+      productId: String(productId),
+      name: fields.name,
+      shopName: fields.shopName ?? null,
+      priceValue: fields.priceValue ?? null,
+      imageUrl: fields.imageUrl ?? null,
+      category: fields.category ?? null,
+      isXtraCommission: fields.isXtraCommission ?? false,
+      commissionRateValue: fields.commissionRateValue ?? null,
+      commissionValue: fields.commissionValue ?? null,
+    },
+  });
+  return true;
+}
+
+module.exports = { upsertMany, list, count, remove, getById, ensureExists };

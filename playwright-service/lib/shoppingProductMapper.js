@@ -58,4 +58,31 @@ function mapCsvRowToProduct(row) {
   };
 }
 
-module.exports = { parsePriceToVnd, parseCommissionRatePct, parseCommissionAmountVnd, mapCsvRowToProduct };
+// Maps commission.js's `meta`/`commissionTable` (an addlivetag lookup snapshot,
+// see getCommissionViaApi) into ShoppingProduct fields - shared by
+// lib/categoryEnrichment.js's cron backfill and the insert-if-missing hook off
+// POST /app/link (lib/repositories/shoppingProducts.js's ensureExists), so
+// both write the exact same shape from the exact same source. Fields addlivetag
+// didn't have anything for come back `undefined` (not `null`) so callers can
+// spread this into a Prisma update/create without clobbering existing data.
+function mapMetaToProductFields(meta, commissionTable) {
+  const totals = (commissionTable && commissionTable[0]) || null;
+  return {
+    name: meta?.itemName || undefined,
+    shopName: meta?.shopName || undefined,
+    priceValue: meta?.priceValue ?? undefined,
+    imageUrl: meta?.imageUrl || undefined,
+    category: meta?.catName || undefined,
+    isXtraCommission: typeof meta?.isXtraCommission === 'boolean' ? meta.isXtraCommission : undefined,
+    commissionRateValue: totals?.totalPct ?? undefined,
+    commissionValue: totals?.totalAmount ?? undefined,
+  };
+}
+
+module.exports = {
+  parsePriceToVnd,
+  parseCommissionRatePct,
+  parseCommissionAmountVnd,
+  mapCsvRowToProduct,
+  mapMetaToProductFields,
+};
