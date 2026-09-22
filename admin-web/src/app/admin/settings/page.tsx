@@ -425,53 +425,6 @@ function SecretsSection() {
   );
 }
 
-function PasswordSection() {
-  const [newPassword, setNewPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  async function save() {
-    setMsg("");
-    if (newPassword.length < 8) {
-      setMsg("Mật khẩu phải từ 8 ký tự trở lên.");
-      return;
-    }
-    if (newPassword !== confirm) {
-      setMsg("Mật khẩu nhập lại không khớp.");
-      return;
-    }
-    setSaving(true);
-    try {
-      await clientApi.put("/api/password", { newPassword });
-      setNewPassword("");
-      setConfirm("");
-      setMsg("Đã đổi mật khẩu quản trị.");
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : "Đổi mật khẩu thất bại");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <SectionCard title="Mật khẩu đăng nhập quản trị">
-      <div className="flex flex-wrap gap-2">
-        <TextField name="newPassword" value={newPassword} onChange={setNewPassword} type="password" aria-label="Mật khẩu mới">
-          <Input placeholder="Mật khẩu mới (tối thiểu 8 ký tự)" />
-        </TextField>
-        <TextField name="confirmPassword" value={confirm} onChange={setConfirm} type="password" aria-label="Nhập lại mật khẩu mới">
-          <Input placeholder="Nhập lại mật khẩu mới" />
-        </TextField>
-        <Button onPress={save} isPending={saving} isDisabled={!newPassword}>
-          Đổi mật khẩu
-        </Button>
-      </div>
-      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
-    </SectionCard>
-  );
-}
-
 function SessionSection() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [cookieText, setCookieText] = useState("");
@@ -545,7 +498,6 @@ export default function SettingsPage() {
       <ProductOfferMaxPagesSection />
       <SecretsSection />
       <SessionSection />
-      <PasswordSection />
     </div>
   );
 }

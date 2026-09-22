@@ -12,11 +12,13 @@ export const dynamic = "force-dynamic";
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
   // proxy.js already blocks /account/* without a user_token cookie; this
   // catches the other case - a cookie that the backend no longer honours.
+  // Sending such a visitor straight to /login would loop (proxy.js bounces
+  // signed-in-looking visitors off /login), so the dead cookie goes first.
   const [user, wallet] = await Promise.all([
     getSessionUser(),
     appFetchSafe<WalletSummary>("/wallet", EMPTY_WALLET),
   ]);
-  if (!user) redirect("/login?next=/account");
+  if (!user) redirect("/api/user/logout?next=" + encodeURIComponent("/login?next=/account"));
 
   // Formatted here, not in the client component: Node and the browser can
   // disagree on locale output and that shows up as a hydration warning.

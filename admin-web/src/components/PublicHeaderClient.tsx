@@ -56,16 +56,19 @@ function initialOf(user: NonNullable<HeaderUser>) {
 }
 
 // The dropdown mirrors ShopBack's grouping: promotions, then the account
-// pages, then "how it works", then help + sign out.
+// pages, then "how it works", then help + sign out. The dashboard entry only
+// exists in `items` for admins (accountMenu), so its group is empty - and
+// therefore dropped - for everyone else.
 function menuGroups(items: AccountMenuItem[]): AccountMenuItem[][] {
   const byHref = new Map(items.map((item) => [item.href, item]));
   const pick = (...hrefs: string[]) => hrefs.map((href) => byHref.get(href)).filter((i): i is AccountMenuItem => Boolean(i));
   return [
+    pick("/admin"),
     [{ href: "/campaigns", label: "Ưu đãi & sự kiện", icon: GiftIcon }],
     pick("/account", "/account/profile", "/account/bank", "/account/password", "/account/wallet", "/account/orders", "/account/referral"),
     [{ href: "/guide", label: "Cách Rewally hoạt động", icon: InfoIcon }],
     pick("/support"),
-  ];
+  ].filter((group) => group.length > 0);
 }
 
 export default function PublicHeaderClient({ user, categories }: { user: HeaderUser; categories: string[] }) {

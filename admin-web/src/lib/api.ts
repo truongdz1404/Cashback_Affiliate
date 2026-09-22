@@ -1,7 +1,10 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-export const TOKEN_COOKIE_NAME = "admin_token";
+// One cookie for everyone. There is no separate admin session: the dashboard
+// is unlocked by users.role === "admin" on the same account the visitor uses
+// to shop (see src/app/admin/layout.tsx and playwright-service
+// lib/adminAuth.js#requireAdmin, which re-checks the role on every request).
 export const USER_TOKEN_COOKIE_NAME = "user_token";
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://shopee-affiliate:4000";
@@ -17,10 +20,12 @@ export class BackendError extends Error {
 
 // Every call into playwright-service's /admin/* API needs both the shared
 // x-api-key (held only here, server-side - the browser never sees it) and
-// the admin's JWT (read from the httpOnly cookie set by /api/login).
+// the signed-in member's JWT (read from the httpOnly cookie set by
+// /api/user/login*). The backend answers 403 when that member is not an
+// admin; lib/clientApi.ts turns that into a readable message.
 export async function backendFetch(path: string, init: RequestInit = {}) {
   const jar = await cookies();
-  const token = jar.get(TOKEN_COOKIE_NAME)?.value;
+  const token = jar.get(USER_TOKEN_COOKIE_NAME)?.value;
 
   const headers = new Headers(init.headers);
   headers.set("x-api-key", BACKEND_API_KEY);
@@ -69,7 +74,7 @@ export async function proxyMutate(path: string, method: string, body?: unknown) 
 export async function proxyUpload(path: string, buffer: Buffer, fileName?: string) {
   try {
     const jar = await cookies();
-    const token = jar.get(TOKEN_COOKIE_NAME)?.value;
+    const token = jar.get(USER_TOKEN_COOKIE_NAME)?.value;
 
     const headers = new Headers();
     headers.set("x-api-key", BACKEND_API_KEY);

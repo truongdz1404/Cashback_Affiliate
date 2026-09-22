@@ -15,7 +15,10 @@ export const metadata: Metadata = {
   description: "Duyệt sản phẩm Shopee kèm tỉ lệ hoàn tiền thực nhận, lọc theo giá, danh mục và số tiền hoàn.",
 };
 
-const PAGE_SIZE = 24;
+// Divisible by 2, 3, 4 and 5 - one for each column count the grid below
+// takes across breakpoints - so the last row of a page is always full
+// instead of ending one card short on desktop. The backend caps `limit` at 100.
+const PAGE_SIZE = 60;
 
 type SearchParams = Record<string, string | string[] | undefined>;
 

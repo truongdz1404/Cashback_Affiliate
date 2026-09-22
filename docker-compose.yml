@@ -12,7 +12,6 @@ services:
       STORAGE_STATE_PATH: ./storage/storageState.json
       ZALO_BOT_TOKEN: ${ZALO_BOT_TOKEN}
       ZALO_WEBHOOK_SECRET: ${ZALO_WEBHOOK_SECRET}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-truongvq.se@gmail.com}
       JWT_SECRET: ${JWT_SECRET}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@shopee-affiliate-db:5432/${POSTGRES_DB}

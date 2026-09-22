@@ -86,6 +86,29 @@ async function findByFacebookId(facebookId) {
   return prisma.user.findUnique({ where: { facebookId } });
 }
 
+// email is @unique but stored as typed; compare case-insensitively so the
+// role tooling finds "Foo@Gmail.com" when asked for "foo@gmail.com".
+async function findByEmail(email) {
+  if (!email) return null;
+  return prisma.user.findFirst({ where: { email: { equals: String(email).trim(), mode: 'insensitive' } } });
+}
+
+const ROLES = ['user', 'admin'];
+
+// Admin-facing only (PUT /admin/users/:id/role and scripts/set-role.js).
+// Returns null when the row doesn't exist rather than throwing Prisma's P2025.
+async function setRole(userId, role) {
+  if (!ROLES.includes(role)) throw new Error(`role must be one of: ${ROLES.join(', ')}`);
+  const id = Number(userId);
+  const existing = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) return null;
+  return prisma.user.update({ where: { id }, data: { role } });
+}
+
+async function countAdmins() {
+  return prisma.user.count({ where: { role: 'admin' } });
+}
+
 // First Google/Facebook sign-in for this provider id: create a fresh
 // app-only user. Deliberately does NOT match/merge onto an existing row by
 // email: email is a free-text, unverified field a user can set to anything
@@ -203,11 +226,13 @@ async function verifyPassword(userId, password) {
 }
 
 // App-facing responses must never leak passwordHash - strip it rather than
-// remembering to omit it at every call site.
+// remembering to omit it at every call site. `role` is deliberately kept:
+// the website reads it to decide whether to show the admin entry point at
+// all (it's not a secret - the /admin/* API re-checks the DB on every call).
 function toPublicAppUser(user) {
   if (!user) return null;
   const { passwordHash: _passwordHash, ...rest } = user;
-  return { ...rest, hasPassword: Boolean(_passwordHash) };
+  return { ...rest, role: user.role || 'user', hasPassword: Boolean(_passwordHash) };
 }
 
 module.exports = {
@@ -223,6 +248,10 @@ module.exports = {
   findByPhone,
   findByGoogleId,
   findByFacebookId,
+  findByEmail,
+  setRole,
+  countAdmins,
+  ROLES,
   findOrCreateOAuthUser,
   findByReferralCode,
   ensureReferralCode,

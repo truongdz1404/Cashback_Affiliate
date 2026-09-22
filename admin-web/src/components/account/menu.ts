@@ -7,6 +7,7 @@ import {
   LinkIcon,
   LockIcon,
   ReceiptIcon,
+  ShieldIcon,
   UsersIcon,
   WalletIcon,
 } from "@/components/icons";
@@ -29,6 +30,8 @@ export type AccountFacts = {
   hasBank: boolean;
   hasPassword: boolean;
   pendingWithdrawal: boolean;
+  /** users.role === "admin": the only thing that ever reveals /admin exists. */
+  isAdmin: boolean;
 };
 
 export function hasBankAccount(user: Pick<AppUser, "bankName" | "bankAccountNumber" | "bankAccountHolder">): boolean {
@@ -41,13 +44,19 @@ export function accountFacts(user: AppUser, wallet: Pick<WalletSummary, "pending
     hasBank: hasBankAccount(user),
     hasPassword: Boolean(user.hasPassword),
     pendingWithdrawal: Boolean(wallet.pendingWithdrawal),
+    isAdmin: user.role === "admin",
   };
 }
 
 // One list, three renderers (account sidebar, header dropdown, phone drawer):
 // the badges tell the member what still needs doing before they can be paid.
+// Admins get one extra entry on top; nobody else ever sees the word.
 export function accountMenu(facts: AccountFacts): AccountMenuItem[] {
+  const admin: AccountMenuItem[] = facts.isAdmin
+    ? [{ href: "/admin", label: "Trang quản trị", short: "Quản trị", icon: ShieldIcon }]
+    : [];
   return [
+    ...admin,
     { href: "/account", label: "Tổng quan", icon: HomeIcon },
     {
       href: "/account/profile",

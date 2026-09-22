@@ -171,8 +171,9 @@ app.post('/app/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }), async (
   try {
     const { phone, password } = req.body;
     if (!phone || !password) return res.status(400).json({ error: 'phone and password are required' });
-    const user = await usersRepo.verifyLogin(phone, password);
+    let user = await usersRepo.verifyLogin(phone, password);
     if (!user) return res.status(401).json({ error: 'invalid phone or password' });
+    user = await adminAuth.syncRoleFromAllowlist(user);
     res.json({ token: await appAuth.issueAppToken(user.id), user: usersRepo.toPublicAppUser(user) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -327,12 +328,13 @@ async function handleOAuthLogin(req, res, provider, verify, tokenField) {
       return res.status(401).json({ error: err.message });
     }
 
-    const user = await usersRepo.findOrCreateOAuthUser({
+    let user = await usersRepo.findOrCreateOAuthUser({
       provider,
       providerId: profile.providerId,
       email: profile.email,
       name: profile.name,
     });
+    user = await adminAuth.syncRoleFromAllowlist(user);
     res.json({ token: await appAuth.issueAppToken(user.id), user: usersRepo.toPublicAppUser(user) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -349,8 +351,12 @@ app.post('/app/login/facebook', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 })
 
 app.get('/app/me', appAuth.requireAppUser, async (req, res) => {
   try {
-    const user = await usersRepo.getById(req.appUserId);
+    let user = await usersRepo.getById(req.appUserId);
     if (!user) return res.status(404).json({ error: 'user not found' });
+    // Also here, not only at sign-in: an operator already signed in when
+    // their address is added to ADMIN_EMAILS gets the role on the next page
+    // load instead of having to log out and back in.
+    user = await adminAuth.syncRoleFromAllowlist(user);
     res.json(usersRepo.toPublicAppUser(user));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -973,61 +979,38 @@ app.post('/users/:zaloUserId/payment', async (req, res) => {
   }
 });
 
-// --- Admin dashboard API: JWT-protected (see lib/adminAuth.js), sits behind
-// the shared x-api-key middleware above like everything else in this file -
-// the future admin-web app is expected to hold the api key server-side and
-// only hand the browser the short-lived JWT. ---
+// --- Admin dashboard API: role-protected (see lib/adminAuth.js), sits
+// behind the shared x-api-key middleware above like everything else in this
+// file. There is no admin login route: an admin signs in through the normal
+// /app/login* routes and the resulting app_user token is accepted here as
+// long as that account's users.role is "admin". admin-web holds the api key
+// server-side and forwards the user's httpOnly cookie token. ---
 
-// Tighter than the app-user login limiter above - there's only ever one
-// admin password, so a brute-force attempt against it is far more
-// concentrated (and far more dangerous, since it unlocks every money-moving
-// admin route) than the same rate against millions of possible phone numbers.
-app.post('/admin/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }), async (req, res) => {
+// Grant or revoke the dashboard for one account. Guarded so an admin can't
+// lock everyone out: you can't demote yourself, and the last remaining admin
+// can't be demoted at all (use ADMIN_EMAILS / scripts/set-role.js to recover).
+app.put('/admin/users/:id/role', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const { password } = req.body;
-    if (!password) return res.status(400).json({ error: 'body.password is required' });
-    if (!(await adminAuth.checkAdminPassword(password))) {
-      return res.status(401).json({ error: 'invalid password' });
+    const { role } = req.body;
+    if (!usersRepo.ROLES.includes(role)) {
+      return res.status(400).json({ error: `body.role must be one of: ${usersRepo.ROLES.join(', ')}` });
     }
-    res.json({ token: await adminAuth.issueToken() });
+    const targetId = Number(req.params.id);
+    if (role !== 'admin') {
+      if (targetId === req.adminUser.id) {
+        return res.status(400).json({ error: 'you cannot remove your own admin role' });
+      }
+      const target = await usersRepo.getById(targetId);
+      if (target && target.role === 'admin' && (await usersRepo.countAdmins()) <= 1) {
+        return res.status(400).json({ error: 'cannot demote the last remaining admin' });
+      }
+    }
+    const updated = await usersRepo.setRole(targetId, role);
+    if (!updated) return res.status(404).json({ error: 'user not found' });
+    res.json(usersRepo.toPublicAppUser(updated));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// Same Google verification path as /app/login/google, but the result is
-// only ever an admin JWT (no user record is created) and only for the
-// allowlisted admin emails in ADMIN_EMAILS - see lib/adminAuth.js#isAdminEmail.
-app.post('/admin/login/google', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }), async (req, res) => {
-  try {
-    const { idToken } = req.body;
-    if (!idToken) return res.status(400).json({ error: 'body.idToken is required' });
-    let profile;
-    try {
-      profile = await oauthLogin.verifyGoogleIdToken(idToken);
-    } catch (err) {
-      if (err.notConfigured) return res.status(501).json({ error: 'not_configured' });
-      return res.status(401).json({ error: err.message });
-    }
-    if (!adminAuth.isAdminEmail(profile.email)) {
-      return res.status(403).json({ error: 'email not authorized as admin' });
-    }
-    res.json({ token: await adminAuth.issueToken() });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/admin/password', adminAuth.requireAdmin, async (req, res) => {
-  const { newPassword } = req.body;
-  if (!newPassword || String(newPassword).length < 8) {
-    return res.status(400).json({ error: 'body.newPassword is required and must be at least 8 characters' });
-  }
-  await adminAuth.setAdminPassword(newPassword);
-  // Changing the password doesn't itself invalidate the JWT the caller is
-  // using right now, but re-issue one anyway for a consistent response shape
-  // with the other rotation endpoints below.
-  res.json({ ok: true, token: await adminAuth.issueToken() });
 });
 
 // Live-editable secrets (Zalo bot token, Zalo webhook secret, admin JWT
@@ -1054,7 +1037,7 @@ app.put('/admin/config/:key', adminAuth.requireAdmin, async (req, res) => {
   // Rotating the JWT secret invalidates the token the caller just used to
   // authenticate this very request - hand back a fresh one so the dashboard
   // can swap it in without forcing an immediate re-login.
-  if (key === 'jwtSecret') response.token = await adminAuth.issueToken();
+  if (key === 'jwtSecret') response.token = await appAuth.issueAppToken(req.adminUser.id);
   res.json(response);
 });
 

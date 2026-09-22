@@ -4,8 +4,8 @@ import { openAuthDialog } from "@/lib/authDialog";
 
 // Client-side counterpart of lib/appApi.ts: talks to the local /api/user/*
 // proxy, which attaches the httpOnly user_token. A 401 means the session
-// expired - open the sign-in dialog over the current page (NOT a redirect to
-// /admin/login, which is what lib/clientApi.ts does for the dashboard).
+// expired - open the sign-in dialog over the current page (the dashboard's
+// lib/clientApi.ts instead clears the cookie and sends people to /login).
 export class AppRequestError extends Error {
   status: number;
   constructor(status: number, message: string) {

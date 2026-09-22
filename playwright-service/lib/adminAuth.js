@@ -1,80 +1,72 @@
 const jwt = require('jsonwebtoken');
-const prisma = require('./prisma');
 const configStore = require('./configStore');
-const passwordHash = require('./passwordHash');
+const usersRepo = require('./repositories/users');
 
-const ADMIN_PASSWORD_HASH_KEY = 'admin_password_hash';
-
-async function storeAdminPasswordHash(hash) {
-  await prisma.setting.upsert({
-    where: { key: ADMIN_PASSWORD_HASH_KEY },
-    create: { key: ADMIN_PASSWORD_HASH_KEY, value: hash },
-    update: { value: hash },
-  });
-}
-
-// The password is only ever kept as a salted hash in the `settings` table.
-// On first use (no hash stored yet), it's seeded from the ADMIN_PASSWORD env
-// var so an already-deployed install keeps working with what's in .env,
-// after which /admin/password (see server.js) is the only way to change it.
-async function getAdminPasswordHash() {
-  const row = await prisma.setting.findUnique({ where: { key: ADMIN_PASSWORD_HASH_KEY } });
-  if (row) return row.value;
-
-  const envPassword = process.env.ADMIN_PASSWORD;
-  if (!envPassword || envPassword === 'change-me') {
-    throw new Error('ADMIN_PASSWORD is not configured on the server (.env) and no password has been set yet');
-  }
-  const hash = passwordHash.hashPassword(envPassword);
-  await storeAdminPasswordHash(hash);
-  return hash;
-}
-
-async function checkAdminPassword(password) {
-  return passwordHash.verifyPassword(password, await getAdminPasswordHash());
-}
-
-async function setAdminPassword(newPassword) {
-  await storeAdminPasswordHash(passwordHash.hashPassword(newPassword));
-}
+// There is no separate admin login any more. An administrator is an ordinary
+// account (phone/password, Google or Facebook - see /app/login*) whose
+// users.role is "admin". The website shows that person an extra "Trang quản
+// trị" entry; everyone else never learns the dashboard exists (/admin/* on
+// the web answers 404 for them, and the API below answers 403).
 
 async function getJwtSecret() {
   return configStore.get('jwtSecret');
 }
 
-async function issueToken() {
-  return jwt.sign({ role: 'admin' }, await getJwtSecret(), { expiresIn: '12h' });
-}
-
-// Google login for admins has no local user table to check against, so the
-// allowlist lives in an env var instead - defaults to the one known admin
-// account if the operator hasn't set ADMIN_EMAILS yet.
+// Comma-separated ADMIN_EMAILS is the bootstrap path: the very first admin
+// can't be promoted from a dashboard nobody can open yet. Any account that
+// signs in with (or already carries) one of these addresses is promoted on
+// the spot - see syncRoleFromAllowlist. Defaults to the one known operator
+// account so an install with no env override still has a way in.
 function isAdminEmail(email) {
   if (!email) return false;
   const allowlist = (process.env.ADMIN_EMAILS || 'truongvq.se@gmail.com')
     .split(',')
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
-  return allowlist.includes(email.toLowerCase());
+  return allowlist.includes(String(email).trim().toLowerCase());
 }
 
-// Protects /admin/* routes: expects "Authorization: Bearer <token>" from a
-// prior POST /admin/login. Also checks the `role` claim, not just the
-// signature - the app-user JWTs issued by lib/appAuth.js share this same
-// jwtSecret, so without this check a logged-in app user's token would also
-// pass as an admin token.
+// Called on every sign-in and on GET /app/me. Only ever promotes: removing
+// an address from ADMIN_EMAILS must not silently demote an admin who was
+// (also) granted the role through the dashboard.
+async function syncRoleFromAllowlist(user) {
+  if (!user || user.role === 'admin' || !isAdminEmail(user.email)) return user;
+  return (await usersRepo.setRole(user.id, 'admin')) || user;
+}
+
+// Protects /admin/* routes: expects "Authorization: Bearer <token>" carrying
+// the SAME app_user JWT that /app/* uses (lib/appAuth.js), then checks the
+// live users.role in the database - not a claim baked into the token - so
+// revoking someone's admin role takes effect on their very next request
+// rather than when their 30-day token finally expires.
+//
+// Sets req.adminUser (the full row) for handlers that need to know who is
+// acting, e.g. the self-demotion guard on PUT /admin/users/:id/role.
 async function requireAdmin(req, res, next) {
   const header = req.get('authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'missing Authorization: Bearer <token> header' });
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, await getJwtSecret());
-    if (decoded.role !== 'admin') return res.status(403).json({ error: 'admin token required' });
+    decoded = jwt.verify(token, await getJwtSecret());
+  } catch {
+    return res.status(401).json({ error: 'invalid or expired token' });
+  }
+  if (decoded.role !== 'app_user' || !decoded.sub) {
+    return res.status(401).json({ error: 'invalid or expired token' });
+  }
+
+  try {
+    const user = await usersRepo.getById(decoded.sub);
+    if (!user) return res.status(401).json({ error: 'invalid or expired token' });
+    if (user.role !== 'admin') return res.status(403).json({ error: 'admin role required' });
+    req.adminUser = user;
+    req.appUserId = user.id;
     next();
   } catch (err) {
-    res.status(401).json({ error: 'invalid or expired admin token' });
+    res.status(500).json({ error: err.message });
   }
 }
 
-module.exports = { issueToken, requireAdmin, checkAdminPassword, setAdminPassword, isAdminEmail };
+module.exports = { requireAdmin, isAdminEmail, syncRoleFromAllowlist };

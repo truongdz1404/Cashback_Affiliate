@@ -1,9 +1,11 @@
 "use client";
 
 // Thin wrapper around the local /api/* routes (which proxy to
-// playwright-service's /admin/* API). A 401 here means the admin session
-// expired or was invalidated (e.g. the JWT secret was rotated) - send the
-// user back to /admin/login instead of showing a broken page.
+// playwright-service's /admin/* API).
+//   401 - the session expired or was invalidated (e.g. the JWT secret was
+//         rotated): drop the dead cookie and come back here after signing in.
+//   403 - signed in, but the account lost its admin role meanwhile; the
+//         dashboard is already on screen so a readable error beats a 404.
 async function request<T = unknown>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...options,
@@ -11,8 +13,12 @@ async function request<T = unknown>(path: string, options?: RequestInit): Promis
   });
 
   if (res.status === 401) {
-    window.location.href = "/admin/login";
+    const back = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+    window.location.href = `/api/user/logout?next=${encodeURIComponent(back)}`;
     throw new Error("unauthorized");
+  }
+  if (res.status === 403) {
+    throw new Error("Tài khoản của bạn không còn quyền quản trị.");
   }
 
   const text = await res.text();

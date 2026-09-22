@@ -22,6 +22,12 @@ model User {
   googleId            String?  @unique @map("google_id")
   facebookId          String?  @unique @map("facebook_id")
   fullName            String?  @map("full_name")
+  // "user" | "admin". One account, one login: an admin signs in exactly like
+  // everyone else and this flag is what unlocks the /admin/* API and the
+  // dashboard (lib/adminAuth.js#requireAdmin). Promoted via
+  // PUT /admin/users/:id/role, scripts/set-role.js, or automatically for the
+  // ADMIN_EMAILS allowlist on sign-in.
+  role                String   @default("user")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
@@ -38,6 +44,7 @@ model User {
   clawbackFlags       ClawbackFlag[]
   emailVerifications  EmailVerification[]
 
+  @@index([role])
   @@map("users")
 }
 

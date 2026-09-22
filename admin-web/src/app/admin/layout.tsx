@@ -1,41 +1,33 @@
-"use client";
+import type { ReactNode } from "react";
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { getSessionUser } from "@/lib/appApi";
+import { displayName } from "@/lib/format";
+import AdminShell from "@/components/admin/AdminShell";
 
-import { useState, type ReactNode } from "react";
-import Sidebar from "@/components/Sidebar";
-import { MenuIcon, CloseIcon } from "@/components/icons";
+// The dashboard is not a place you can find: for guests and ordinary members
+// this route tree answers exactly like any other missing URL (the root
+// not-found page), with no redirect and no "sign in as admin" hint. Only an
+// account whose backend role is "admin" gets the shell - and the backend
+// still re-checks that role on every /admin/* API call the shell makes.
+export const dynamic = "force-dynamic";
 
-export default function DashboardLayout({ children }: { children: ReactNode }) {
-  const [mobileOpen, setMobileOpen] = useState(false);
+// Static `metadata` here would still be applied to the 404 rendered below
+// and put "Quản trị" in the tab title of a page that claims not to exist.
+// getSessionUser is cached per request, so this costs no extra round trip.
+export async function generateMetadata(): Promise<Metadata> {
+  const user = await getSessionUser();
+  if (!user || user.role !== "admin") return { title: "Trang không tồn tại | Rewally" };
+  return { title: "Quản trị | Rewally", robots: { index: false, follow: false } };
+}
+
+export default async function AdminLayout({ children }: { children: ReactNode }) {
+  const user = await getSessionUser();
+  if (!user || user.role !== "admin") notFound();
 
   return (
-    <div className="min-h-screen bg-[var(--background)]">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-[var(--border)] md:block">
-        <Sidebar />
-      </aside>
-
-      {mobileOpen && (
-        <div className="fixed inset-0 z-40 md:hidden">
-          <div className="absolute inset-0 bg-[var(--backdrop)]" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-64 border-r border-[var(--border)] shadow-xl">
-            <Sidebar onNavigate={() => setMobileOpen(false)} />
-          </aside>
-        </div>
-      )}
-
-      <div className="md:pl-64">
-        <header className="flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-4 md:hidden">
-          <button
-            onClick={() => setMobileOpen((v) => !v)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground)] hover:bg-[var(--surface-secondary)]"
-            aria-label="Menu"
-          >
-            {mobileOpen ? <CloseIcon className="h-5 w-5" /> : <MenuIcon className="h-5 w-5" />}
-          </button>
-          <span className="text-sm font-semibold text-[var(--foreground)]">Shopee Affiliate Admin</span>
-        </header>
-
-        <main className="mx-auto max-w-6xl px-4 py-6 md:px-8 md:py-8">{children}</main>
-      </div>
-    </div>
+    <AdminShell admin={{ name: displayName(user), contact: user.email ?? user.phone ?? "" }}>
+      {children}
+    </AdminShell>
   );
 }

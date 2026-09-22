@@ -19,6 +19,10 @@ export type AppUser = {
   googleId: string | null;
   facebookId: string | null;
   hasPassword: boolean;
+  // "admin" unlocks the dashboard at /admin for this same account; the
+  // backend re-checks users.role on every /admin/* call, so this is only a
+  // hint for what to render, never the thing that grants access.
+  role: "user" | "admin";
 };
 
 export type WalletSummary = {

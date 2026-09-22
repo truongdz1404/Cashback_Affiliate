@@ -1,27 +1,19 @@
 import { NextResponse } from "next/server";
 
-const ADMIN_TOKEN_COOKIE = "admin_token";
 const USER_TOKEN_COOKIE = "user_token";
 
-// Two independent realms on one deployment:
-//   /admin/*   -> dashboard, needs admin_token
-//   /account/* -> the visitor's own wallet/orders/profile, needs user_token
-// Everything else (home, catalog, campaigns, guide, login, register) is
-// public - the backend serves catalog content to anonymous callers too, see
-// appAuth.optionalAppUser.
+// One sign-in for everyone. /account/* needs a session; /admin/* is decided
+// by src/app/admin/layout.tsx, which reads the account's role from the
+// backend and renders a plain 404 for anyone who is not an admin - there is
+// deliberately no redirect to a login page from /admin, so a visitor probing
+// the URL learns nothing. Everything else (home, catalog, campaigns, guide,
+// login, register) is public - the backend serves catalog content to
+// anonymous callers too, see appAuth.optionalAppUser.
 export function proxy(req) {
   const { pathname } = req.nextUrl;
 
   if (pathname.startsWith("/api/") || pathname.startsWith("/_next")) {
     return NextResponse.next();
-  }
-
-  if (pathname === "/admin/login") return NextResponse.next();
-  if (pathname.startsWith("/admin")) {
-    if (req.cookies.get(ADMIN_TOKEN_COOKIE)?.value) return NextResponse.next();
-    const url = req.nextUrl.clone();
-    url.pathname = "/admin/login";
-    return NextResponse.redirect(url);
   }
 
   if (pathname.startsWith("/account")) {
