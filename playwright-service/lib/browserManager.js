@@ -5,10 +5,11 @@ const { CUSTOM_LINK_URL } = require('./constants');
 
 const STORAGE_STATE_PATH = process.env.STORAGE_STATE_PATH || './storage/storageState.json';
 const HEADLESS = process.env.HEADLESS !== 'false';
-// Bumped from 2 now that the Shopping tab also mints links through this pool
-// on every product tap (server.js POST /app/shopping-products/:id/open), on
-// top of the original /app/link "Tạo link" traffic.
-const CUSTOM_LINK_POOL_SIZE = parseInt(process.env.CUSTOM_LINK_POOL_SIZE || '4', 10);
+// Reverted to 2 - the VPS is only 2 core/4GB RAM and the OOM killer was
+// killing live Chrome processes with 4 warm tabs running alongside Postgres,
+// n8n, and the rest of the stack. Raise this again only once the VPS has
+// more headroom (swap and/or a bigger RAM plan).
+const CUSTOM_LINK_POOL_SIZE = parseInt(process.env.CUSTOM_LINK_POOL_SIZE || '2', 10);
 
 let browser = null;
 let context = null;
