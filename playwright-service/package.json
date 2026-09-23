@@ -11,7 +11,8 @@
     "seed-login": "node scripts/login-from-file.js",
     "migrate-data": "node scripts/migrate-sqlite-to-postgres.js",
     "sync-banks": "node scripts/syncBanks.js",
-    "set-role": "node scripts/set-role.js"
+    "set-role": "node scripts/set-role.js",
+    "probe-brand-offer": "node scripts/probe-brand-offer.js"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",
