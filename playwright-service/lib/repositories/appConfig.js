@@ -75,6 +75,16 @@ const DEFAULTS = {
     referral: true,
     withdraw: true,
     socialLogin: true,
+    // Every shop surface at once: the Home rail, the shop card above search
+    // results, the storefront button on a product card and the shop screen.
+    // Named `shops` rather than `shopsTab` because there is deliberately no
+    // shops tab and no "all shops" screen - shops are only ever reached from
+    // the Home rail, a search, or a product.
+    //
+    // Ships OFF: a build can go to the store before the crawl has linked any
+    // products to shops, and the rail/search card would otherwise be empty.
+    // Turned on from the dashboard once the data is there, no re-release.
+    shops: false,
   },
   home: {
     bannerAutoplayMs: 4000,
@@ -338,6 +348,7 @@ function normalize(raw) {
       referral: bool(features.referral, d.features.referral),
       withdraw: bool(features.withdraw, d.features.withdraw),
       socialLogin: bool(features.socialLogin, d.features.socialLogin),
+      shops: bool(features.shops, d.features.shops),
     },
     home: {
       bannerAutoplayMs: int(home.bannerAutoplayMs, d.home.bannerAutoplayMs, 1500, 60000),

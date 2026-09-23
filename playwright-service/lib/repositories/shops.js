@@ -1,5 +1,11 @@
 const prisma = require('../prisma');
 const { parseCommissionRatePct } = require('../shoppingProductMapper');
+const { foldForSearch } = require('../textMatch');
+
+// Safety cap for the unaccented fallback in searchRanked(). Shops number in
+// the low thousands at most (one row per affiliate storefront), so scoring the
+// visible ones in memory stays far cheaper than maintaining an unaccent index.
+const CANDIDATE_POOL_SIZE = 2000;
 
 // Shops in Shopee's affiliate programme. Rows are created by
 // lib/shopResolution.js (from GET /api/v3/offer/shop/list) and enriched by
@@ -151,6 +157,82 @@ async function count(filters = {}) {
   return prisma.shop.count({ where: buildWhere(filters) });
 }
 
+// How many name matches to pull back before scoring. The scoring is a cheap
+// in-memory pass, but `contains` on a common word ("shop", "store") can match
+// a lot of rows and only the top one or two are ever shown.
+const SEARCH_CANDIDATE_POOL = 40;
+
+/**
+ * Scores one shop against what a user typed, so the Shopping tab can put a
+ * single shop card above the product grid when the search obviously names a
+ * shop - and show nothing when it doesn't.
+ *
+ * Deliberately blunt, and deliberately the ONLY fuzzy name matching in the
+ * codebase: deciding which shop a product belongs to is a money decision and
+ * stays byte-exact (see lib/shopResolution.js). Getting a shop card wrong just
+ * shows the wrong storefront above a correct product list.
+ *
+ * The score bands are ordered so a weaker band can never overtake a stronger
+ * one: the popularity bonus is capped at 20, below the 25-point gap between
+ * any two bands.
+ */
+function scoreShopAgainstQuery(shop, foldedQuery) {
+  const name = foldForSearch(shop.name);
+  if (!name || !foldedQuery) return 0;
+
+  let score;
+  if (name === foldedQuery) score = 400;
+  else if (name.startsWith(foldedQuery)) score = 300;
+  // Whole-word hit ("cocoon" inside "cocoon vietnam chinh hang") beats a match
+  // that lands mid-word ("coon" inside "cocoon"), which is usually noise.
+  else if (new RegExp(`(^| )${foldedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( |$)`).test(name)) score = 200;
+  else if (name.includes(foldedQuery)) score = 100;
+  // The other direction: someone typed the shop's full name plus a product
+  // word ("cocoon cà phê đắk lắk"). Worth showing, but weakest.
+  else if (foldedQuery.includes(name) && name.length >= 4) score = 75;
+  else return 0;
+
+  // Tiny nudge by catalog size, so between two similarly-named shops the one
+  // that can actually show something wins. log10 keeps a 5000-product shop
+  // from burying a 50-product exact match.
+  return score + Math.min(Math.log10(shop.productCount + 1) * 6, 20);
+}
+
+/**
+ * The shop card above the Shopping tab's search results. Returns [] rather
+ * than a weak guess when nothing scores - an empty result is the correct
+ * answer for the many searches that name a product, not a shop.
+ */
+async function searchRanked({ search, limit = 1 } = {}) {
+  const folded = foldForSearch(search);
+  if (folded.length < 2) return [];
+
+  // The SQL pre-filter is diacritic-SENSITIVE (Postgres `ILIKE`), so it is a
+  // cheap net, not the matcher: "cocoon" finds "Cocoon Vietnam", while a query
+  // typed without tones ("thuoc nhuom") won't pre-match "THUỐC NHUỘM". Widening
+  // that would mean an unaccent index; until shops number in the thousands the
+  // fallback below - score the visible shops directly - is cheaper than the
+  // index and strictly more accurate.
+  let candidates = await prisma.shop.findMany({
+    where: { ...VISIBLE_WHERE, name: { contains: search.trim(), mode: 'insensitive' } },
+    take: SEARCH_CANDIDATE_POOL,
+  });
+  if (!candidates.length) {
+    candidates = await prisma.shop.findMany({
+      where: VISIBLE_WHERE,
+      orderBy: { productCount: 'desc' },
+      take: CANDIDATE_POOL_SIZE,
+    });
+  }
+
+  return candidates
+    .map((shop) => ({ shop, score: scoreShopAgainstQuery(shop, folded) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => entry.shop);
+}
+
 async function listFeatured({ limit = 10 } = {}) {
   return prisma.shop.findMany({
     where: { ...VISIBLE_WHERE, isFeatured: true },
@@ -267,6 +349,8 @@ module.exports = {
   list,
   count,
   listFeatured,
+  searchRanked,
+  scoreShopAgainstQuery,
   updateCuration,
   remove,
   refreshProductCounts,

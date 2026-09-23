@@ -680,11 +680,26 @@ app.get('/app/campaigns', appAuth.optionalAppUser, async (req, res) => {
   }
 });
 
-app.get('/app/shopping-products', appAuth.optionalAppUser, async (req, res) => {
+// Reads `shopId` from either the path (/app/shops/:shopId/products) or the
+// query string (/app/shopping-products?shopId=), so both URLs go through the
+// same handler. Blank or whitespace-only means "no shop filter", never "a shop
+// whose id is the empty string".
+function readShopId(req) {
+  const raw = req.params?.shopId ?? req.query?.shopId;
+  if (typeof raw !== 'string') return undefined;
+  return raw.trim() || undefined;
+}
+
+// One handler, registered at two URLs (see below). Deliberately not two
+// handlers: this is where the user's cashback split is applied, and a second
+// near-copy would be the obvious place for a future getEffectivePct change to
+// land in one and not the other - which is a money bug, not a cosmetic one.
+async function listShoppingProductsHandler(req, res) {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const offset = Number(req.query.offset) || 0;
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const shopId = readShopId(req);
     const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
     const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
     const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
@@ -717,8 +732,14 @@ app.get('/app/shopping-products', appAuth.optionalAppUser, async (req, res) => {
     // of disappearing. See lib/repositories/recommendations.js.
     // Anonymous visitors are forced down this path too: personalized ranking
     // needs a userId to score against.
+    //
+    // `shopId` MUST be in this list. rankProductsForUser builds its own `where`
+    // from `search` alone (lib/repositories/recommendations.js), so without it
+    // a logged-in user opening a shop page would be served the entire catalog
+    // under that shop's name - a silent, plausible-looking wrong answer.
     const hasFilter =
       req.appUserId == null ||
+      shopId != null ||
       minPrice != null ||
       maxPrice != null ||
       minCommissionRateValue != null ||
@@ -744,6 +765,7 @@ app.get('/app/shopping-products', appAuth.optionalAppUser, async (req, res) => {
           category,
           isBestSeller,
           isXtraCommission,
+          shopId,
           sort,
         })
       : await recommendationsRepo.rankProductsForUser(req.appUserId, { search, limit, offset });
@@ -762,17 +784,25 @@ app.get('/app/shopping-products', appAuth.optionalAppUser, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}
+
+app.get('/app/shopping-products', appAuth.optionalAppUser, listShoppingProductsHandler);
+// A shop's products are the same listing with one more filter, so it is the
+// same handler at a second URL rather than a parallel endpoint. Clients that
+// already know the shop get the tidier path; the query-string form keeps the
+// app's existing useShoppingProducts hook working with a single extra param.
+app.get('/app/shops/:shopId/products', appAuth.optionalAppUser, listShoppingProductsHandler);
 
 // The listing route above returns a bare array with no total, which is fine
 // for the app's infinite scroll but not for the website's "N sản phẩm" /
 // numbered pagination. Same filter params, count only.
-app.get('/app/shopping-products/count', appAuth.optionalAppUser, async (req, res) => {
+async function countShoppingProductsHandler(req, res) {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
     const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
     const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
+    const shopId = readShopId(req);
     const parseBool = (v) => (v === undefined ? undefined : v === 'true' || v === '1');
 
     const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
@@ -785,6 +815,7 @@ app.get('/app/shopping-products/count', appAuth.optionalAppUser, async (req, res
         minPrice,
         maxPrice,
         category,
+        shopId,
         isBestSeller: parseBool(req.query.bestSeller),
         isXtraCommission: parseBool(req.query.xtra),
         minCommissionRateValue: toRaw(req.query.minCommissionPct !== undefined ? Number(req.query.minCommissionPct) : undefined),
@@ -793,6 +824,86 @@ app.get('/app/shopping-products/count', appAuth.optionalAppUser, async (req, res
         maxCommissionValue: toRaw(req.query.maxCommissionAmount !== undefined ? Number(req.query.maxCommissionAmount) : undefined),
       }),
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+app.get('/app/shopping-products/count', appAuth.optionalAppUser, countShoppingProductsHandler);
+app.get('/app/shops/:shopId/products/count', appAuth.optionalAppUser, countShoppingProductsHandler);
+
+// ─── Shop: các route cho app ────────────────────────────────────────────────
+// Everything below serves `visibleOnly`: isActive && status === 'linked' &&
+// productCount > 0 (lib/repositories/shops.js). A shop that only turned up as
+// fuzzy by-catch while resolving some product's shop name has no products to
+// show, so it must never reach a user - see the VISIBLE_WHERE comment there.
+
+// Bare array + limit capped at 100, same house shape as /app/shopping-products,
+// so the app's infinite-query helpers work unchanged.
+app.get('/app/shops', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Number(req.query.offset) || 0;
+    res.json(await shopsRepo.list({
+      limit,
+      offset,
+      sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
+      search: typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined,
+      featuredOnly: req.query.featured === '1' || req.query.featured === 'true' ? true : undefined,
+      visibleOnly: true,
+    }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Registered BEFORE /app/shops/:shopId - otherwise the parameterised route
+// swallows "count" and answers 404 for a shop that does not exist.
+app.get('/app/shops/count', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    res.json({
+      total: await shopsRepo.count({
+        search: typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined,
+        featuredOnly: req.query.featured === '1' || req.query.featured === 'true' ? true : undefined,
+        visibleOnly: true,
+      }),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The Home tab's "Shop nổi bật" rail. Curated by an admin (isFeatured), so an
+// empty array is a legitimate answer on a fresh install and the rail must
+// simply not render rather than fall back to an arbitrary pick.
+app.get('/app/shops/featured', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 10, 50);
+    res.json(await shopsRepo.listFeatured({ limit }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The single shop card the Shopping tab puts above its product grid when what
+// someone typed clearly names a shop. This is the one place fuzzy name matching
+// is allowed (lib/repositories/shops.js#scoreShopAgainstQuery); an empty array
+// is the right answer for the many searches that name a product, not a shop.
+app.get('/app/shops/search', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const search = typeof req.query.search === 'string' ? req.query.search : '';
+    const limit = Math.min(Number(req.query.limit) || 1, 5);
+    res.json(await shopsRepo.searchRanked({ search, limit }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/shops/:shopId', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const shop = await shopsRepo.getByShopId(req.params.shopId, { visibleOnly: true });
+    if (!shop) return res.status(404).json({ error: 'not_found' });
+    res.json(shop);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1587,6 +1698,54 @@ app.get('/admin/shops', adminAuth.requireAdmin, async (req, res) => {
     res.json({ items, total });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Curation only. Everything else on a shop row comes from Shopee and is
+// rewritten by the next sync (lib/repositories/shops.js#upsertFromApi
+// deliberately leaves these three alone), so these are the only fields an admin
+// can own. `isActive: false` is the per-shop kill switch: it hides the shop from
+// the app without deleting anything or touching its products.
+app.put('/admin/shops/:id', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const shop = await shopsRepo.updateCuration(req.params.id, {
+      isActive: req.body?.isActive,
+      isFeatured: req.body?.isFeatured,
+      sortOrder: req.body?.sortOrder === undefined ? undefined : Number(req.body.sortOrder),
+    });
+    if (!shop) return res.status(404).json({ error: 'not_found' });
+    res.json(shop);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// The FK is ON DELETE SET NULL, so this unlinks the shop's products rather than
+// deleting them - the catalog rows were scraped independently and are still
+// worth showing. The name resolution row survives too and will simply re-resolve
+// the name on a later run.
+app.delete('/admin/shops/:id', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const removed = await shopsRepo.remove(req.params.id);
+    if (!removed) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true, shopId: removed.shopId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// One live call to GET /api/v3/offer/shop for the rating/sold/follower fields
+// the list endpoint doesn't carry. Answered synchronously because it really is
+// a single request - unlike the crawl endpoints, there is no browser involved.
+app.post('/admin/shops/:id/refresh', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const current = await shopsRepo.getById(req.params.id);
+    if (!current) return res.status(404).json({ error: 'not_found' });
+    const detail = await shopeeAffiliateApi.getShopDetail(current.shopId);
+    if (!detail) return res.status(502).json({ error: 'empty_detail' });
+    res.json(await shopsRepo.applyDetail(current.shopId, detail));
+  } catch (err) {
+    sendShopeeApiError(res, err);
   }
 });
 

@@ -35,6 +35,32 @@ async function upsertMany(products, { createOnly = {} } = {}) {
   return count;
 }
 
+/**
+ * The shop summary embedded in every product row that can reach a client.
+ *
+ * It has to be applied at EVERY query that feeds /app/shopping-products, not
+ * just this file's list(): the RN app has a single `ShoppingProduct` type, so
+ * if only the filtered branch carried `shop`, the field would silently vanish
+ * the moment a response came from the recommendation ranker instead - and the
+ * "view this shop" button on a card would disappear with it. The other four
+ * sites are in lib/repositories/recommendations.js.
+ *
+ * Cost is ~120 bytes a row (~12KB on a 100-item page), against an N+1
+ * /app/shops/:shopId per card if the client had to fetch it itself.
+ */
+const SHOP_INCLUDE = {
+  shop: {
+    select: {
+      shopId: true,
+      name: true,
+      imageUrl: true,
+      portraitUrl: true,
+      commissionRateText: true,
+      isFeatured: true,
+    },
+  },
+};
+
 const SORTS = {
   newest: { scrapedAt: 'desc' },
   price_asc: { priceValue: 'asc' },
@@ -85,6 +111,7 @@ function buildWhere({ search, minPrice, maxPrice, minCommissionRateValue, maxCom
 async function list({ limit = 20, offset = 0, sort, ...filters } = {}) {
   return prisma.shoppingProduct.findMany({
     where: buildWhere(filters),
+    include: SHOP_INCLUDE,
     orderBy: SORTS[sort] || SORTS.newest,
     take: limit,
     skip: offset,
@@ -155,4 +182,4 @@ async function ensureExists(productId, meta, commissionTable) {
   return true;
 }
 
-module.exports = { upsertMany, list, count, listCategories, remove, getById, ensureExists };
+module.exports = { upsertMany, list, count, listCategories, remove, getById, ensureExists, SHOP_INCLUDE };

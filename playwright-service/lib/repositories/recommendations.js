@@ -1,5 +1,14 @@
 const prisma = require('../prisma');
 const searchHistoryRepo = require('./searchHistory');
+// stripDiacritics/normalizeName/tokenize (and the STOPWORDS list they use)
+// moved to lib/textMatch.js unchanged so the shop search ranker could share
+// them - see the header there.
+const { stripDiacritics, normalizeName, tokenize } = require('../textMatch');
+// Every product this module hands back is serialized straight to a client, so
+// it must carry the same embedded shop summary the filtered listing does - see
+// the SHOP_INCLUDE comment in ./shoppingProducts.js for why all five query
+// sites have to agree.
+const { SHOP_INCLUDE } = require('./shoppingProducts');
 
 // How far back into a user's "Tạo link" history to look for signal. Capped
 // (not "all links ever") so a long-time user's taste can drift - their most
@@ -30,36 +39,6 @@ const SEARCH_TERM_WEIGHT = 0.5;
 const TREND_WINDOW_DAYS = 14;
 const TREND_MAX_BONUS = 0.8;
 
-// Vietnamese product titles are noisy with size/color/generic-hype words that
-// would otherwise dominate the keyword overlap score (e.g. "chính hãng",
-// "cao cấp" show up on nearly everything) - stripping them out leaves the
-// words that actually describe *what the product is*.
-const STOPWORDS = new Set([
-  'va', 'cho', 'cua', 'cac', 'nhung', 'mot', 'la', 'co', 'khong', 'tai',
-  'chinh', 'hang', 'cao', 'cap', 'sieu', 'gia', 're', 'moi', 'set', 'bo',
-  'chiec', 'cai', 'loai', 'mau', 'size', 'combo', 'tang', 'kem', 'theo',
-  'voi', 'duoc', 'nay', 'hot', 'trend', 'form', 'freeship', 'sale',
-]);
-
-function stripDiacritics(s) {
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd');
-}
-
-// addlivetag and the scraper each format shop/category names slightly
-// differently (e.g. trailing spaces from Shopee's own listing markup), so an
-// exact-string match would silently miss real matches. Trimming and
-// collapsing whitespace before using these as map keys avoids that.
-function normalizeName(s) {
-  return s ? s.trim().replace(/\s+/g, ' ') : s;
-}
-
-function tokenize(text) {
-  if (!text) return [];
-  return stripDiacritics(text.toLowerCase())
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
-}
-
 // Recency-weighted so the 1st most-recent link counts more than the 50th -
 // a simple 1/rank harmonic decay, no tuning knobs to get wrong.
 function weightAt(index) {
@@ -69,6 +48,7 @@ function weightAt(index) {
 async function fallbackProducts(limit, excludeIds = new Set()) {
   const products = await prisma.shoppingProduct.findMany({
     where: excludeIds.size ? { id: { notIn: [...excludeIds] } } : undefined,
+    include: SHOP_INCLUDE,
     orderBy: [{ commissionRateValue: 'desc' }, { scrapedAt: 'desc' }],
     take: limit,
   });
@@ -193,6 +173,7 @@ async function recommendForUser(userId, { limit = 10 } = {}) {
   const { alreadyLinkedItemIds } = affinity;
   const candidates = await prisma.shoppingProduct.findMany({
     where: alreadyLinkedItemIds.size ? { productId: { notIn: [...alreadyLinkedItemIds] } } : undefined,
+    include: SHOP_INCLUDE,
     orderBy: { id: 'desc' },
     take: CANDIDATE_POOL_SIZE,
   });
@@ -237,6 +218,7 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
     // class of bug documented above on CANDIDATE_POOL_SIZE.
     return prisma.shoppingProduct.findMany({
       where,
+      include: SHOP_INCLUDE,
       orderBy: [{ scrapedAt: 'desc' }, { id: 'desc' }],
       take: limit,
       skip: offset,
@@ -245,6 +227,7 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
 
   const candidates = await prisma.shoppingProduct.findMany({
     where,
+    include: SHOP_INCLUDE,
     orderBy: { id: 'desc' },
     take: CANDIDATE_POOL_SIZE,
   });

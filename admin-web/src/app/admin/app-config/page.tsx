@@ -29,6 +29,7 @@ type AppConfig = {
     referral: boolean;
     withdraw: boolean;
     socialLogin: boolean;
+    shops: boolean;
   };
   home: { bannerAutoplayMs: number; recommendationsLimit: number; taskFallbackSubtitle: string; platforms: HomePlatform[] };
   link: { platforms: LinkPlatform[]; comingSoon: string[] };
@@ -61,6 +62,7 @@ const FEATURE_LABELS: { key: keyof AppConfig["features"]; label: string; hint: s
   { key: "referral", label: "Giới thiệu bạn bè", hint: "Mã mời và hoa hồng giới thiệu" },
   { key: "withdraw", label: "Rút tiền", hint: "Nút tạo yêu cầu thanh toán" },
   { key: "socialLogin", label: "Đăng nhập Google/Facebook", hint: "Ẩn nút nếu tắt" },
+  { key: "shops", label: "Shop", hint: "Rail shop nổi bật, thẻ shop khi tìm kiếm và trang chi tiết shop" },
 ];
 
 function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
