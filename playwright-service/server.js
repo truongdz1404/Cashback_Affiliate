@@ -25,6 +25,10 @@ const recommendationsRepo = require('./lib/repositories/recommendations');
 const searchHistoryRepo = require('./lib/repositories/searchHistory');
 const shoppingProductImport = require('./lib/shoppingProductImport');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
+const shopsRepo = require('./lib/repositories/shops');
+const shopNameResolutionsRepo = require('./lib/repositories/shopNameResolutions');
+const shopResolution = require('./lib/shopResolution');
+const shopNameResolveJob = require('./lib/shopNameResolveJob');
 const shopeeAffiliateApi = require('./lib/shopeeAffiliateApi');
 const browserJobLock = require('./lib/browserJobLock');
 const jobRunsRepo = require('./lib/repositories/jobRuns');
@@ -1220,6 +1224,8 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
       referralCommissionMonths: await settingsRepo.getReferralCommissionMonths(),
       productOfferMaxPages: await settingsRepo.getProductOfferMaxPages(),
       minWithdrawAmount: await settingsRepo.getMinWithdrawAmount(),
+      shopResolveEnabled: await settingsRepo.getShopResolveEnabled(),
+      shopResolveBatchSize: await settingsRepo.getShopResolveBatchSize(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1270,6 +1276,19 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'body.minWithdrawAmount must be an integer between 0 and 100000000' });
       }
       response.minWithdrawAmount = await settingsRepo.setMinWithdrawAmount(amount);
+    }
+    // The kill switch for the shop-name resolution cron. Flipping it here takes
+    // effect on the next tick - no redeploy, which is the point of it being a
+    // setting rather than an env var.
+    if (req.body.shopResolveEnabled !== undefined) {
+      response.shopResolveEnabled = await settingsRepo.setShopResolveEnabled(!!req.body.shopResolveEnabled);
+    }
+    if (req.body.shopResolveBatchSize !== undefined) {
+      const size = Number(req.body.shopResolveBatchSize);
+      if (!Number.isInteger(size) || size < 1 || size > 50) {
+        return res.status(400).json({ error: 'body.shopResolveBatchSize must be an integer between 1 and 50' });
+      }
+      response.shopResolveBatchSize = await settingsRepo.setShopResolveBatchSize(size);
     }
     res.json(response);
   } catch (err) {
@@ -1486,6 +1505,97 @@ app.get('/admin/job-runs', adminAuth.requireAdmin, async (req, res) => {
     );
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Shop: tra tên -> shop_id ───────────────────────────────────────────────
+// The manual half of lib/shopResolution.js. Two shapes, deliberately different:
+//
+//  - { shopName } resolves exactly one name and answers with the outcome. One
+//    API call, so it finishes well inside any proxy timeout, and an admin
+//    fixing one shop wants the answer, not a job id to poll.
+//  - { batchSize } starts a sweep in the background (202 + poll via GET), the
+//    same contract as /admin/product-offer-sync, because a full batch paces
+//    itself against Shopee and takes minutes.
+app.post('/admin/shops/resolve', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    if (req.body?.shopName !== undefined) {
+      const shopName = String(req.body.shopName).trim();
+      if (!shopName) return res.status(400).json({ error: 'body.shopName must not be blank' });
+      return res.json(await shopResolution.resolveShopNameNow(shopName));
+    }
+    // `batchSize: 0` is falsy but present, and must be rejected rather than
+    // quietly falling through to the configured default - an admin who types 0
+    // is asking for nothing to run, not for a full batch.
+    const hasBatchSize = req.body?.batchSize !== undefined && req.body?.batchSize !== null && req.body?.batchSize !== '';
+    const batchSize = hasBatchSize
+      ? Number(req.body.batchSize)
+      : await settingsRepo.getShopResolveBatchSize();
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 50) {
+      return res.status(400).json({ error: 'body.batchSize must be an integer between 1 and 50' });
+    }
+    res.status(202).json(shopNameResolveJob.start({ batchSize }));
+  } catch (err) {
+    sendShopeeApiError(res, err);
+  }
+});
+
+app.get('/admin/shops/resolve', adminAuth.requireAdmin, (_req, res) => {
+  res.json(shopNameResolveJob.getStatus());
+});
+
+// Defaults to `linked` on purpose: every keyword search saves the shops it
+// turned up as a free discovery, so `discovered` rows legitimately outnumber
+// usable ones and would otherwise bury the list. `?status=` (or `status=all`)
+// opens it up.
+app.get('/admin/shops', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const status = req.query.status === 'all' ? undefined : req.query.status || 'linked';
+    const filters = {
+      search: req.query.search || undefined,
+      status,
+      featuredOnly: req.query.featured === '1' ? true : undefined,
+    };
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const offset = Number(req.query.offset) || 0;
+    const [items, total] = await Promise.all([
+      shopsRepo.list({ ...filters, limit, offset, sort: req.query.sort }),
+      shopsRepo.count(filters),
+    ]);
+    res.json({ items, total });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The resolution queue itself. `?status=ambiguous` is the one an admin has to
+// work by hand - nothing else can break a tie between two shops that genuinely
+// share a display name.
+app.get('/admin/shop-name-resolutions', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const { items, total } = await shopNameResolutionsRepo.listForAdmin({
+      status: req.query.status || undefined,
+      search: req.query.search || undefined,
+      limit: Math.min(Number(req.query.limit) || 50, 200),
+      offset: Number(req.query.offset) || 0,
+    });
+    res.json({ items, total, counts: await shopNameResolutionsRepo.countByStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// An admin naming the right shop themselves, which is the only way out of
+// `ambiguous`. The shop must already exist - it does, because every search
+// candidate was saved when the name was first attempted.
+app.put('/admin/shop-name-resolutions/:id', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    if (!req.body?.shopId) return res.status(400).json({ error: 'body.shopId is required' });
+    const result = await shopResolution.resolveManually(req.params.id, req.body.shopId);
+    if (!result) return res.status(404).json({ error: 'not_found' });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -1715,6 +1825,26 @@ cron.schedule('*/15 * * * *', () => {
   })
     .then((result) => console.log(`cron category-backfill: ${JSON.stringify(result)}`))
     .catch((err) => console.error('cron category-backfill failed', err.message));
+});
+
+// Shop-name resolution, ten past every ten minutes. The odd minutes are
+// deliberate: not :00 (the 6:00 scrape), not a multiple of 15 (the category
+// backfill), so the three jobs never wake together on a 2-core VPS.
+//
+// Gated on the `shop_resolve_enabled` setting, re-read on EVERY tick - that is
+// the kill switch, and it has to work without a redeploy because this job talks
+// to Shopee's own API and the blast radius of leaving it running while blocked
+// is the affiliate account itself.
+cron.schedule('3,13,23,33,43,53 * * * *', async () => {
+  try {
+    if (!(await settingsRepo.getShopResolveEnabled())) return;
+    shopNameResolveJob.start({
+      batchSize: await settingsRepo.getShopResolveBatchSize(),
+      trigger: 'cron',
+    });
+  } catch (err) {
+    console.error('cron shop-name-resolve failed', err.message);
+  }
 });
 
 process.on('SIGTERM', async () => {

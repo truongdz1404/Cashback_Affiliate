@@ -64,10 +64,19 @@ async function upsertFromApi(apiShop, { source = 'name_search', status } = {}) {
   });
 }
 
+// Keys the detail payload didn't carry are removed rather than written as
+// null. The two endpoints overlap (spec §1.2), but a shop whose detail comes
+// back without `long_link` must not lose the one we already hold - that link is
+// the byte-for-byte reference the link builder is checked against - and a
+// missing `shop_name` would blank the name the exact-match rule depends on.
+function dropEmpty(fields) {
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null && v !== ''));
+}
+
 // GET /api/v3/offer/shop adds what the list endpoint doesn't carry: rating,
 // sold_total, follower counts and the portrait/cover images.
 async function applyDetail(shopId, detail) {
-  const base = mapApiShop({ ...detail, shop_id: shopId });
+  const base = dropEmpty(mapApiShop({ ...detail, shop_id: shopId }));
   return prisma.shop.update({
     where: { shopId: String(shopId) },
     data: {
@@ -92,6 +101,19 @@ async function getByShopId(shopId, { visibleOnly = false } = {}) {
 
 async function getById(id) {
   return prisma.shop.findUnique({ where: { id: Number(id) } });
+}
+
+// Which of these shop ids we already hold. One query instead of a per-candidate
+// existence check, and it is the only way to tell "created" from "updated"
+// afterwards - prisma.upsert doesn't say which branch it took.
+async function existingShopIds(shopIds) {
+  const ids = (shopIds || []).map(String).filter(Boolean);
+  if (!ids.length) return [];
+  const rows = await prisma.shop.findMany({
+    where: { shopId: { in: ids } },
+    select: { shopId: true },
+  });
+  return rows.map((r) => r.shopId);
 }
 
 const SORTS = {
@@ -241,6 +263,7 @@ module.exports = {
   applyDetail,
   getByShopId,
   getById,
+  existingShopIds,
   list,
   count,
   listFeatured,

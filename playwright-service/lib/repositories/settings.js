@@ -27,6 +27,16 @@ const PRODUCT_OFFER_MAX_PAGES_KEY = 'product_offer_max_pages';
 // GET /app/wallet and GET /app/config.
 const DEFAULT_MIN_WITHDRAW_AMOUNT = 50000;
 const MIN_WITHDRAW_AMOUNT_KEY = 'min_withdraw_amount';
+// Kill switch for the shop-name resolution cron (lib/shopResolution.js), read
+// fresh on every tick so it can be flipped from the dashboard without a
+// redeploy. Ships OFF: the job talks to Shopee's own API, and it should only
+// start running once someone has eyeballed a manual batch.
+const DEFAULT_SHOP_RESOLVE_ENABLED = 0;
+const SHOP_RESOLVE_ENABLED_KEY = 'shop_resolve_enabled';
+// Falls back to the same env var lib/shopResolution.js uses, so configuring
+// either one alone still behaves sensibly.
+const DEFAULT_SHOP_RESOLVE_BATCH_SIZE = parseInt(process.env.SHOP_RESOLVE_BATCH_SIZE || '10', 10);
+const SHOP_RESOLVE_BATCH_SIZE_KEY = 'shop_resolve_batch_size';
 
 async function getNumber(key, fallback) {
   const row = await prisma.setting.findUnique({ where: { key } });
@@ -114,6 +124,26 @@ async function setMinWithdrawAmount(amount) {
   return getMinWithdrawAmount();
 }
 
+async function getShopResolveEnabled() {
+  const value = await getNumber(SHOP_RESOLVE_ENABLED_KEY, DEFAULT_SHOP_RESOLVE_ENABLED);
+  return Number(value) === 1;
+}
+
+async function setShopResolveEnabled(enabled) {
+  await setNumber(SHOP_RESOLVE_ENABLED_KEY, enabled ? 1 : 0);
+  return getShopResolveEnabled();
+}
+
+async function getShopResolveBatchSize() {
+  const value = await getNumber(SHOP_RESOLVE_BATCH_SIZE_KEY, DEFAULT_SHOP_RESOLVE_BATCH_SIZE);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 50) : DEFAULT_SHOP_RESOLVE_BATCH_SIZE;
+}
+
+async function setShopResolveBatchSize(size) {
+  await setNumber(SHOP_RESOLVE_BATCH_SIZE_KEY, size);
+  return getShopResolveBatchSize();
+}
+
 module.exports = {
   getRaw,
   setRaw,
@@ -136,6 +166,14 @@ module.exports = {
   setMinWithdrawAmount,
   DEFAULT_MIN_WITHDRAW_AMOUNT,
   MIN_WITHDRAW_AMOUNT_KEY,
+  getShopResolveEnabled,
+  setShopResolveEnabled,
+  DEFAULT_SHOP_RESOLVE_ENABLED,
+  SHOP_RESOLVE_ENABLED_KEY,
+  getShopResolveBatchSize,
+  setShopResolveBatchSize,
+  DEFAULT_SHOP_RESOLVE_BATCH_SIZE,
+  SHOP_RESOLVE_BATCH_SIZE_KEY,
   COMMISSION_PCT_KEY,
   REFERRAL_REWARD_KEY,
   REFERRAL_COMMISSION_PCT_KEY,

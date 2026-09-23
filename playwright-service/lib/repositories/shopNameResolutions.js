@@ -17,8 +17,12 @@ const ERROR_BACKOFF_MS = [
   72 * 3600 * 1000,
 ];
 
-function backoffFor(attempts) {
-  return ERROR_BACKOFF_MS[Math.min(attempts, ERROR_BACKOFF_MS.length - 1)];
+// `attemptNumber` is 1-based: the attempt that just failed. Indexing by the
+// raw attempts counter instead would skip the 5-minute rung entirely and make
+// the very first transient failure (a dropped connection) wait half an hour.
+function backoffFor(attemptNumber) {
+  const index = Math.max(0, Math.min(attemptNumber - 1, ERROR_BACKOFF_MS.length - 1));
+  return ERROR_BACKOFF_MS[index];
 }
 
 function inMs(ms) {
