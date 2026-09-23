@@ -27,6 +27,8 @@ const shoppingProductImport = require('./lib/shoppingProductImport');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
 const shopeeAffiliateApi = require('./lib/shopeeAffiliateApi');
 const browserJobLock = require('./lib/browserJobLock');
+const jobRunsRepo = require('./lib/repositories/jobRuns');
+const { withJobRun } = require('./lib/jobRunner');
 const { buildAffiliateLink } = require('./lib/affiliateLink');
 const { backfillMissingCategories } = require('./lib/categoryEnrichment');
 const zaloBot = require('./lib/zaloBot');
@@ -1470,6 +1472,23 @@ app.get('/admin/product-offer-sync', adminAuth.requireAdmin, (_req, res) => {
   res.json(productOfferSyncJob.getStatus());
 });
 
+// Job history that survives a restart, unlike the in-memory status above -
+// which matters because this repo auto-deploys on every push, so "what
+// happened on last night's scrape" was routinely wiped before anyone looked.
+app.get('/admin/job-runs', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    res.json(
+      await jobRunsRepo.listRecent({
+        job: req.query.job || undefined,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+        offset: req.query.offset ? Number(req.query.offset) : undefined,
+      })
+    );
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
   try {
     res.json(await bannersRepo.listAll());
@@ -1635,6 +1654,16 @@ app.listen(PORT, () => {
   // cost either.
   browserManager.refillCustomLinkPool();
 
+  // Any job_runs row still marked 'running' belongs to a process that no
+  // longer exists - this service is a single process, so nothing live can be
+  // holding one at the moment we boot. Without this, one deploy landing
+  // mid-crawl (which happens often here: every push to master redeploys)
+  // leaves a row that claims to be running forever and a dashboard that lies.
+  jobRunsRepo
+    .sweepZombies()
+    .then((count) => count > 0 && console.log(`job-runs: đánh dấu ${count} lượt chạy bị ngắt do restart`))
+    .catch((err) => console.error('job-runs: zombie sweep failed', err.message));
+
   // One-time seed: only hits VietQR if the banks table is still empty (fresh
   // DB / first deploy after this migration), so normal restarts don't
   // re-download 65 logos every time.
@@ -1664,7 +1693,7 @@ cron.schedule('*/30 * * * *', () => {
 cron.schedule('0 6 * * *', async () => {
   try {
     const maxPages = await settingsRepo.getProductOfferMaxPages();
-    productOfferSyncJob.start({ maxPages });
+    productOfferSyncJob.start({ maxPages, trigger: 'cron' });
   } catch (err) {
     console.error('cron product-offer-sync failed', err.message);
   }
@@ -1674,8 +1703,16 @@ cron.schedule('0 6 * * *', async () => {
 // CSV/XLSX imports never have one) - every 15 minutes in small batches, see
 // lib/categoryEnrichment.js for why this stays off the browser-automation
 // fallback and off one large sweep.
+//
+// Does NOT take browserJobLock: this job deliberately stays off browser
+// automation entirely (it uses the batch API, see the comment in that file),
+// so making it queue behind a crawl would cost it hours for no reason.
 cron.schedule('*/15 * * * *', () => {
-  backfillMissingCategories()
+  // An empty queue is the normal case - ~96 of these a day would otherwise
+  // bury the runs that actually did work.
+  withJobRun('category-backfill', 'cron', () => backfillMissingCategories(), {
+    discardIf: (result) => result && result.scanned === 0,
+  })
     .then((result) => console.log(`cron category-backfill: ${JSON.stringify(result)}`))
     .catch((err) => console.error('cron category-backfill failed', err.message));
 });

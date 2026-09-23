@@ -15,6 +15,14 @@ function clip(value) {
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…[cắt bớt]` : text;
 }
 
+function errorLabel(err) {
+  const ctor = err.constructor && err.constructor.name;
+  // Prefer whichever is more specific than the generic base.
+  if (err.name && err.name !== 'Error') return err.name;
+  if (ctor && ctor !== 'Error' && ctor !== 'Object') return ctor;
+  return err.name || 'Error';
+}
+
 async function start(job, trigger = 'cron') {
   return prisma.jobRun.create({ data: { job, trigger, status: 'running' } });
 }
@@ -47,10 +55,24 @@ async function fail(id, err, partialResult) {
       // Keep the error class name: "BlockedError: ..." vs "SessionExpiredError:
       // ..." is the difference between "wait it out" and "a human must re-seed
       // the login", and that distinction is worth having in the audit trail.
-      error: clip(err ? `${err.name}: ${err.message}` : 'unknown error'),
+      // Falls back to the constructor name because `err.name` is only the
+      // class name if the class bothered to assign this.name - a subclass that
+      // forgets would otherwise record a useless bare "Error: ...".
+      error: clip(err ? `${errorLabel(err)}: ${err.message}` : 'unknown error'),
       resultJson: partialResult === undefined ? undefined : clip(partialResult),
     },
   });
+}
+
+/**
+ * Throws away a finished row. For jobs that run on a tight schedule and are
+ * usually a no-op - the category backfill wakes every 15 minutes and normally
+ * finds nothing - keeping every heartbeat would bury the handful of runs that
+ * actually did something under ~96 empty rows a day. Only ever used for
+ * successful empty runs; a failure is always kept, however trivial it looks.
+ */
+async function discard(id) {
+  await prisma.jobRun.delete({ where: { id } }).catch(() => {});
 }
 
 async function listRecent({ job, limit = 50, offset = 0 } = {}) {
@@ -110,6 +132,7 @@ module.exports = {
   start,
   finish,
   fail,
+  discard,
   listRecent,
   lastByJob,
   sweepZombies,
