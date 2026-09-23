@@ -179,6 +179,9 @@ model CampaignReward {
   user            User     @relation(fields: [userId], references: [id])
 
   @@unique([campaignId, userId, thresholdAmount])
+  // The unique above indexes campaign-first, so it cannot answer
+  // rewardsForUser() - the app's own "my rewards" list.
+  @@index([userId])
   @@map("campaign_rewards")
 }
 
@@ -430,6 +433,10 @@ model ShoppingProduct {
   @@index([shopName])
   // Drives lib/categoryEnrichment.js's queue: the null-category rows least
   // recently asked about, oldest first.
+  // The default sort of every product listing (SORTS.newest in
+  // lib/repositories/shoppingProducts.js) - without it the whole table is
+  // scanned and sorted to answer the app's opening screen.
+  @@index([scrapedAt])
   @@index([category, categoryCheckedAt])
   // Same shape for lib/shopLinkBackfill.js: the null-shop rows least recently
   // asked about.
