@@ -1,5 +1,6 @@
 const users = require('./repositories/users');
 const linksRepo = require('./repositories/links');
+const prisma = require('./prisma');
 
 // Called before generating the Shopee custom link. If a zaloUserId is
 // supplied, mints a fresh sub_id and injects it as subId1 (the mechanism
@@ -40,10 +41,11 @@ function prepareSubIdForUser(userId, subIds) {
 // figure the user saw right after creating the link.
 async function recordLink(userId, subId, productLinks, result, fallbackItemId, estimate, meta) {
   const first = (result && result.results && result.results[0]) || null;
+  const itemId = (first && first.itemId) || fallbackItemId || null;
   await linksRepo.saveLink({
     userId,
     subId,
-    itemId: (first && first.itemId) || fallbackItemId || null,
+    itemId,
     shopeeUrl: Array.isArray(productLinks) ? productLinks[0] : null,
     affiliateUrl: first ? first.shortLink || first.longLink : null,
     estimatedAmount: estimate ? estimate.userAmount : null,
@@ -52,9 +54,31 @@ async function recordLink(userId, subId, productLinks, result, fallbackItemId, e
     catId: meta ? meta.catId : null,
     catName: meta ? meta.catName : null,
     shopName: meta ? meta.shopName : null,
+    shopId: (meta && meta.shopId) || (await resolveShopId(itemId)),
     priceValue: meta ? meta.priceValue : null,
     imageUrl: meta ? meta.imageUrl : null,
   });
+}
+
+// Callers that already know the shop (the Shopping tab, where the product row
+// carries it) pass it in meta. A pasted link does not: Shopee's commission
+// lookup returns a shop NAME and nothing else, which only matches by string.
+// If we happen to have scraped that item, the catalog knows its real shop id,
+// so look it up once here rather than leaving the column null and re-deriving
+// it on every recommendation request afterwards. One indexed point lookup
+// next to a link mint that already cost seconds of Shopee round trip.
+async function resolveShopId(itemId) {
+  if (!itemId) return null;
+  try {
+    const row = await prisma.shoppingProduct.findUnique({
+      where: { productId: String(itemId) },
+      select: { shopId: true },
+    });
+    return (row && row.shopId) || null;
+  } catch {
+    // Best effort only - never fail a user's link because of an enrichment.
+    return null;
+  }
 }
 
 module.exports = { prepareSubId, prepareSubIdForUser, recordLink };

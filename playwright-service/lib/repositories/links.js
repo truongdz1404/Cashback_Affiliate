@@ -17,6 +17,7 @@ async function saveLink({
   catId,
   catName,
   shopName,
+  shopId,
   priceValue,
   imageUrl,
 }) {
@@ -33,6 +34,7 @@ async function saveLink({
       catId: catId ?? null,
       catName: catName || null,
       shopName: shopName || null,
+      shopId: shopId || null,
       priceValue: priceValue ?? null,
       imageUrl: imageUrl || null,
     },

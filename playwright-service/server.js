@@ -958,6 +958,7 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
         shopeeUrl: canonicalUrl,
         affiliateUrl: url,
         shopName: shop.name,
+        shopId: shop.shopId,
         imageUrl: shop.portraitUrl || shop.imageUrl,
       });
     }
@@ -1029,6 +1030,7 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, async (req, 
         catId: null,
         catName: product.category,
         shopName: product.shopName,
+        shopId: product.shopId,
         priceValue: product.priceValue,
         imageUrl: product.imageUrl,
       });

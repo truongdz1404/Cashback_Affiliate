@@ -81,10 +81,26 @@ model Link {
   shopName         String?  @map("shop_name")
   priceValue       Int?     @map("price_value")
   imageUrl         String?  @map("image_url")
+  // The shop this link points at, resolved at write time: straight from the
+  // shop/product the user tapped, or looked up from item_id in the catalog
+  // for a pasted link. shop_name above is only a text snapshot and matches
+  // by normalised string, which drifts the moment a shop renames itself -
+  // this is the real key, and it is what lets the recommendation engine and
+  // any future per-shop reporting join links to shops exactly.
+  shopId           String?  @map("shop_id")
   createdAt        DateTime @default(now()) @map("created_at")
 
   user          User     @relation(fields: [userId], references: [id])
+  shop          Shop?    @relation(fields: [shopId], references: [shopId], onDelete: SetNull, onUpdate: Cascade)
 
+  // Every read of this table is "one user's rows, newest first" - the app's
+  // link history, and buildAffinity() on every recommendation request. The
+  // second index serves the "did this user already link this item in the
+  // last 24h?" reuse check that /app/shopping-products/:id/open makes before
+  // it will pay for a real Shopee round trip.
+  @@index([userId, createdAt])
+  @@index([userId, itemId])
+  @@index([shopId])
   @@map("links")
 }
 
@@ -126,6 +142,11 @@ model Order {
   user                User?    @relation(fields: [userId], references: [id])
   referralCommission  ReferralCommission?
 
+  // The app's "Đơn hàng của tôi" list, and the admin table's payout filter.
+  // sub_id is how reconciliation.js finds an order again on a later import.
+  @@index([userId, id])
+  @@index([payoutStatus])
+  @@index([subId])
   @@map("orders")
 }
 
@@ -239,6 +260,11 @@ model WithdrawalRequest {
 
   user            User     @relation(fields: [userId], references: [id])
 
+  // The wallet screen asks "this user's requests, newest first" and "how much
+  // of their balance is already reserved" on every load; the admin queue asks
+  // for one status at a time.
+  @@index([userId, id])
+  @@index([status])
   @@map("withdrawal_requests")
 }
 
@@ -278,6 +304,8 @@ model ClawbackFlag {
 
   user                 User      @relation(fields: [userId], references: [id])
 
+  // listOpen() is the only read: every unresolved flag, newest first.
+  @@index([resolvedAt])
   @@map("clawback_flags")
 }
 
@@ -474,6 +502,7 @@ model Shop {
 
   products            ShoppingProduct[]
   resolutions         ShopNameResolution[]
+  links               Link[]
 
   @@index([status, productCount])
   @@index([isFeatured, sortOrder])
