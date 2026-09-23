@@ -37,6 +37,18 @@ const SHOP_RESOLVE_ENABLED_KEY = 'shop_resolve_enabled';
 // either one alone still behaves sensibly.
 const DEFAULT_SHOP_RESOLVE_BATCH_SIZE = parseInt(process.env.SHOP_RESOLVE_BATCH_SIZE || '10', 10);
 const SHOP_RESOLVE_BATCH_SIZE_KEY = 'shop_resolve_batch_size';
+// Kill switch for the nightly per-shop crawl (lib/shopProductSyncJob.js), read
+// fresh on every tick for the same reason as shop_resolve_enabled. Ships OFF:
+// this one drives a real browser for ten-plus minutes on a 2-core VPS, so it
+// only starts running once a manual sweep has been checked by hand.
+const DEFAULT_SHOP_CRAWL_ENABLED = 0;
+const SHOP_CRAWL_ENABLED_KEY = 'shop_crawl_enabled';
+// Both fall back to the env vars the job itself reads, so setting either one
+// alone still behaves sensibly.
+const DEFAULT_SHOP_CRAWL_MAX_SHOPS = parseInt(process.env.SHOP_CRAWL_MAX_SHOPS || '8', 10);
+const SHOP_CRAWL_MAX_SHOPS_KEY = 'shop_crawl_max_shops';
+const DEFAULT_SHOP_CRAWL_MAX_PAGES = parseInt(process.env.SHOP_CRAWL_MAX_PAGES || '5', 10);
+const SHOP_CRAWL_MAX_PAGES_KEY = 'shop_crawl_max_pages';
 
 async function getNumber(key, fallback) {
   const row = await prisma.setting.findUnique({ where: { key } });
@@ -144,6 +156,38 @@ async function setShopResolveBatchSize(size) {
   return getShopResolveBatchSize();
 }
 
+async function getShopCrawlEnabled() {
+  const value = await getNumber(SHOP_CRAWL_ENABLED_KEY, DEFAULT_SHOP_CRAWL_ENABLED);
+  return Number(value) === 1;
+}
+
+async function setShopCrawlEnabled(enabled) {
+  await setNumber(SHOP_CRAWL_ENABLED_KEY, enabled ? 1 : 0);
+  return getShopCrawlEnabled();
+}
+
+// Capped at 50 shops and 20 pages: a dashboard typo of 500 would otherwise hold
+// the shared browser lock for hours and starve the daily product_offer scrape.
+async function getShopCrawlMaxShops() {
+  const value = await getNumber(SHOP_CRAWL_MAX_SHOPS_KEY, DEFAULT_SHOP_CRAWL_MAX_SHOPS);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 50) : DEFAULT_SHOP_CRAWL_MAX_SHOPS;
+}
+
+async function setShopCrawlMaxShops(maxShops) {
+  await setNumber(SHOP_CRAWL_MAX_SHOPS_KEY, maxShops);
+  return getShopCrawlMaxShops();
+}
+
+async function getShopCrawlMaxPages() {
+  const value = await getNumber(SHOP_CRAWL_MAX_PAGES_KEY, DEFAULT_SHOP_CRAWL_MAX_PAGES);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 20) : DEFAULT_SHOP_CRAWL_MAX_PAGES;
+}
+
+async function setShopCrawlMaxPages(pages) {
+  await setNumber(SHOP_CRAWL_MAX_PAGES_KEY, pages);
+  return getShopCrawlMaxPages();
+}
+
 module.exports = {
   getRaw,
   setRaw,
@@ -174,6 +218,18 @@ module.exports = {
   setShopResolveBatchSize,
   DEFAULT_SHOP_RESOLVE_BATCH_SIZE,
   SHOP_RESOLVE_BATCH_SIZE_KEY,
+  getShopCrawlEnabled,
+  setShopCrawlEnabled,
+  DEFAULT_SHOP_CRAWL_ENABLED,
+  SHOP_CRAWL_ENABLED_KEY,
+  getShopCrawlMaxShops,
+  setShopCrawlMaxShops,
+  DEFAULT_SHOP_CRAWL_MAX_SHOPS,
+  SHOP_CRAWL_MAX_SHOPS_KEY,
+  getShopCrawlMaxPages,
+  setShopCrawlMaxPages,
+  DEFAULT_SHOP_CRAWL_MAX_PAGES,
+  SHOP_CRAWL_MAX_PAGES_KEY,
   COMMISSION_PCT_KEY,
   REFERRAL_REWARD_KEY,
   REFERRAL_COMMISSION_PCT_KEY,

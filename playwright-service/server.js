@@ -29,6 +29,7 @@ const shopsRepo = require('./lib/repositories/shops');
 const shopNameResolutionsRepo = require('./lib/repositories/shopNameResolutions');
 const shopResolution = require('./lib/shopResolution');
 const shopNameResolveJob = require('./lib/shopNameResolveJob');
+const shopProductSyncJob = require('./lib/shopProductSyncJob');
 const shopeeAffiliateApi = require('./lib/shopeeAffiliateApi');
 const browserJobLock = require('./lib/browserJobLock');
 const jobRunsRepo = require('./lib/repositories/jobRuns');
@@ -1226,6 +1227,9 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
       minWithdrawAmount: await settingsRepo.getMinWithdrawAmount(),
       shopResolveEnabled: await settingsRepo.getShopResolveEnabled(),
       shopResolveBatchSize: await settingsRepo.getShopResolveBatchSize(),
+      shopCrawlEnabled: await settingsRepo.getShopCrawlEnabled(),
+      shopCrawlMaxShops: await settingsRepo.getShopCrawlMaxShops(),
+      shopCrawlMaxPages: await settingsRepo.getShopCrawlMaxPages(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1289,6 +1293,24 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'body.shopResolveBatchSize must be an integer between 1 and 50' });
       }
       response.shopResolveBatchSize = await settingsRepo.setShopResolveBatchSize(size);
+    }
+    // Kill switch for the nightly per-shop crawl, same no-redeploy contract.
+    if (req.body.shopCrawlEnabled !== undefined) {
+      response.shopCrawlEnabled = await settingsRepo.setShopCrawlEnabled(!!req.body.shopCrawlEnabled);
+    }
+    if (req.body.shopCrawlMaxShops !== undefined) {
+      const maxShops = Number(req.body.shopCrawlMaxShops);
+      if (!Number.isInteger(maxShops) || maxShops < 1 || maxShops > 50) {
+        return res.status(400).json({ error: 'body.shopCrawlMaxShops must be an integer between 1 and 50' });
+      }
+      response.shopCrawlMaxShops = await settingsRepo.setShopCrawlMaxShops(maxShops);
+    }
+    if (req.body.shopCrawlMaxPages !== undefined) {
+      const maxPages = Number(req.body.shopCrawlMaxPages);
+      if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 20) {
+        return res.status(400).json({ error: 'body.shopCrawlMaxPages must be an integer between 1 and 20' });
+      }
+      response.shopCrawlMaxPages = await settingsRepo.setShopCrawlMaxPages(maxPages);
     }
     res.json(response);
   } catch (err) {
@@ -1599,6 +1621,49 @@ app.put('/admin/shop-name-resolutions/:id', adminAuth.requireAdmin, async (req, 
   }
 });
 
+// ─── Shop: crawl sản phẩm theo shop ─────────────────────────────────────────
+// The manual half of the nightly sweep (cron `30 2 * * *` below). Two shapes:
+//
+//  - { shopId } crawls exactly that shop, queue rules and all, INCLUDING a shop
+//    still marked `discovered` - that is the only way one gets crawled, and it
+//    is how an admin promotes an interesting discovery into a real shop.
+//  - { maxShops, maxPages } runs the ordinary sweep right now.
+//
+// Always 202 + poll: even one shop is five page loads behind a select-all and a
+// CSV download, which outlives Cloudflare's ~100s upstream timeout.
+app.post('/admin/shop-product-sync', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const shopId = req.body?.shopId ? String(req.body.shopId).trim() : undefined;
+    if (req.body?.shopId !== undefined && !shopId) {
+      return res.status(400).json({ error: 'body.shopId must not be blank' });
+    }
+
+    // Same "0 is present, not absent" care as /admin/shops/resolve: an admin
+    // typing 0 is asking for nothing to run, not for the configured default.
+    const has = (v) => v !== undefined && v !== null && v !== '';
+    const maxShops = has(req.body?.maxShops)
+      ? Number(req.body.maxShops)
+      : await settingsRepo.getShopCrawlMaxShops();
+    if (!Number.isInteger(maxShops) || maxShops < 1 || maxShops > 50) {
+      return res.status(400).json({ error: 'body.maxShops must be an integer between 1 and 50' });
+    }
+    const maxPages = has(req.body?.maxPages)
+      ? Number(req.body.maxPages)
+      : await settingsRepo.getShopCrawlMaxPages();
+    if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 20) {
+      return res.status(400).json({ error: 'body.maxPages must be an integer between 1 and 20' });
+    }
+
+    res.status(202).json(shopProductSyncJob.start({ shopId, maxShops, maxPages, trigger: 'admin' }));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.get('/admin/shop-product-sync', adminAuth.requireAdmin, (_req, res) => {
+  res.json(shopProductSyncJob.getStatus());
+});
+
 app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
   try {
     res.json(await bannersRepo.listAll());
@@ -1844,6 +1909,27 @@ cron.schedule('3,13,23,33,43,53 * * * *', async () => {
     });
   } catch (err) {
     console.error('cron shop-name-resolve failed', err.message);
+  }
+});
+
+// Per-shop product crawl, 02:30 nightly. Three and a half hours ahead of the
+// 6:00 product-offer scrape, so even a sweep that badly overruns its ~15 minute
+// budget still finishes first - and if it somehow doesn't, browserJobLock makes
+// the scrape wait rather than letting two jobs drive the same browser.
+//
+// Gated on `shop_crawl_enabled`, re-read on every tick: this is the heaviest
+// job in the service and has to be stoppable from the dashboard without a
+// redeploy.
+cron.schedule('30 2 * * *', async () => {
+  try {
+    if (!(await settingsRepo.getShopCrawlEnabled())) return;
+    shopProductSyncJob.start({
+      maxShops: await settingsRepo.getShopCrawlMaxShops(),
+      maxPages: await settingsRepo.getShopCrawlMaxPages(),
+      trigger: 'cron',
+    });
+  } catch (err) {
+    console.error('cron shop-product-crawl failed', err.message);
   }
 });
 

@@ -1,17 +1,33 @@
 const prisma = require('../prisma');
 const { mapMetaToProductFields } = require('../shoppingProductMapper');
 
-// One upsert per product, keyed by Shopee's own item id - keeps a re-scrape
-// idempotent (same product just gets fresher price/commission text and a
-// bumped scrapedAt) instead of growing the table forever.
-async function upsertMany(products) {
+/**
+ * One upsert per product, keyed by Shopee's own item id - keeps a re-scrape
+ * idempotent (same product just gets fresher price/commission text and a
+ * bumped scrapedAt) instead of growing the table forever.
+ *
+ * `createOnly` holds fields that describe where a row was FIRST seen, and it is
+ * deliberately absent from `update`. The per-shop crawler
+ * (lib/shopOfferScraper.js) finds the same products the daily product_offer
+ * scrape does; without this split, crawling a shop would overwrite the
+ * `sourceTab` recorded when the product was scraped from "Bán chạy nhất" and
+ * lose that audit trail.
+ *
+ * The mirror-image trap is in the caller: every key present in `p` is written
+ * on update, and Prisma writes an explicit `null` (it only skips `undefined`).
+ * So a mapper feeding this must leave a field out entirely rather than pass
+ * null for "I don't know" - which is why mapCsvRowToProduct has no `shopId`
+ * key at all, and why a normal product_offer re-scrape cannot blank the shop a
+ * product was already linked to.
+ */
+async function upsertMany(products, { createOnly = {} } = {}) {
   const scrapedAt = new Date();
   let count = 0;
   for (const p of products) {
     if (!p.productId) continue;
     await prisma.shoppingProduct.upsert({
       where: { productId: p.productId },
-      create: { ...p, scrapedAt },
+      create: { ...createOnly, ...p, scrapedAt },
       update: { ...p, scrapedAt },
     });
     count++;

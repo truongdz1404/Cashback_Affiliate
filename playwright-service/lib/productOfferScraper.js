@@ -1,134 +1,17 @@
 const browserManager = require('./browserManager');
 const shoppingProductsRepo = require('./repositories/shoppingProducts');
-const { parseCsvObjects } = require('./csv');
-const { mapCsvRowToProduct } = require('./shoppingProductMapper');
 const { PRODUCT_OFFER_URL } = require('./constants');
+// The grid itself - select-all, bulk link, CSV, pager - is shared with
+// brand_offer (the per-shop page), so it lives in one module both drive.
+const { PAGE_DELAY_MS, scrapeCurrentGridPage, goToNextPage } = require('./offerGridScraper');
 
 // How many "select all on this page -> Lấy link hàng loạt" pages to walk per
 // run. Kept conservative by default - see the "human-like pacing" comment
 // below for why. Override with PRODUCT_OFFER_MAX_PAGES if you've confirmed
 // the account tolerates more.
 const MAX_PAGES = parseInt(process.env.PRODUCT_OFFER_MAX_PAGES || '3', 10);
-// Delay between pages, on top of whatever the click/response round trip
-// itself takes.
-const PAGE_DELAY_MS = parseInt(process.env.PRODUCT_OFFER_PAGE_DELAY_MS || '4000', 10);
 
 const DEFAULT_TAB_NAME = 'Tất cả';
-
-/**
- * Best-effort product image capture. Shopee's own CSV export (what
- * scrapeCurrentPage below uses for name/price/commission) has no image
- * column, so images have to come from the page's DOM instead. There's no
- * visible product-id attribute to key off of here, so this relies on DOM card
- * order matching the CSV row order for THIS SAME page - both are produced by
- * the same "select all rows on this page -> export" action below, so the row
- * set is identical; only the top-to-bottom order needs to line up, which
- * holds as long as the grid renders in the same order it exports.
- *
- * The page is a card grid (`.ItemCard__container`), not a `<table>` - confirmed
- * against a real logged-in DOM dump. Each card's image lives at
- * `.ItemCard__imageSection .ItemCard__image img`. Re-check with
- * `npx playwright codegen https://affiliate.shopee.vn/offer/product_offer`
- * (logged in) if Shopee changes this markup and images stop showing up again.
- */
-async function scrapeImageMap(page) {
-  try {
-    return await page.locator('.ItemCard__container').evaluateAll((cards) =>
-      cards.map((card) => {
-        const img = card.querySelector('.ItemCard__image img');
-        if (!img) return null;
-        return img.getAttribute('src') || img.getAttribute('data-src') || null;
-      })
-    );
-  } catch {
-    return [];
-  }
-}
-
-// The CSV download (a plain GET, not the page's own JS) has been observed to
-// fail with a raw connection-level error ("socket hang up") rather than a
-// normal HTTP error status - transient, so a couple of retries with a short
-// pause clear it up without needing to abandon the whole run.
-async function fetchCsvText(page, csvUrl, attempts = 3) {
-  let lastErr;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const csvResponse = await page.context().request.get(csvUrl);
-      if (!csvResponse.ok()) {
-        throw new Error(`product-offer CSV download failed with status ${csvResponse.status()}`);
-      }
-      return (await csvResponse.body()).toString('utf8');
-    } catch (err) {
-      lastErr = err;
-      if (i < attempts - 1) await page.waitForTimeout(2000);
-    }
-  }
-  throw lastErr;
-}
-
-async function scrapeCurrentPage(page) {
-  await browserManager.dismissBlockingModals(page);
-  const imageMap = await scrapeImageMap(page);
-
-  // Selection is NOT scoped to the current page - checking this box adds
-  // this page's rows on top of whatever was already selected on prior pages
-  // (confirmed live: page 1 -> "20 selected", page 2 -> "40 selected" without
-  // ever unchecking page 1). Left unchecked afterward, later pages' exports
-  // would balloon into a growing superset of every page visited so far
-  // instead of just that page's own products, and could eventually hit the
-  // bulk-selection cap. Toggling the same checkbox off (see bottom of this
-  // function) after export resets it back to 0 before the next page.
-  const selectAll = page.getByRole('checkbox', { name: /Chọn tất cả sản phẩm trên trang này/i });
-  await selectAll.click();
-
-  const bulkButton = page.getByRole('button', { name: /Lấy link hàng loạt/i });
-  await bulkButton.click();
-
-  const modalSubmit = page.getByRole('dialog').getByRole('button', { name: /^Lấy link$/i });
-
-  const responsePromise = page.waitForResponse(async (resp) => {
-    if (!resp.ok()) return false;
-    const contentType = resp.headers()['content-type'] || '';
-    if (!contentType.includes('application/json')) return false;
-    try {
-      const json = await resp.json();
-      return json?.code === 0 && typeof json?.data?.result === 'string' && json.data.result.includes('.csv');
-    } catch {
-      return false;
-    }
-  }, { timeout: 30000 });
-
-  await modalSubmit.click();
-  const response = await responsePromise;
-  const json = await response.json();
-  const csvUrl = encodeURI(json.data.result);
-
-  const csvText = await fetchCsvText(page, csvUrl);
-
-  await browserManager.dismissBlockingModals(page);
-
-  // Clear the selection this page made (toggling the same checkbox off) so
-  // it doesn't carry over and inflate the next page's export.
-  await selectAll.click();
-  await page.waitForTimeout(300);
-
-  return parseCsvObjects(csvText)
-    .map((row, i) => ({ ...mapCsvRowToProduct(row), imageUrl: imageMap[i] || null }))
-    .filter((p) => p.productId);
-}
-
-async function goToNextPage(page) {
-  // Not Ant Design - product_offer's pager is a custom
-  // `.page-item.page-next` span, disabled via a literal "disabled" class
-  // token (confirmed against the live DOM) rather than aria-disabled.
-  const nextButton = page.locator('.page-next');
-  if ((await nextButton.count()) === 0) return false;
-  const classes = (await nextButton.getAttribute('class')) || '';
-  if (classes.includes('disabled')) return false;
-  await nextButton.click();
-  await page.waitForTimeout(1000);
-  return true;
-}
 
 // Category tabs above the product grid (confirmed against a live DOM dump:
 // `rc-tabs-tab-btn` elements, e.g. "Tất cả", "Bán chạy nhất", "Hoa hồng
@@ -280,7 +163,7 @@ async function runProductOfferSync({
     for (let i = 0; i < maxPages && !stoppedEarly; i++) {
       let pageProducts;
       try {
-        pageProducts = await scrapeCurrentPage(page);
+        pageProducts = await scrapeCurrentGridPage(page);
       } catch (err) {
         stoppedEarly = err.message;
         break;
