@@ -55,6 +55,13 @@ const emailOtp = require('./lib/emailOtp');
 const { availableAmountForUser } = require('./lib/walletBalance');
 
 const app = express();
+// One nginx hop sits in front of this service (proxy_pass -> localhost:4000,
+// and it sets X-Forwarded-For). Without this, req.ip is nginx's own address
+// for EVERY request, so the rate limiters on /app/register and /app/login
+// share a single bucket across the whole internet - the twenty-first login of
+// the quarter-hour would start failing for everybody at once. It also makes
+// req.protocol/req.secure honest, though nothing relies on that today.
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 4000;
@@ -78,6 +85,35 @@ function sendShopeeApiError(res, err) {
     return res.status(409).json({ error: 'session_expired', message: err.message, hint: 'POST /admin/session-cookie với cookie mới' });
   }
   return res.status(502).json({ error: err.message });
+}
+
+/**
+ * Every list route reads limit/offset straight off the query string, where a
+ * client can put anything at all. Number('abc') is NaN and harmlessly falls
+ * through to the default, but a NEGATIVE number passes right through: Prisma
+ * reads `take: -5` as "the last five, counting backwards" - so ?limit=-5
+ * silently returns the wrong end of the table - and throws outright on a
+ * negative `skip`. Clamped here once instead of at seventeen call sites.
+ */
+function parseLimit(value, fallback, max) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(n, max);
+}
+
+// Same story for the numeric filter params. `Number('abc')` is NaN, NaN is not
+// null, so a typo in a query string used to travel all the way into Prisma as
+// `{ gte: NaN }` and come back as a 500. Undefined means "no bound".
+function parseNumber(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function parseOffset(value) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n;
 }
 
 // Bank logos crawled by scripts/syncBanks.js - served as plain static files,
@@ -503,10 +539,22 @@ app.put('/app/password', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
+// Minting one link occupies a tab from a pool of two (CUSTOM_LINK_POOL_SIZE in
+// lib/browserManager.js) for several seconds on a two-core box, so the two
+// routes that do it get a per-user budget. Twenty in five minutes is far more
+// than anyone creates by hand and still stops one account - or one retry loop
+// in a client - from starving everybody else's "Tạo link". Placed AFTER
+// requireAppUser so req.appUserId exists to key on.
+const linkMintRateLimit = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  by: (req) => (req.appUserId != null ? `user:${req.appUserId}` : null),
+});
+
 // Shopee is the only platform actually wired to Playwright automation (see
 // lib/customLink.js) - other platforms in the app's picker respond
 // "coming_soon" rather than pretending to work.
-app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
+app.post('/app/link', appAuth.requireAppUser, linkMintRateLimit, async (req, res) => {
   try {
     const { platform, productUrl } = req.body;
     if (!productUrl) return res.status(400).json({ error: 'body.productUrl is required' });
@@ -540,8 +588,8 @@ app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
 
 app.get('/app/links', appAuth.requireAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
     res.json(await linksRepo.listByUser(req.appUserId, { limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -550,8 +598,8 @@ app.get('/app/links', appAuth.requireAppUser, async (req, res) => {
 
 app.get('/app/orders', appAuth.requireAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 50, 200);
+    const offset = parseOffset(req.query.offset);
     res.json(await ordersRepo.listByUser(req.appUserId, { limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -640,8 +688,8 @@ app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
 
 app.get('/app/wallet/withdrawals', appAuth.requireAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
     res.json(await withdrawalsRepo.listForUser(req.appUserId, { limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -672,8 +720,8 @@ app.get('/app/banners', appAuth.optionalAppUser, async (_req, res) => {
 
 app.get('/app/campaigns', appAuth.optionalAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 10, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 10, 100);
+    const offset = parseOffset(req.query.offset);
     // viewForUser() joins per-user reward/progress rows, which need a real
     // userId - anonymous visitors get the same campaigns with empty progress.
     res.json(req.appUserId
@@ -700,12 +748,12 @@ function readShopId(req) {
 // land in one and not the other - which is a money bug, not a cosmetic one.
 async function listShoppingProductsHandler(req, res) {
   try {
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     const shopId = readShopId(req);
-    const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
-    const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
+    const minPrice = parseNumber(req.query.minPrice);
+    const maxPrice = parseNumber(req.query.maxPrice);
     const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
     const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
     const parseBool = (v) => (v === undefined ? undefined : v === 'true' || v === '1');
@@ -723,10 +771,10 @@ async function listShoppingProductsHandler(req, res) {
     // convert to Shopee's raw scale before querying, since that's what's
     // stored (see schema.prisma comment on ShoppingProduct.commissionRateValue).
     const toRaw = (userFacing) => (userFacing != null && pct > 0 ? (userFacing * 100) / pct : undefined);
-    const minCommissionRateValue = toRaw(req.query.minCommissionPct !== undefined ? Number(req.query.minCommissionPct) : undefined);
-    const maxCommissionRateValue = toRaw(req.query.maxCommissionPct !== undefined ? Number(req.query.maxCommissionPct) : undefined);
-    const minCommissionValue = toRaw(req.query.minCommissionAmount !== undefined ? Number(req.query.minCommissionAmount) : undefined);
-    const maxCommissionValue = toRaw(req.query.maxCommissionAmount !== undefined ? Number(req.query.maxCommissionAmount) : undefined);
+    const minCommissionRateValue = toRaw(parseNumber(req.query.minCommissionPct));
+    const maxCommissionRateValue = toRaw(parseNumber(req.query.maxCommissionPct));
+    const minCommissionValue = toRaw(parseNumber(req.query.minCommissionAmount));
+    const maxCommissionValue = toRaw(parseNumber(req.query.maxCommissionAmount));
 
     // "Filter active" = the user touched the filter sheet (price/commission
     // bounds) or explicitly picked a sort other than the default "newest" -
@@ -803,8 +851,8 @@ app.get('/app/shops/:shopId/products', appAuth.optionalAppUser, listShoppingProd
 async function countShoppingProductsHandler(req, res) {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-    const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
-    const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
+    const minPrice = parseNumber(req.query.minPrice);
+    const maxPrice = parseNumber(req.query.maxPrice);
     const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
     const shopId = readShopId(req);
     const parseBool = (v) => (v === undefined ? undefined : v === 'true' || v === '1');
@@ -822,10 +870,10 @@ async function countShoppingProductsHandler(req, res) {
         shopId,
         isBestSeller: parseBool(req.query.bestSeller),
         isXtraCommission: parseBool(req.query.xtra),
-        minCommissionRateValue: toRaw(req.query.minCommissionPct !== undefined ? Number(req.query.minCommissionPct) : undefined),
-        maxCommissionRateValue: toRaw(req.query.maxCommissionPct !== undefined ? Number(req.query.maxCommissionPct) : undefined),
-        minCommissionValue: toRaw(req.query.minCommissionAmount !== undefined ? Number(req.query.minCommissionAmount) : undefined),
-        maxCommissionValue: toRaw(req.query.maxCommissionAmount !== undefined ? Number(req.query.maxCommissionAmount) : undefined),
+        minCommissionRateValue: toRaw(parseNumber(req.query.minCommissionPct)),
+        maxCommissionRateValue: toRaw(parseNumber(req.query.maxCommissionPct)),
+        minCommissionValue: toRaw(parseNumber(req.query.minCommissionAmount)),
+        maxCommissionValue: toRaw(parseNumber(req.query.maxCommissionAmount)),
       }),
     });
   } catch (err) {
@@ -846,8 +894,8 @@ app.get('/app/shops/:shopId/products/count', appAuth.optionalAppUser, countShopp
 // so the app's infinite-query helpers work unchanged.
 app.get('/app/shops', appAuth.optionalAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
     res.json(shopsRepo.toAppShops(await shopsRepo.list({
       limit,
       offset,
@@ -882,7 +930,7 @@ app.get('/app/shops/count', appAuth.optionalAppUser, async (req, res) => {
 // simply not render rather than fall back to an arbitrary pick.
 app.get('/app/shops/featured', appAuth.optionalAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 10, 50);
+    const limit = parseLimit(req.query.limit, 10, 50);
     res.json(shopsRepo.toAppShops(await shopsRepo.listFeatured({ limit })));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -896,7 +944,7 @@ app.get('/app/shops/featured', appAuth.optionalAppUser, async (req, res) => {
 app.get('/app/shops/search', appAuth.optionalAppUser, async (req, res) => {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search : '';
-    const limit = Math.min(Number(req.query.limit) || 1, 5);
+    const limit = parseLimit(req.query.limit, 1, 5);
     res.json(shopsRepo.toAppShops(await shopsRepo.searchRanked({ search, limit })));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -999,7 +1047,7 @@ app.get('/app/shopping-categories', appAuth.optionalAppUser, async (req, res) =>
 // correctness.
 const SHOPPING_LINK_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, async (req, res) => {
+app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRateLimit, async (req, res) => {
   try {
     const product = await shoppingProductsRepo.getById(req.params.id);
     if (!product) return res.status(404).json({ error: 'not_found' });
@@ -1047,7 +1095,7 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, async (req, 
 // for how this is scored off the user's "Tạo link" history.
 app.get('/app/recommendations', appAuth.optionalAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 10, 30);
+    const limit = parseLimit(req.query.limit, 10, 30);
     const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
     const pct = await getEffectivePct(user);
     // Nothing to personalize against for a logged-out visitor - the website
@@ -1073,8 +1121,8 @@ app.get('/app/recommendations', appAuth.optionalAppUser, async (req, res) => {
 // history.
 app.get('/app/referral', appAuth.requireAppUser, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
     const [referralCode, commissionPct, commissionMonths, firstOrderBonus, bonusStats, commissionStats, invited] =
       await Promise.all([
         usersRepo.ensureReferralCode(req.appUserId),
@@ -1614,8 +1662,8 @@ app.put('/admin/users/:id', adminAuth.requireAdmin, async (req, res) => {
 
 app.get('/admin/users/:id/orders', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 50, 200);
+    const offset = parseOffset(req.query.offset);
     res.json(await ordersRepo.listByUser(req.params.id, { limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1634,8 +1682,8 @@ app.get('/admin/customers', adminAuth.requireAdmin, async (_req, res) => {
 
 app.get('/admin/orders', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 50, 200);
+    const offset = parseOffset(req.query.offset);
     const { payoutStatus, displayStatus } = req.query;
     const opts = { limit, offset, payoutStatus, displayStatus };
     res.json({ orders: await ordersRepo.listOrders(opts), total: await ordersRepo.countOrders(opts) });
@@ -1672,8 +1720,8 @@ app.get('/admin/referral-commissions', adminAuth.requireAdmin, async (req, res) 
     if (payoutStatus && !['unpaid', 'paid', 'revoked'].includes(payoutStatus)) {
       return res.status(400).json({ error: "query.payoutStatus must be one of 'unpaid'|'paid'|'revoked'" });
     }
-    const limit = Math.min(Number(req.query.limit) || 100, 500);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 100, 500);
+    const offset = parseOffset(req.query.offset);
     res.json(await referralCommissionsRepo.listAll({ payoutStatus, limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1753,8 +1801,8 @@ app.get('/admin/job-runs', adminAuth.requireAdmin, async (req, res) => {
     res.json(
       await jobRunsRepo.listRecent({
         job: req.query.job || undefined,
-        limit: req.query.limit ? Number(req.query.limit) : undefined,
-        offset: req.query.offset ? Number(req.query.offset) : undefined,
+        limit: parseLimit(req.query.limit, 50, 200),
+        offset: parseOffset(req.query.offset),
       })
     );
   } catch (err) {
@@ -1810,8 +1858,8 @@ app.get('/admin/shops', adminAuth.requireAdmin, async (req, res) => {
       status,
       featuredOnly: req.query.featured === '1' ? true : undefined,
     };
-    const limit = Math.min(Number(req.query.limit) || 50, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 50, 100);
+    const offset = parseOffset(req.query.offset);
     const [items, total] = await Promise.all([
       shopsRepo.list({ ...filters, limit, offset, sort: req.query.sort }),
       shopsRepo.count(filters),
@@ -1878,8 +1926,8 @@ app.get('/admin/shop-name-resolutions', adminAuth.requireAdmin, async (req, res)
     const { items, total } = await shopNameResolutionsRepo.listForAdmin({
       status: req.query.status || undefined,
       search: req.query.search || undefined,
-      limit: Math.min(Number(req.query.limit) || 50, 200),
-      offset: Number(req.query.offset) || 0,
+      limit: parseLimit(req.query.limit, 50, 200),
+      offset: parseOffset(req.query.offset),
     });
     res.json({ items, total, counts: await shopNameResolutionsRepo.countByStatus() });
   } catch (err) {
@@ -2027,8 +2075,8 @@ app.delete('/admin/banners/:id', adminAuth.requireAdmin, async (req, res) => {
 // duplicates rows the scraper already collected.
 app.get('/admin/shopping-products', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const offset = Number(req.query.offset) || 0;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     const [items, total] = await Promise.all([
       shoppingProductsRepo.list({ limit, offset, search, sort: 'newest' }),
