@@ -32,12 +32,18 @@ const SORTS = {
 // columns) - the caller (server.js) is responsible for converting a user-
 // facing "what I actually get" range into this raw scale via the user's
 // effective commission %, since that % varies per user and isn't stored here.
-function buildWhere({ search, minPrice, maxPrice, minCommissionRateValue, maxCommissionRateValue, minCommissionValue, maxCommissionValue, category, isBestSeller, isXtraCommission }) {
+function buildWhere({ search, minPrice, maxPrice, minCommissionRateValue, maxCommissionRateValue, minCommissionValue, maxCommissionValue, category, isBestSeller, isXtraCommission, shopId }) {
   const where = {};
   if (search && search.trim()) {
     where.name = { contains: search.trim(), mode: 'insensitive' };
   }
   if (category) where.category = category;
+  // Shopee's own shop id (not shops.id) - see the FK note in schema.prisma.
+  // NOTE for whoever adds a caller: server.js's /app/shopping-products only
+  // reaches this builder when its `hasFilter` check is true; otherwise it hands
+  // off to the recommendation ranker, which builds its own `where` and would
+  // ignore shopId entirely, returning the whole catalog under one shop's name.
+  if (shopId) where.shopId = String(shopId);
   // Only narrow on `true` - `false` would exclude rows scraped before these
   // pseudo-tags existed rather than meaning anything useful.
   if (isBestSeller === true) where.isBestSeller = true;

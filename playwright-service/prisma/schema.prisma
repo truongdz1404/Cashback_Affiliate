@@ -360,10 +360,130 @@ model ShoppingProduct {
   // True when scraped under Shopee's "Hoa hồng Xtra" tab, or when addlivetag's
   // own `isXtra` flag says so (see commission.js's getCommissionViaApi meta).
   isXtraCommission   Boolean  @default(false) @map("is_xtra_commission")
+  // Set either by the per-shop crawler (which walks brand_offer/<shop_id>, so
+  // the shop is known from the URL and never has to be matched by name) or by
+  // lib/shopResolution.js's name-resolution job. FK is SetNull: deleting a shop
+  // must never delete or block a product row.
+  //
+  // CAREFUL: upsertMany below spreads {...p} into `update` too, and Prisma
+  // writes an explicit `null` (it only skips `undefined`). Any mapper feeding
+  // it must therefore leave shopId `undefined`, not `null` - otherwise an
+  // ordinary product_offer re-scrape silently wipes the shopId the resolver
+  // just wrote. Same contract as shoppingProductMapper.js:64-67.
+  shopId             String?  @map("shop_id")
+  shop               Shop?    @relation(fields: [shopId], references: [shopId], onDelete: SetNull, onUpdate: Cascade)
   scrapedAt          DateTime @default(now()) @map("scraped_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
   @@index([priceValue])
   @@index([commissionValue])
+  @@index([shopId])
+  // The name-resolution job groupBy's and updateMany's on this column. No
+  // normalised `shop_name_key` companion column on purpose: matching is exact
+  // string equality (Shopee's API returns the same shop_name the product CSV
+  // carries), so there is nothing to normalise.
+  @@index([shopName])
   @@map("shopping_products")
+}
+
+// A shop in Shopee's affiliate programme. shop_id is the natural key every
+// Shopee surface uses (brand_offer/<id>, shopee.vn/shop/<id>, the universal
+// link's /shop/<id> path), so products FK onto shopId rather than this table's
+// autoincrement id - it keeps the crawler's "I know the shop_id, link this
+// row" path free of an extra lookup.
+//
+// Rows arrive from GET /api/v3/offer/shop/list, which matches keywords FUZZILY:
+// searching one product's shop name routinely returns several other shops whose
+// names merely contain the keyword. Those are kept too (a free shop discovery)
+// but stay `discovered` until they actually have products.
+model Shop {
+  id                  Int       @id @default(autoincrement())
+  shopId              String    @unique @map("shop_id")
+  // Shopee's shop_name VERBATIM. Never lowercased, never de-accented, never
+  // suffix-trimmed - the resolution job compares this to ShoppingProduct.shopName
+  // with plain `===`, and any normalisation here would break that contract.
+  name                String
+  // discovered = only ever seen in a fuzzy search result, has no products in
+  //              this DB yet -> NOT shown to app users.
+  // linked     = matched a real product's shop name exactly, or a crawl of this
+  //              shop produced products -> eligible to be shown.
+  status              String    @default("discovered")
+  imageUrl            String?   @map("image_url")
+  portraitUrl         String?   @map("portrait_url")
+  coverUrl            String?   @map("cover_url")
+  shopUrl             String?   @map("shop_url")
+  // The affiliate link Shopee itself generates for this shop. Its subId slots
+  // are EMPTY, so it earns nobody any cashback - kept only as a byte-for-byte
+  // reference for the link builder (docs/shopee-affiliate-api-spec.txt §3),
+  // never served to an app user as-is.
+  longLink            String?   @map("long_link")
+  commissionRateText  String?   @map("commission_rate_text")
+  commissionRateValue Float?    @map("commission_rate_value")
+  periodStartTime     DateTime? @map("period_start_time")
+  // Shopee uses 32503651199 (year 2999) to mean "no end date".
+  periodEndTime       DateTime? @map("period_end_time")
+  offerType           Int?      @map("offer_type")
+  bannerCount         Int?      @map("banner_count")
+  rating              Float?
+  soldTotal           Int?      @map("sold_total")
+  followerCount       Int?      @map("follower_count")
+  followersText       String?   @map("followers_text")
+  // Denormalised count of linked products, refreshed by shops.refreshProductCounts.
+  // Every shop listing shows this number; counting per row would be an N+1 on
+  // every app request.
+  productCount        Int       @default(0) @map("product_count")
+  isActive            Boolean   @default(true)  @map("is_active")
+  isFeatured          Boolean   @default(false) @map("is_featured")
+  sortOrder           Int       @default(0)     @map("sort_order")
+  source              String    @default("name_search")
+  detailFetchedAt     DateTime? @map("detail_fetched_at")
+  // Null means "never crawled" - that IS the crawl queue (same null-column-as-
+  // queue idiom lib/categoryEnrichment.js uses for `category`).
+  lastCrawledAt       DateTime? @map("last_crawled_at")
+  lastCrawlError      String?   @map("last_crawl_error")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  products            ShoppingProduct[]
+  resolutions         ShopNameResolution[]
+
+  @@index([status, productCount])
+  @@index([isFeatured, sortOrder])
+  @@index([lastCrawledAt])
+  @@map("shops")
+}
+
+// Queue AND memory for resolving a product's shop_name into a shop_id.
+//
+// Deliberately a real table rather than the "column IS NULL is the queue"
+// pattern of lib/categoryEnrichment.js: a shop name that simply isn't in the
+// affiliate programme will NEVER resolve, and without remembering that, the
+// cron would ask Shopee about it again every ten minutes forever - the fastest
+// way to get the account rate-limited, which docs/shopee-affiliate-api-spec.txt
+// §8 warns is already a live risk for offer/shop/list.
+model ShopNameResolution {
+  id             Int       @id @default(autoincrement())
+  // Verbatim (trimmed) copy of ShoppingProduct.shopName.
+  shopName       String    @unique @map("shop_name")
+  // pending | resolved | ambiguous | not_found | error
+  status         String    @default("pending")
+  shopId         String?   @map("shop_id")
+  // The whole last search response, so an admin can pick by hand when two shops
+  // share a display name (`ambiguous`).
+  candidatesJson String?   @map("candidates_json")
+  // How many products carry this name - the queue works the most impactful
+  // names first.
+  productCount   Int       @default(0) @map("product_count")
+  attempts       Int       @default(0)
+  lastError      String?   @map("last_error")
+  lastAttemptAt  DateTime? @map("last_attempt_at")
+  nextAttemptAt  DateTime? @map("next_attempt_at")
+  resolvedAt     DateTime? @map("resolved_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  shop           Shop?     @relation(fields: [shopId], references: [shopId], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@map("shop_name_resolutions")
 }
