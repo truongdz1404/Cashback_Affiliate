@@ -25,6 +25,9 @@ const recommendationsRepo = require('./lib/repositories/recommendations');
 const searchHistoryRepo = require('./lib/repositories/searchHistory');
 const shoppingProductImport = require('./lib/shoppingProductImport');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
+const shopeeAffiliateApi = require('./lib/shopeeAffiliateApi');
+const browserJobLock = require('./lib/browserJobLock');
+const { buildAffiliateLink } = require('./lib/affiliateLink');
 const { backfillMissingCategories } = require('./lib/categoryEnrichment');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
@@ -49,6 +52,22 @@ const API_KEY = process.env.SERVICE_API_KEY;
 // logo URLs for /app/banks (req.protocol/req.get('host') isn't reliable
 // behind the nginx reverse proxy without trust-proxy config).
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://refundmoney.tro247.online';
+
+/**
+ * Uniform HTTP mapping for the three failure modes of the Shopee JSON API, so
+ * admin-web can show the right banner without string-matching messages.
+ * 503 = Shopee is refusing us for now (retry later, automatically);
+ * 409 = a human must paste a fresh cookie - nothing retries its way out of it.
+ */
+function sendShopeeApiError(res, err) {
+  if (err instanceof shopeeAffiliateApi.BlockedError) {
+    return res.status(503).json({ error: 'shopee_blocked', message: err.message, retryAfterMs: err.retryAfterMs ?? null });
+  }
+  if (err instanceof shopeeAffiliateApi.SessionExpiredError) {
+    return res.status(409).json({ error: 'session_expired', message: err.message, hint: 'POST /admin/session-cookie với cookie mới' });
+  }
+  return res.status(502).json({ error: err.message });
+}
 
 // Bank logos crawled by scripts/syncBanks.js - served as plain static files,
 // same origin as the API so the app doesn't need a separate asset host.
@@ -1125,6 +1144,69 @@ app.post('/admin/session-cookie', adminAuth.requireAdmin, async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
+});
+
+// Shopee JSON API (lib/shopeeAffiliateApi.js) - the cookie-only endpoints from
+// docs/shopee-affiliate-api-spec.txt. Read-only diagnostics for now; the jobs
+// that consume them land in a later change.
+app.get('/admin/shopee-api/health', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    res.json(await shopeeAffiliateApi.getApiHealth({ probe: req.query.probe === '1' }));
+  } catch (err) {
+    sendShopeeApiError(res, err);
+  }
+});
+
+app.post('/admin/shopee-api/reset-breaker', adminAuth.requireAdmin, async (_req, res) => {
+  try {
+    res.json(await shopeeAffiliateApi.resetBreaker());
+  } catch (err) {
+    sendShopeeApiError(res, err);
+  }
+});
+
+/**
+ * One-shot end-to-end check of everything this API client is responsible for,
+ * so the answer to "is the Shopee side healthy?" is one request instead of a
+ * shell on the VPS. Three things it proves, in order of how badly they'd hurt:
+ *  1. affiliate_id comes back from the live account, not from a hardcoded
+ *     constant (spec §1.3) - a wrong id sends every commission elsewhere;
+ *  2. keyword search returns real shops;
+ *  3. the link we build ourselves is byte-identical to Shopee's own long_link
+ *     (spec §3) - the whole reason we can skip the blocked GraphQL endpoint.
+ */
+app.get('/admin/shopee-api/ping', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const keyword = (req.query.keyword || 'vinamilk').toString();
+    const affiliateId = await shopeeAffiliateApi.getAffiliateId();
+    const shops = await shopeeAffiliateApi.searchShopsByKeyword(keyword, { pageLimit: 5 });
+
+    const linkChecks = shops
+      .filter((s) => s.long_link)
+      .slice(0, 3)
+      .map((s) => {
+        const built = buildAffiliateLink({ target: s.shop_link, affiliateId });
+        return { shopId: s.shop_id, shopName: s.shop_name, built, longLink: s.long_link, match: built === s.long_link };
+      });
+
+    res.json({
+      affiliateId,
+      affiliateIdSource: process.env.SHOPEE_AFFILIATE_ID ? 'env' : 'api/settings',
+      keyword,
+      shopCount: shops.length,
+      shops: shops.map((s) => ({ shopId: s.shop_id, shopName: s.shop_name, commissionRate: s.commission_rate })),
+      linkChecks,
+      allLinksMatch: linkChecks.length > 0 && linkChecks.every((c) => c.match),
+      health: await shopeeAffiliateApi.getApiHealth(),
+    });
+  } catch (err) {
+    sendShopeeApiError(res, err);
+  }
+});
+
+// What the shared Playwright context is doing right now. `null` means idle.
+app.get('/admin/browser-lock', adminAuth.requireAdmin, (_req, res) => {
+  res.json({ busy: browserJobLock.isBusy(), current: browserJobLock.getCurrent() });
 });
 
 app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {

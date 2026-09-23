@@ -41,6 +41,22 @@ async function setNumber(key, value) {
   });
 }
 
+// Generic string accessors for values that aren't numeric knobs. `getRaw`
+// returns the whole row on purpose: callers that cache with a TTL (e.g.
+// lib/shopeeAffiliateApi.js's affiliate id) need `updatedAt` to know how stale
+// the stored value is, and re-deriving that from a second query would race.
+async function getRaw(key) {
+  return prisma.setting.findUnique({ where: { key } });
+}
+
+async function setRaw(key, value) {
+  return prisma.setting.upsert({
+    where: { key },
+    create: { key, value: String(value) },
+    update: { value: String(value) },
+  });
+}
+
 async function getCommissionPct() {
   return getNumber(COMMISSION_PCT_KEY, DEFAULT_COMMISSION_PCT);
 }
@@ -99,6 +115,8 @@ async function setMinWithdrawAmount(amount) {
 }
 
 module.exports = {
+  getRaw,
+  setRaw,
   getCommissionPct,
   setCommissionPct,
   DEFAULT_COMMISSION_PCT,
