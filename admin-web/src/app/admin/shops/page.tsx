@@ -45,12 +45,57 @@ type Shop = {
   lastCrawlError?: string | null;
 };
 
+type ContinuousGaps = {
+  sourceSec: number;
+  shopeeSec: number;
+  crawlSec: number;
+  idleSec: number;
+};
+
 type ShopSettings = {
   shopResolveEnabled: boolean;
   shopResolveBatchSize: number;
   shopCrawlEnabled: boolean;
   shopCrawlMaxShops: number;
   shopCrawlMaxPages: number;
+  shopDetailEnabled: boolean;
+  shopDetailBatchSize: number;
+  jobMode: "continuous" | "cron";
+  continuousGaps: ContinuousGaps;
+};
+
+type JobLoop = {
+  key: string;
+  label: string;
+  jobs?: string[];
+  phase: "stopped" | "standby" | "off" | "working" | "idle" | "cooling";
+  cycles: number;
+  lastJob?: string | null;
+  lastResult?: Record<string, unknown> | null;
+  lastFinishedAt?: string | null;
+  lastError?: string | null;
+  nextWakeAt?: string | null;
+};
+
+type JobLoopStatus = {
+  mode?: "continuous" | "cron";
+  gaps?: ContinuousGaps;
+  loops: JobLoop[];
+  error?: string;
+};
+
+const JOB_MODES = [
+  { value: "continuous", label: "Chạy liên tục (đang hoàn thiện dữ liệu)" },
+  { value: "cron", label: "Chạy theo lịch (khi đã có user)" },
+];
+
+const LOOP_PHASES: Record<JobLoop["phase"], { label: string; color: "success" | "warning" | "danger" | "default" }> = {
+  working: { label: "Đang chạy", color: "success" },
+  idle: { label: "Hết việc, chờ", color: "default" },
+  off: { label: "Đã tắt công tắc", color: "warning" },
+  cooling: { label: "Đang nghỉ sau lỗi", color: "danger" },
+  standby: { label: "Nhường cho cron", color: "default" },
+  stopped: { label: "Dừng", color: "default" },
 };
 
 type ResolveResult = {
@@ -134,17 +179,23 @@ function ShopAvatar({ shop }: { shop: Shop }) {
 }
 
 /**
- * The two cron kill switches plus the numbers they run with. These are settings
- * rows rather than env vars precisely so they can be flipped from here without
- * a redeploy - the resolve job talks to Shopee's own API and the blast radius of
- * leaving it running while blocked is the affiliate account itself.
+ * Every knob the background jobs run with. These are settings rows rather than
+ * env vars precisely so they can be flipped from here without a redeploy - the
+ * resolve job talks to Shopee's own API and the blast radius of leaving it
+ * running while blocked is the affiliate account itself.
  */
 function OperationsSection({ onChanged }: { onChanged: () => void }) {
   const [settings, setSettings] = useState<ShopSettings | null>(null);
   const [batchSize, setBatchSize] = useState("");
+  const [detailBatchSize, setDetailBatchSize] = useState("");
   const [maxShops, setMaxShops] = useState("");
   const [maxPages, setMaxPages] = useState("");
+  const [sourceGap, setSourceGap] = useState("");
+  const [shopeeGap, setShopeeGap] = useState("");
+  const [crawlGap, setCrawlGap] = useState("");
+  const [idleGap, setIdleGap] = useState("");
   const [saving, setSaving] = useState(false);
+  const [modeSaving, setModeSaving] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -152,8 +203,14 @@ function OperationsSection({ onChanged }: { onChanged: () => void }) {
       const data = await clientApi.get<ShopSettings>("/api/settings");
       setSettings(data);
       setBatchSize(String(data.shopResolveBatchSize ?? ""));
+      setDetailBatchSize(String(data.shopDetailBatchSize ?? ""));
       setMaxShops(String(data.shopCrawlMaxShops ?? ""));
       setMaxPages(String(data.shopCrawlMaxPages ?? ""));
+      const gaps = data.continuousGaps;
+      setSourceGap(String(gaps?.sourceSec ?? ""));
+      setShopeeGap(String(gaps?.shopeeSec ?? ""));
+      setCrawlGap(String(gaps?.crawlSec ?? ""));
+      setIdleGap(String(gaps?.idleSec ?? ""));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không tải được cài đặt");
     }
@@ -165,7 +222,10 @@ function OperationsSection({ onChanged }: { onChanged: () => void }) {
 
   // Toggles save immediately: a kill switch nobody remembered to press "Lưu"
   // after is not a kill switch.
-  async function toggle(key: "shopResolveEnabled" | "shopCrawlEnabled", value: boolean) {
+  async function toggle(
+    key: "shopResolveEnabled" | "shopDetailEnabled" | "shopCrawlEnabled",
+    value: boolean,
+  ) {
     setSettings((s) => (s ? { ...s, [key]: value } : s));
     try {
       await clientApi.put("/api/settings", { [key]: value });
@@ -177,14 +237,41 @@ function OperationsSection({ onChanged }: { onChanged: () => void }) {
     }
   }
 
+  // Same reasoning as the toggles: switching the whole service between "chạy
+  // liên tục" and "chạy theo lịch" is the biggest lever on this page, so it
+  // takes effect on the spot instead of waiting for a Lưu nobody presses.
+  async function changeMode(mode: ShopSettings["jobMode"]) {
+    if (!settings || mode === settings.jobMode) return;
+    const previous = settings.jobMode;
+    setSettings((s) => (s ? { ...s, jobMode: mode } : s));
+    setModeSaving(true);
+    try {
+      await clientApi.put("/api/settings", { jobMode: mode });
+      toast.success(mode === "continuous" ? "Đã chuyển sang chạy liên tục" : "Đã chuyển sang chạy theo lịch");
+      onChanged();
+    } catch (err) {
+      setSettings((s) => (s ? { ...s, jobMode: previous } : s));
+      toast.danger(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setModeSaving(false);
+    }
+  }
+
   async function saveNumbers() {
     setSaving(true);
     setError("");
     try {
       await clientApi.put("/api/settings", {
         shopResolveBatchSize: Number(batchSize),
+        shopDetailBatchSize: Number(detailBatchSize),
         shopCrawlMaxShops: Number(maxShops),
         shopCrawlMaxPages: Number(maxPages),
+        continuousGaps: {
+          sourceSec: Number(sourceGap),
+          shopeeSec: Number(shopeeGap),
+          crawlSec: Number(crawlGap),
+          idleSec: Number(idleGap),
+        },
       });
       toast.success("Đã lưu");
       load();
@@ -195,25 +282,66 @@ function OperationsSection({ onChanged }: { onChanged: () => void }) {
     }
   }
 
+  const continuous = settings?.jobMode === "continuous";
+
   return (
     <SectionCard
       title="Vận hành"
-      description="Hai job chạy nền: tra tên shop (10 phút/lần) và crawl sản phẩm theo shop (02:30 hằng đêm). Tắt công tắc ở đây có hiệu lực ngay từ lần chạy kế tiếp, không cần deploy lại."
+      description="Cùng một bộ job chạy được theo hai kiểu: liên tục (chạy xong lại chạy tiếp, dùng khi đang gom dữ liệu) hoặc theo lịch (mỗi job một khung giờ cố định, dùng khi đã có người dùng). Mọi thay đổi ở đây có hiệu lực ngay từ lượt chạy kế tiếp, không cần deploy lại."
     >
       {!settings ? (
         <p className="text-sm text-[var(--muted)]">Đang tải...</p>
       ) : (
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-5">
+          <div className="rounded-xl border border-[var(--border)] p-3">
+            <Select
+              selectedKey={settings.jobMode}
+              isDisabled={modeSaving}
+              onSelectionChange={(key) => changeMode(String(key ?? "continuous") as ShopSettings["jobMode"])}
+            >
+              <Label>Kiểu chạy</Label>
+              <Select.Trigger className="mt-1 min-w-[320px]">
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  {JOB_MODES.map((opt) => (
+                    <ListBox.Item key={opt.value} id={opt.value}>
+                      {opt.label}
+                    </ListBox.Item>
+                  ))}
+                </ListBox>
+              </Select.Popover>
+            </Select>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              {continuous
+                ? "Ba vòng lặp chạy song song và tự nghỉ theo khoảng cách bên dưới. Các mốc cron của những job này bị bỏ qua để không chạy đè."
+                : "Mỗi job chạy đúng mốc giờ của nó: tra tên shop 10 phút/lần, lấy chi tiết shop 20 phút/lần, crawl sản phẩm 02:30 hằng đêm."}
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl border border-[var(--border)] p-3">
               <Checkbox isSelected={settings.shopResolveEnabled} onChange={(v) => toggle("shopResolveEnabled", v)}>
                 <Checkbox.Control>
                   <Checkbox.Indicator />
                 </Checkbox.Control>
-                <Checkbox.Content>Tra tên shop tự động</Checkbox.Content>
+                <Checkbox.Content>Tra tên shop</Checkbox.Content>
               </Checkbox>
               <p className="mt-1.5 text-xs text-[var(--muted)]">
                 Gọi API Shopee để đổi tên shop trong bảng sản phẩm thành shop_id, rồi link sản phẩm về shop.
+              </p>
+            </div>
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <Checkbox isSelected={settings.shopDetailEnabled} onChange={(v) => toggle("shopDetailEnabled", v)}>
+                <Checkbox.Control>
+                  <Checkbox.Indicator />
+                </Checkbox.Control>
+                <Checkbox.Content>Lấy chi tiết shop</Checkbox.Content>
+              </Checkbox>
+              <p className="mt-1.5 text-xs text-[var(--muted)]">
+                Lấy avatar, đánh giá, lượt theo dõi. Shop thiếu ảnh thì không bao giờ hiện cho người dùng.
               </p>
             </div>
             <div className="rounded-xl border border-[var(--border)] p-3">
@@ -221,17 +349,21 @@ function OperationsSection({ onChanged }: { onChanged: () => void }) {
                 <Checkbox.Control>
                   <Checkbox.Indicator />
                 </Checkbox.Control>
-                <Checkbox.Content>Crawl sản phẩm theo shop tự động</Checkbox.Content>
+                <Checkbox.Content>Crawl sản phẩm theo shop</Checkbox.Content>
               </Checkbox>
               <p className="mt-1.5 text-xs text-[var(--muted)]">
-                Mở trang shop bằng trình duyệt và lấy sản phẩm. Đây là job nặng nhất, chạy ban đêm.
+                Mở trang shop bằng trình duyệt và lấy sản phẩm. Đây là job nặng nhất, chiếm trọn trình duyệt khi chạy.
               </p>
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-4">
             <TextField name="batchSize" value={batchSize} onChange={setBatchSize}>
               <Label>Số tên tra mỗi lượt (1-50)</Label>
+              <Input inputMode="numeric" />
+            </TextField>
+            <TextField name="detailBatchSize" value={detailBatchSize} onChange={setDetailBatchSize}>
+              <Label>Số shop lấy chi tiết mỗi lượt (1-60)</Label>
               <Input inputMode="numeric" />
             </TextField>
             <TextField name="maxShops" value={maxShops} onChange={setMaxShops}>
@@ -243,12 +375,122 @@ function OperationsSection({ onChanged }: { onChanged: () => void }) {
               <Input inputMode="numeric" />
             </TextField>
           </div>
+
+          <div>
+            <p className="mb-2 text-sm font-semibold">Khoảng nghỉ khi chạy liên tục (giây)</p>
+            <p className="mb-3 text-xs text-[var(--muted)]">
+              Nghỉ bao lâu giữa hai lượt. Ba nhóm tách riêng vì mức rủi ro khác nhau: nhóm nguồn gọi API của chính
+              chúng ta nên gần như không cần nghỉ, còn hai nhóm kia gọi thẳng Shopee.
+              {continuous ? "" : " Đang ở chế độ theo lịch nên các số này chưa có tác dụng."}
+            </p>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <TextField name="sourceGap" value={sourceGap} onChange={setSourceGap}>
+                <Label>Nhóm nguồn (0-3600)</Label>
+                <Input inputMode="numeric" />
+              </TextField>
+              <TextField name="shopeeGap" value={shopeeGap} onChange={setShopeeGap}>
+                <Label>Nhóm gọi Shopee (1-3600)</Label>
+                <Input inputMode="numeric" />
+              </TextField>
+              <TextField name="crawlGap" value={crawlGap} onChange={setCrawlGap}>
+                <Label>Nhóm crawl (1-3600)</Label>
+                <Input inputMode="numeric" />
+              </TextField>
+              <TextField name="idleGap" value={idleGap} onChange={setIdleGap}>
+                <Label>Khi hết việc (30-86400)</Label>
+                <Input inputMode="numeric" />
+              </TextField>
+            </div>
+          </div>
+
           <div className="flex items-center gap-3">
             <Button onPress={saveNumbers} isPending={saving}>
               Lưu
             </Button>
             {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
           </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * Live view of the three continuous loops. Deliberately read-only and polled
+ * rather than pushed: the loops live in the backend process, so after a deploy
+ * restarts it this is the only way to tell "working" from "quietly dead".
+ */
+function JobLoopsSection({ reloadKey }: { reloadKey: number }) {
+  const [status, setStatus] = useState<JobLoopStatus | null>(null);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      setStatus(await clientApi.get<JobLoopStatus>("/api/job-loops"));
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Không đọc được trạng thái vòng lặp");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 15000);
+    return () => clearInterval(timer);
+  }, [load, reloadKey]);
+
+  return (
+    <SectionCard
+      title="Vòng lặp đang chạy"
+      description="Tự làm mới 15 giây/lần. Chỉ có ý nghĩa khi đang ở chế độ chạy liên tục."
+    >
+      {error && <p className="mb-3 text-sm text-[var(--danger)]">{error}</p>}
+      {status?.error && <p className="mb-3 text-sm text-[var(--danger)]">{status.error}</p>}
+      {!status ? (
+        <p className="text-sm text-[var(--muted)]">Đang tải...</p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-3">
+          {status.loops.map((loop) => {
+            const phase = LOOP_PHASES[loop.phase] ?? { label: loop.phase, color: "default" as const };
+            return (
+              <div key={loop.key} className="rounded-xl border border-[var(--border)] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold">{loop.label}</span>
+                  <Chip color={phase.color} size="sm">
+                    {phase.label}
+                  </Chip>
+                </div>
+                <dl className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                  <div className="flex justify-between gap-2">
+                    <dt>Số lượt đã chạy</dt>
+                    <dd className="font-medium text-[var(--foreground)]">{loop.cycles}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt>Job gần nhất</dt>
+                    <dd className="truncate font-medium text-[var(--foreground)]">{loop.lastJob || "—"}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt>Xong lúc</dt>
+                    <dd className="font-medium text-[var(--foreground)]">
+                      {loop.lastFinishedAt ? formatDateTime(loop.lastFinishedAt) : "—"}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt>Chạy tiếp lúc</dt>
+                    <dd className="font-medium text-[var(--foreground)]">
+                      {loop.nextWakeAt ? formatDateTime(loop.nextWakeAt) : "—"}
+                    </dd>
+                  </div>
+                </dl>
+                {loop.lastResult && (
+                  <p className="mt-2 break-words rounded-lg bg-[var(--surface-secondary)] p-2 font-mono text-[11px] text-[var(--muted)]">
+                    {JSON.stringify(loop.lastResult)}
+                  </p>
+                )}
+                {loop.lastError && <p className="mt-2 text-xs text-[var(--danger)]">{loop.lastError}</p>}
+              </div>
+            );
+          })}
         </div>
       )}
     </SectionCard>
@@ -728,6 +970,7 @@ export default function ShopsPage() {
       </div>
 
       <OperationsSection onChanged={refresh} />
+      <JobLoopsSection reloadKey={reloadKey} />
       <ManualRunSection onFinished={refresh} />
       <JobRunsSection reloadKey={reloadKey} />
 
