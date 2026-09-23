@@ -60,6 +60,37 @@ const DEFAULT_SHOP_DETAIL_ENABLED = 0;
 const SHOP_DETAIL_ENABLED_KEY = 'shop_detail_enabled';
 const DEFAULT_SHOP_DETAIL_BATCH_SIZE = parseInt(process.env.SHOP_DETAIL_BATCH_SIZE || '20', 10);
 const SHOP_DETAIL_BATCH_SIZE_KEY = 'shop_detail_batch_size';
+// Which clock drives the data jobs.
+//
+//   continuous - lib/continuousJobs.js runs them back to back, pausing only for
+//                the gaps below. Every cron for those jobs turns into a no-op.
+//   cron       - the crons drive them on their schedules and the loops idle.
+//
+// Ships 'continuous' because right now there are no users on the app or the
+// site: the whole VPS exists to finish the catalogue. Flipping it to 'cron'
+// from the dashboard is the switch back to scheduled mode once traffic starts -
+// both modes stay wired at all times, and neither needs a redeploy.
+const DEFAULT_JOB_MODE = String(process.env.JOB_MODE || 'continuous').toLowerCase() === 'cron' ? 'cron' : 'continuous';
+const JOB_MODE_KEY = 'job_mode';
+// Pauses between two cycles of the same continuous loop, in seconds.
+//
+// `source` covers the two jobs that only ever call addlivetag - our own free
+// upstream - so its gap is about being tidy, not about protection.
+// `shopee` covers the jobs that call Shopee's affiliate API; its gap is real
+// protection for the affiliate account and stacks on top of the client's own
+// 1.2s global gate.
+// `crawl` covers the browser sweep; its gap lets the shared Chromium settle
+// between sweeps on a 2-core box.
+// `idle` is what every loop waits when there was nothing left to do - the
+// difference between "keep working" and "keep checking".
+const DEFAULT_CONTINUOUS_SOURCE_GAP_SEC = parseInt(process.env.CONTINUOUS_SOURCE_GAP_SEC || '2', 10);
+const CONTINUOUS_SOURCE_GAP_SEC_KEY = 'continuous_source_gap_sec';
+const DEFAULT_CONTINUOUS_SHOPEE_GAP_SEC = parseInt(process.env.CONTINUOUS_SHOPEE_GAP_SEC || '10', 10);
+const CONTINUOUS_SHOPEE_GAP_SEC_KEY = 'continuous_shopee_gap_sec';
+const DEFAULT_CONTINUOUS_CRAWL_GAP_SEC = parseInt(process.env.CONTINUOUS_CRAWL_GAP_SEC || '30', 10);
+const CONTINUOUS_CRAWL_GAP_SEC_KEY = 'continuous_crawl_gap_sec';
+const DEFAULT_CONTINUOUS_IDLE_GAP_SEC = parseInt(process.env.CONTINUOUS_IDLE_GAP_SEC || '300', 10);
+const CONTINUOUS_IDLE_GAP_SEC_KEY = 'continuous_idle_gap_sec';
 
 async function getNumber(key, fallback) {
   const row = await prisma.setting.findUnique({ where: { key } });
@@ -221,6 +252,54 @@ async function setShopDetailBatchSize(size) {
   return getShopDetailBatchSize();
 }
 
+const JOB_MODES = ['continuous', 'cron'];
+
+async function getJobMode() {
+  const row = await getRaw(JOB_MODE_KEY);
+  const value = row ? String(row.value).trim().toLowerCase() : '';
+  return JOB_MODES.includes(value) ? value : DEFAULT_JOB_MODE;
+}
+
+async function setJobMode(mode) {
+  const value = String(mode || '').trim().toLowerCase();
+  if (!JOB_MODES.includes(value)) throw new Error(`invalid job mode: ${mode}`);
+  await setRaw(JOB_MODE_KEY, value);
+  return getJobMode();
+}
+
+// Clamped to an hour: a gap longer than that is not "slower", it is off, and
+// the honest way to turn a loop off is its own kill switch. 0 is allowed for
+// the addlivetag loop - nothing upstream needs protecting from it.
+function clampGap(value, fallback, { min = 0, max = 3600 } = {}) {
+  if (!Number.isFinite(value) || value < min) return fallback;
+  return Math.min(value, max);
+}
+
+async function getContinuousGaps() {
+  const [source, shopee, crawl, idle] = await Promise.all([
+    getNumber(CONTINUOUS_SOURCE_GAP_SEC_KEY, DEFAULT_CONTINUOUS_SOURCE_GAP_SEC),
+    getNumber(CONTINUOUS_SHOPEE_GAP_SEC_KEY, DEFAULT_CONTINUOUS_SHOPEE_GAP_SEC),
+    getNumber(CONTINUOUS_CRAWL_GAP_SEC_KEY, DEFAULT_CONTINUOUS_CRAWL_GAP_SEC),
+    getNumber(CONTINUOUS_IDLE_GAP_SEC_KEY, DEFAULT_CONTINUOUS_IDLE_GAP_SEC),
+  ]);
+  return {
+    sourceSec: clampGap(Number(source), DEFAULT_CONTINUOUS_SOURCE_GAP_SEC),
+    shopeeSec: clampGap(Number(shopee), DEFAULT_CONTINUOUS_SHOPEE_GAP_SEC, { min: 1 }),
+    crawlSec: clampGap(Number(crawl), DEFAULT_CONTINUOUS_CRAWL_GAP_SEC, { min: 1 }),
+    // Never below 30s: the idle gap is how often an empty loop wakes up to ask
+    // the database whether there is work, and that question is not free.
+    idleSec: clampGap(Number(idle), DEFAULT_CONTINUOUS_IDLE_GAP_SEC, { min: 30, max: 86400 }),
+  };
+}
+
+async function setContinuousGaps({ sourceSec, shopeeSec, crawlSec, idleSec } = {}) {
+  if (sourceSec !== undefined) await setNumber(CONTINUOUS_SOURCE_GAP_SEC_KEY, sourceSec);
+  if (shopeeSec !== undefined) await setNumber(CONTINUOUS_SHOPEE_GAP_SEC_KEY, shopeeSec);
+  if (crawlSec !== undefined) await setNumber(CONTINUOUS_CRAWL_GAP_SEC_KEY, crawlSec);
+  if (idleSec !== undefined) await setNumber(CONTINUOUS_IDLE_GAP_SEC_KEY, idleSec);
+  return getContinuousGaps();
+}
+
 module.exports = {
   getRaw,
   setRaw,
@@ -265,6 +344,17 @@ module.exports = {
   setShopDetailEnabled,
   getShopDetailBatchSize,
   setShopDetailBatchSize,
+  DEFAULT_SHOP_DETAIL_ENABLED,
+  SHOP_DETAIL_ENABLED_KEY,
+  DEFAULT_SHOP_DETAIL_BATCH_SIZE,
+  SHOP_DETAIL_BATCH_SIZE_KEY,
+  getJobMode,
+  setJobMode,
+  JOB_MODES,
+  DEFAULT_JOB_MODE,
+  JOB_MODE_KEY,
+  getContinuousGaps,
+  setContinuousGaps,
   DEFAULT_SHOP_CRAWL_MAX_PAGES,
   SHOP_CRAWL_MAX_PAGES_KEY,
   COMMISSION_PCT_KEY,

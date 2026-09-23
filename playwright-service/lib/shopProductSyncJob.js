@@ -105,8 +105,8 @@ function getStatus() {
 // idempotency contract behind 202 + poll (a double-clicked button must not
 // queue a second crawl), and is kept alongside the browser lock, which answers
 // the different question of whether the browser is busy with any job at all.
-function start(options = {}) {
-  if (state.status === 'running') return getStatus();
+function startAndWait(options = {}) {
+  if (state.status === 'running') return Promise.resolve({ skipped: 'already_running' });
 
   const { trigger = 'admin', ...sweepOptions } = options;
 
@@ -125,7 +125,7 @@ function start(options = {}) {
   // both jobs interleaving pages on the same browser. Taken outside withJobRun
   // so time spent queueing behind another browser job is not billed to this
   // run's `job_runs.duration_ms`.
-  browserJobLock
+  return browserJobLock
     .run(JOB_NAME, () => {
       state = { ...state, waitingForBrowser: false };
       return withJobRun(JOB_NAME, trigger, ({ runId }) => {
@@ -140,6 +140,7 @@ function start(options = {}) {
     .then((result) => {
       state = { ...state, status: 'done', finishedAt: new Date().toISOString(), waitingForBrowser: false, result };
       console.log(`shop-product-crawl: ${JSON.stringify({ ...result, shops: undefined })}`);
+      return result;
     })
     .catch((err) => {
       state = {
@@ -150,9 +151,18 @@ function start(options = {}) {
         error: err.message,
       };
       console.error('shop-product-crawl failed', err.message);
+      // Resolves rather than rejects, for the same reason as the resolve job:
+      // the failure is already on the job_runs row and in `state`, and an
+      // awaiting caller wants the outcome, not an exception to handle.
+      return { error: err.message };
     });
+}
 
+// Fire-and-forget entry point: kicks the sweep off and answers immediately with
+// the status the 202 + poll endpoints hand back.
+function start(options = {}) {
+  startAndWait(options);
   return getStatus();
 }
 
-module.exports = { getStatus, start, runShopCrawlSweep, JOB_NAME, MAX_SHOPS };
+module.exports = { getStatus, start, startAndWait, runShopCrawlSweep, JOB_NAME, MAX_SHOPS };

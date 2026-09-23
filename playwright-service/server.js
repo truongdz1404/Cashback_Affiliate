@@ -32,6 +32,7 @@ const shopNameResolveJob = require('./lib/shopNameResolveJob');
 const shopProductSyncJob = require('./lib/shopProductSyncJob');
 const shopeeAffiliateApi = require('./lib/shopeeAffiliateApi');
 const browserJobLock = require('./lib/browserJobLock');
+const continuousJobs = require('./lib/continuousJobs');
 const jobRunsRepo = require('./lib/repositories/jobRuns');
 const { withJobRun } = require('./lib/jobRunner');
 const { buildAffiliateLink } = require('./lib/affiliateLink');
@@ -1329,6 +1330,16 @@ app.get('/admin/browser-lock', adminAuth.requireAdmin, (_req, res) => {
   res.json({ busy: browserJobLock.isBusy(), current: browserJobLock.getCurrent() });
 });
 
+// What the continuous loops are doing: which mode is live, what each loop ran
+// last, and when it wakes next. `standby` means cron is driving instead.
+app.get('/admin/job-loops', adminAuth.requireAdmin, async (_req, res) => {
+  try {
+    res.json(await continuousJobs.getStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
   try {
     res.json({
@@ -1343,6 +1354,10 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
       shopCrawlEnabled: await settingsRepo.getShopCrawlEnabled(),
       shopCrawlMaxShops: await settingsRepo.getShopCrawlMaxShops(),
       shopCrawlMaxPages: await settingsRepo.getShopCrawlMaxPages(),
+      shopDetailEnabled: await settingsRepo.getShopDetailEnabled(),
+      shopDetailBatchSize: await settingsRepo.getShopDetailBatchSize(),
+      jobMode: await settingsRepo.getJobMode(),
+      continuousGaps: await settingsRepo.getContinuousGaps(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1424,6 +1439,52 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'body.shopCrawlMaxPages must be an integer between 1 and 20' });
       }
       response.shopCrawlMaxPages = await settingsRepo.setShopCrawlMaxPages(maxPages);
+    }
+    // Kill switch for shop detail enrichment (avatar/rating/followers). Without
+    // an avatar a shop never reaches 'linked', so this switch is also what
+    // decides whether new shops can ever show up in the app.
+    if (req.body.shopDetailEnabled !== undefined) {
+      response.shopDetailEnabled = await settingsRepo.setShopDetailEnabled(!!req.body.shopDetailEnabled);
+    }
+    if (req.body.shopDetailBatchSize !== undefined) {
+      const size = Number(req.body.shopDetailBatchSize);
+      if (!Number.isInteger(size) || size < 1 || size > 60) {
+        return res.status(400).json({ error: 'body.shopDetailBatchSize must be an integer between 1 and 60' });
+      }
+      response.shopDetailBatchSize = await settingsRepo.setShopDetailBatchSize(size);
+    }
+    // Which clock drives the data jobs. Takes effect within a minute in both
+    // directions: the loops re-read it every cycle, the crons every tick.
+    if (req.body.jobMode !== undefined) {
+      const mode = String(req.body.jobMode);
+      if (!settingsRepo.JOB_MODES.includes(mode)) {
+        return res.status(400).json({ error: `body.jobMode must be one of ${settingsRepo.JOB_MODES.join(', ')}` });
+      }
+      response.jobMode = await settingsRepo.setJobMode(mode);
+    }
+    if (req.body.continuousGaps !== undefined) {
+      const gaps = req.body.continuousGaps || {};
+      // Same bounds the repository clamps to, so a value the dashboard accepts
+      // is a value the loops will actually use - silently storing 1 and running
+      // 300 is worse than refusing it.
+      const bounds = {
+        sourceSec: [0, 3600],
+        shopeeSec: [1, 3600],
+        crawlSec: [1, 3600],
+        idleSec: [30, 86400],
+      };
+      const patch = {};
+      for (const [field, [min, max]] of Object.entries(bounds)) {
+        if (gaps[field] === undefined) continue;
+        const seconds = Number(gaps[field]);
+        if (!Number.isInteger(seconds) || seconds < min || seconds > max) {
+          return res
+            .status(400)
+            .json({ error: `body.continuousGaps.${field} must be an integer between ${min} and ${max}` });
+        }
+        patch[field] = seconds;
+      }
+      response.continuousGaps = await settingsRepo.setContinuousGaps(patch);
     }
     res.json(response);
   } catch (err) {
@@ -2080,7 +2141,8 @@ cron.schedule('0 6 * * *', async () => {
 // Does NOT take browserJobLock: this job deliberately stays off browser
 // automation entirely (it uses the batch API, see the comment in that file),
 // so making it queue behind a crawl would cost it hours for no reason.
-cron.schedule('*/15 * * * *', () => {
+cron.schedule('*/15 * * * *', async () => {
+  if (await continuousJobs.cronIsSuppressed('category-backfill')) return;
   // An empty queue is the normal case - ~96 of these a day would otherwise
   // bury the runs that actually did work.
   withJobRun('category-backfill', 'cron', () => backfillMissingCategories(), {
@@ -2098,7 +2160,8 @@ cron.schedule('*/15 * * * *', () => {
 // No kill switch and no lock, for the same reason as the category backfill: it
 // only ever talks to addlivetag, never to Shopee, so there is no account to
 // protect and no browser to contend for.
-cron.schedule('8,23,38,53 * * * *', () => {
+cron.schedule('8,23,38,53 * * * *', async () => {
+  if (await continuousJobs.cronIsSuppressed('shop-link-backfill')) return;
   withJobRun('shop-link-backfill', 'cron', () => backfillMissingShopIds(), {
     discardIf: (result) => result && result.scanned === 0,
   })
@@ -2116,6 +2179,7 @@ cron.schedule('8,23,38,53 * * * *', () => {
 // redeploy.
 cron.schedule('7,27,47 * * * *', async () => {
   try {
+    if (await continuousJobs.cronIsSuppressed('shop-detail-enrich')) return;
     if (!(await settingsRepo.getShopDetailEnabled())) return;
     const batchSize = await settingsRepo.getShopDetailBatchSize();
     const result = await withJobRun('shop-detail-enrich', 'cron', () => enrichShopDetails({ batchSize }), {
@@ -2137,6 +2201,7 @@ cron.schedule('7,27,47 * * * *', async () => {
 // is the affiliate account itself.
 cron.schedule('3,13,23,33,43,53 * * * *', async () => {
   try {
+    if (await continuousJobs.cronIsSuppressed('shop-name-resolve')) return;
     if (!(await settingsRepo.getShopResolveEnabled())) return;
     shopNameResolveJob.start({
       batchSize: await settingsRepo.getShopResolveBatchSize(),
@@ -2157,6 +2222,7 @@ cron.schedule('3,13,23,33,43,53 * * * *', async () => {
 // redeploy.
 cron.schedule('30 2 * * *', async () => {
   try {
+    if (await continuousJobs.cronIsSuppressed('shop-product-crawl')) return;
     if (!(await settingsRepo.getShopCrawlEnabled())) return;
     shopProductSyncJob.start({
       maxShops: await settingsRepo.getShopCrawlMaxShops(),
@@ -2168,11 +2234,17 @@ cron.schedule('30 2 * * *', async () => {
   }
 });
 
+// The other clock. Which of the two actually drives the jobs is the `job_mode`
+// setting, read fresh by both sides - see lib/continuousJobs.js.
+continuousJobs.start();
+
 process.on('SIGTERM', async () => {
+  continuousJobs.stop();
   await browserManager.shutdown();
   process.exit(0);
 });
 process.on('SIGINT', async () => {
+  continuousJobs.stop();
   await browserManager.shutdown();
   process.exit(0);
 });

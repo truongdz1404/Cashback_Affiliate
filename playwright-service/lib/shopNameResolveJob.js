@@ -32,8 +32,8 @@ function getStatus() {
  * fallback - takes the lock itself with tryRun (never waits), so nothing here
  * can sit on the browser.
  */
-function start(options = {}) {
-  if (state.status === 'running') return getStatus();
+function startAndWait(options = {}) {
+  if (state.status === 'running') return Promise.resolve({ skipped: 'already_running' });
 
   const { trigger = 'admin', ...sweepOptions } = options;
 
@@ -46,7 +46,7 @@ function start(options = {}) {
     jobRunId: null,
   };
 
-  withJobRun(
+  return withJobRun(
     JOB_NAME,
     trigger,
     ({ runId }) => {
@@ -64,13 +64,24 @@ function start(options = {}) {
     .then((result) => {
       state = { ...state, status: 'done', finishedAt: new Date().toISOString(), result };
       console.log(`shop-name-resolve: ${JSON.stringify(result)}`);
+      return result;
     })
     .catch((err) => {
       state = { ...state, status: 'error', finishedAt: new Date().toISOString(), error: err.message };
       console.error('shop-name-resolve failed', err.message);
+      // Resolves rather than rejects: the failure is already recorded on the
+      // job_runs row and in `state`, and a caller awaiting a sweep wants to
+      // know what happened, not to have to catch. Same contract as `start`,
+      // which has always swallowed the rejection into state.
+      return { error: err.message };
     });
+}
 
+// Fire-and-forget entry point: kicks the sweep off and answers immediately with
+// the status the 202 + poll endpoints hand back.
+function start(options = {}) {
+  startAndWait(options);
   return getStatus();
 }
 
-module.exports = { getStatus, start, JOB_NAME };
+module.exports = { getStatus, start, startAndWait, JOB_NAME };
