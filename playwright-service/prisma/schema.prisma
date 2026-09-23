@@ -384,6 +384,11 @@ model ShoppingProduct {
   // just wrote. Same contract as shoppingProductMapper.js:64-67.
   shopId             String?  @map("shop_id")
   shop               Shop?    @relation(fields: [shopId], references: [shopId], onDelete: SetNull, onUpdate: Cascade)
+  // When lib/shopLinkBackfill.js last asked addlivetag about this row's shop,
+  // answer or not. Exactly the same role categoryCheckedAt plays above, for
+  // exactly the same reason: products addlivetag has no shop id for would
+  // otherwise hold the front of the backfill queue permanently.
+  shopCheckedAt      DateTime? @map("shop_checked_at")
   scrapedAt          DateTime @default(now()) @map("scraped_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
@@ -398,6 +403,9 @@ model ShoppingProduct {
   // Drives lib/categoryEnrichment.js's queue: the null-category rows least
   // recently asked about, oldest first.
   @@index([category, categoryCheckedAt])
+  // Same shape for lib/shopLinkBackfill.js: the null-shop rows least recently
+  // asked about.
+  @@index([shopId, shopCheckedAt])
   @@map("shopping_products")
 }
 
@@ -452,6 +460,11 @@ model Shop {
   sortOrder           Int       @default(0)     @map("sort_order")
   source              String    @default("name_search")
   detailFetchedAt     DateTime? @map("detail_fetched_at")
+  // When the detail endpoint was last ASKED about this shop, whether or not it
+  // answered - the pair to detailFetchedAt above, and the reason the enrichment
+  // queue drains. Ordering the queue by detailFetchedAt alone would let a shop
+  // Shopee can't answer about sit at the head of it forever.
+  detailCheckedAt     DateTime? @map("detail_checked_at")
   // Null means "never crawled" - that IS the crawl queue (same null-column-as-
   // queue idiom lib/categoryEnrichment.js uses for `category`).
   lastCrawledAt       DateTime? @map("last_crawled_at")
@@ -465,6 +478,7 @@ model Shop {
   @@index([status, productCount])
   @@index([isFeatured, sortOrder])
   @@index([lastCrawledAt])
+  @@index([detailFetchedAt, detailCheckedAt])
   @@map("shops")
 }
 

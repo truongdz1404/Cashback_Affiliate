@@ -81,6 +81,15 @@ function compactCandidates(candidates) {
  * carry them - resolving the biggest name first covers the most catalogue per
  * API call. Idempotent: `skipDuplicates` means a name that is already resolved,
  * ambiguous or parked is left exactly as it is.
+ *
+ * This queue shrinks on its own now, and that is deliberate. Every product
+ * lookup carries Shopee's shop_id for free (lib/commission.js), so
+ * lib/shopLinkBackfill.js attributes products without asking Shopee anything,
+ * and anything it attributes disappears from the `shopId: null` group below.
+ * What is left is the case no product lookup can cover: shops that have no
+ * products here at all. Searching by name is the only way to find those, which
+ * is why this job stays - on a much smaller queue, spending far fewer calls
+ * against the one endpoint the spec (§8) warns could be locked down.
  */
 async function discoverShopNames({ limit = DISCOVERY_LIMIT } = {}) {
   const grouped = await prisma.shoppingProduct.groupBy({

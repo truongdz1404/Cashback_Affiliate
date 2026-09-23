@@ -1,5 +1,8 @@
 const prisma = require('../prisma');
 const { mapMetaToProductFields } = require('../shoppingProductMapper');
+// One-way: shops.js must never require this file back, or the cycle leaves one
+// of the two exporting an empty object depending on which loaded first.
+const shopsRepo = require('./shops');
 
 /**
  * One upsert per product, keyed by Shopee's own item id - keeps a re-scrape
@@ -151,6 +154,29 @@ async function getById(id) {
   return prisma.shoppingProduct.findUnique({ where: { id: Number(id) } });
 }
 
+/**
+ * Creates the Shop row a new product's shopId points at, and returns the id to
+ * store - or null if it couldn't be created.
+ *
+ * Order matters: shopping_products.shop_id is a foreign key, so writing an id
+ * whose Shop row does not exist rejects the whole insert. The shop therefore has
+ * to be created first, and any failure here has to fall back to null rather than
+ * propagate: a catalog row with no shop is exactly the status quo, while a lost
+ * catalog row is a product the user linked and can never browse again. Shop
+ * attribution is recoverable later (lib/shopLinkBackfill.js sweeps rows with no
+ * shop); the product row is not.
+ */
+async function ensureShopLink(fields) {
+  if (!fields.shopId || !fields.shopName) return null;
+  try {
+    const shop = await shopsRepo.ensureFromProduct({ shopId: fields.shopId, name: fields.shopName });
+    return shop ? shop.shopId : null;
+  } catch (err) {
+    console.warn('shopping-products: could not ensure shop', fields.shopId, err.message);
+    return null;
+  }
+}
+
 // Called fire-and-forget off POST /app/link (server.js) once a commission
 // lookup already happened for a productId that isn't in the catalog yet -
 // the lookup's `meta`/`commissionTable` is basically free data at that point,
@@ -166,11 +192,14 @@ async function ensureExists(productId, meta, commissionTable) {
   const fields = mapMetaToProductFields(meta, commissionTable);
   if (!fields.name) return false; // not enough data to justify a catalog row
 
+  const shopId = await ensureShopLink(fields);
+
   await prisma.shoppingProduct.create({
     data: {
       productId: String(productId),
       name: fields.name,
       shopName: fields.shopName ?? null,
+      shopId,
       priceValue: fields.priceValue ?? null,
       imageUrl: fields.imageUrl ?? null,
       category: fields.category ?? null,
@@ -182,4 +211,14 @@ async function ensureExists(productId, meta, commissionTable) {
   return true;
 }
 
-module.exports = { upsertMany, list, count, listCategories, remove, getById, ensureExists, SHOP_INCLUDE };
+module.exports = {
+  upsertMany,
+  list,
+  count,
+  listCategories,
+  remove,
+  getById,
+  ensureExists,
+  ensureShopLink,
+  SHOP_INCLUDE,
+};

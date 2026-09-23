@@ -1,6 +1,8 @@
 const prisma = require('./prisma');
 const { getCommissionBatchViaApi } = require('./commission');
 const { mapMetaToProductFields } = require('./shoppingProductMapper');
+const shoppingProductsRepo = require('./repositories/shoppingProducts');
+const shopsRepo = require('./repositories/shops');
 
 // addlivetag's product-data-batch.php caps at 100 item_ids per request and
 // its own docs recommend trickling max_api (items allowed to hit the live
@@ -45,7 +47,7 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
   });
 
   if (!products.length) {
-    return { scanned: 0, updated: 0, failed: 0, retryable: 0 };
+    return { scanned: 0, updated: 0, failed: 0, retryable: 0, shopsLinked: 0 };
   }
 
   let byItemId;
@@ -58,14 +60,23 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
     byItemId = result.byItemId;
     batchInfo = { summary: result.summary, limits: result.limits };
   } catch (err) {
-    return { scanned: products.length, updated: 0, failed: 0, retryable: products.length, error: err.message };
+    return {
+      scanned: products.length,
+      updated: 0,
+      failed: 0,
+      retryable: products.length,
+      shopsLinked: 0,
+      error: err.message,
+    };
   }
 
   const checkedAt = new Date();
   let updated = 0;
   let failed = 0;
   let retryable = 0;
+  let shopsLinked = 0;
   const answeredButUnclassified = [];
+  const touchedShopIds = new Set();
 
   for (const product of products) {
     const entry = byItemId.get(String(product.productId));
@@ -79,9 +90,28 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
     }
 
     const fields = mapMetaToProductFields(entry.meta, entry.commissionTable);
+
+    // The same payload that carries the category carries the shop id, so a row
+    // that has no shop yet gets attributed here for free - no extra request to
+    // anyone. lib/shopLinkBackfill.js is the job that sweeps the rest; this just
+    // happens to be holding the answer already.
+    let shopId;
+    if (!product.shopId) {
+      shopId = await shoppingProductsRepo.ensureShopLink(fields);
+      if (shopId) {
+        touchedShopIds.add(shopId);
+        shopsLinked++;
+      }
+    }
+
     if (!fields.category) {
       // addlivetag answered and genuinely has no taxonomy for this product.
-      // Stamp it so it rotates to the back instead of jamming the queue.
+      // Stamp it so it rotates to the back instead of jamming the queue. The
+      // shop still gets written if one was found - the two are independent, and
+      // a product with a shop but no category is worth more than neither.
+      if (shopId) {
+        await prisma.shoppingProduct.update({ where: { id: product.id }, data: { shopId } });
+      }
       answeredButUnclassified.push(product.id);
       failed++;
       continue;
@@ -92,6 +122,7 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
       data: {
         category: fields.category,
         categoryCheckedAt: checkedAt,
+        ...(shopId ? { shopId } : {}),
         isXtraCommission: fields.isXtraCommission ?? product.isXtraCommission,
         shopName: product.shopName ?? fields.shopName ?? null,
         priceValue: product.priceValue ?? fields.priceValue ?? null,
@@ -108,11 +139,16 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
     });
   }
 
+  if (touchedShopIds.size) {
+    await shopsRepo.refreshProductCounts([...touchedShopIds]);
+  }
+
   return {
     scanned: products.length,
     updated,
     failed,
     retryable,
+    shopsLinked,
     sourceRateLimited: batchInfo.limits?.sourceRateLimited ?? false,
     sourceCooldownSeconds: batchInfo.limits?.sourceCooldownSeconds ?? 0,
   };

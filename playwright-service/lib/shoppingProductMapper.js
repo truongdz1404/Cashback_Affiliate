@@ -70,6 +70,11 @@ function mapMetaToProductFields(meta, commissionTable) {
   return {
     name: meta?.itemName || undefined,
     shopName: meta?.shopName || undefined,
+    // `undefined` when absent like everything else here, and doubly so for this
+    // one: shop_id carries a foreign key, so writing an id whose Shop row does
+    // not exist yet fails the entire write. Every caller must create the shop
+    // first - lib/repositories/shops.js#ensureFromProduct is that step.
+    shopId: meta?.shopId || undefined,
     priceValue: meta?.priceValue ?? undefined,
     imageUrl: meta?.imageUrl || undefined,
     category: meta?.catName || undefined,

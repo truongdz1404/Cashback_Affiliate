@@ -49,6 +49,17 @@ const DEFAULT_SHOP_CRAWL_MAX_SHOPS = parseInt(process.env.SHOP_CRAWL_MAX_SHOPS |
 const SHOP_CRAWL_MAX_SHOPS_KEY = 'shop_crawl_max_shops';
 const DEFAULT_SHOP_CRAWL_MAX_PAGES = parseInt(process.env.SHOP_CRAWL_MAX_PAGES || '5', 10);
 const SHOP_CRAWL_MAX_PAGES_KEY = 'shop_crawl_max_pages';
+// Kill switch for shop detail enrichment (lib/shopDetailEnrichment.js). Ships
+// OFF like the other two Shopee-facing jobs: it calls Shopee's own API, and the
+// spec (§8) warns that endpoint could be locked down at any time, so it starts
+// only once a manual batch has been eyeballed.
+//
+// The addlivetag-only jobs (category backfill, shop-link backfill) deliberately
+// have NO switch - they never touch Shopee, so there is nothing to protect.
+const DEFAULT_SHOP_DETAIL_ENABLED = 0;
+const SHOP_DETAIL_ENABLED_KEY = 'shop_detail_enabled';
+const DEFAULT_SHOP_DETAIL_BATCH_SIZE = parseInt(process.env.SHOP_DETAIL_BATCH_SIZE || '20', 10);
+const SHOP_DETAIL_BATCH_SIZE_KEY = 'shop_detail_batch_size';
 
 async function getNumber(key, fallback) {
   const row = await prisma.setting.findUnique({ where: { key } });
@@ -188,6 +199,28 @@ async function setShopCrawlMaxPages(pages) {
   return getShopCrawlMaxPages();
 }
 
+async function getShopDetailEnabled() {
+  const value = await getNumber(SHOP_DETAIL_ENABLED_KEY, DEFAULT_SHOP_DETAIL_ENABLED);
+  return Number(value) === 1;
+}
+
+async function setShopDetailEnabled(enabled) {
+  await setNumber(SHOP_DETAIL_ENABLED_KEY, enabled ? 1 : 0);
+  return getShopDetailEnabled();
+}
+
+// Capped at 60: this one spends Shopee calls, and the whole point of the job is
+// to trickle. A dashboard typo of 600 would empty the rate budget in a tick.
+async function getShopDetailBatchSize() {
+  const value = await getNumber(SHOP_DETAIL_BATCH_SIZE_KEY, DEFAULT_SHOP_DETAIL_BATCH_SIZE);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 60) : DEFAULT_SHOP_DETAIL_BATCH_SIZE;
+}
+
+async function setShopDetailBatchSize(size) {
+  await setNumber(SHOP_DETAIL_BATCH_SIZE_KEY, size);
+  return getShopDetailBatchSize();
+}
+
 module.exports = {
   getRaw,
   setRaw,
@@ -228,6 +261,10 @@ module.exports = {
   SHOP_CRAWL_MAX_SHOPS_KEY,
   getShopCrawlMaxPages,
   setShopCrawlMaxPages,
+  getShopDetailEnabled,
+  setShopDetailEnabled,
+  getShopDetailBatchSize,
+  setShopDetailBatchSize,
   DEFAULT_SHOP_CRAWL_MAX_PAGES,
   SHOP_CRAWL_MAX_PAGES_KEY,
   COMMISSION_PCT_KEY,

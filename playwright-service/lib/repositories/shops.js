@@ -70,6 +70,36 @@ async function upsertFromApi(apiShop, { source = 'name_search', status } = {}) {
   });
 }
 
+/**
+ * Creates the bare Shop row a product needs before it can carry a shopId.
+ *
+ * shopping_products.shop_id has a foreign key, so a product can only ever be
+ * attributed to a shop that already exists. This path learns about shops from
+ * addlivetag's product lookup - which hands back shop_id and shop_name for free
+ * with every commission check (see lib/commission.js#mapInfoToMeta) - so the row
+ * it can create starts with nothing but an id and a name.
+ *
+ * That bareness is the whole reason this is a separate function from
+ * upsertFromApi, and why refreshProductCounts below will NOT promote what it
+ * creates: these arrive in the thousands, and a shop with no avatar would render
+ * as a blank card in the app's shop search the moment it had one product.
+ * lib/shopDetailEnrichment.js fetches the images and rating; promotion follows
+ * from there.
+ *
+ * Never modifies an existing row - a shop already known from Shopee's search
+ * endpoint has strictly better data than the two fields available here.
+ */
+async function ensureFromProduct({ shopId, name } = {}) {
+  const id = shopId == null ? '' : String(shopId).trim();
+  const shopName = String(name || '').trim();
+  if (!id || !shopName) return null;
+  return prisma.shop.upsert({
+    where: { shopId: id },
+    create: { shopId: id, name: shopName, source: 'addlivetag' },
+    update: {},
+  });
+}
+
 // Keys the detail payload didn't carry are removed rather than written as
 // null. The two endpoints overlap (spec §1.2), but a shop whose detail comes
 // back without `long_link` must not lose the one we already hold - that link is
@@ -94,8 +124,44 @@ async function applyDetail(shopId, detail) {
       followerCount: Number.isFinite(Number(detail.follower_count)) ? Number(detail.follower_count) : null,
       followersText: detail.followers || null,
       detailFetchedAt: new Date(),
+      detailCheckedAt: new Date(),
     },
   });
+}
+
+/**
+ * The enrichment queue: shops that have products but no detail yet.
+ *
+ * `detailCheckedAt` is separate from `detailFetchedAt` on purpose, and it is the
+ * same lesson lib/categoryEnrichment.js had to learn the hard way. "Has no
+ * detail" alone is not a queue: a shop Shopee cannot answer about keeps failing,
+ * keeps having no detail, and so keeps being picked first - parking itself at
+ * the head forever while everything behind it starves. Stamping every shop that
+ * was actually asked about, answered or not, is what makes the queue drain.
+ *
+ * Shops with no products wait: there are thousands of them and none is visible
+ * to anyone, so spending a request on one ahead of a shop a user could see
+ * tomorrow is backwards.
+ */
+async function listDetailQueue({ limit = 20 } = {}) {
+  return prisma.shop.findMany({
+    where: { isActive: true, detailFetchedAt: null, productCount: { gt: 0 } },
+    orderBy: [
+      { detailCheckedAt: { sort: 'asc', nulls: 'first' } },
+      { productCount: 'desc' },
+    ],
+    take: limit,
+  });
+}
+
+async function markDetailChecked(shopIds) {
+  const ids = [...new Set((shopIds || []).map(String))];
+  if (!ids.length) return 0;
+  const { count } = await prisma.shop.updateMany({
+    where: { shopId: { in: ids } },
+    data: { detailCheckedAt: new Date() },
+  });
+  return count;
 }
 
 /**
@@ -309,6 +375,14 @@ async function remove(id) {
  * what makes a shop visible to users, so it lives here (one place) rather than
  * being repeated by every writer.
  *
+ * Promotion also requires an avatar. Shops used to arrive only from Shopee's
+ * search endpoint, which always sends `shop_image`, so for that path this
+ * changes nothing. ensureFromProduct above is the new path, and it can only
+ * supply an id and a name - promoting those would put blank cards in the app's
+ * shop search the instant a single product linked to one. The avatar is the
+ * cheapest honest proof that lib/shopDetailEnrichment.js has been round the
+ * shop and filled in the rest (rating, followers, cover).
+ *
  * Pass the shop ids a job just touched to keep this cheap; omit for a full
  * rebuild (admin-triggered).
  */
@@ -328,9 +402,13 @@ async function refreshProductCounts(shopIds) {
   let updated = 0;
   for (const shopId of targets) {
     const productCount = counts.get(shopId) || 0;
-    const shop = await prisma.shop.findUnique({ where: { shopId }, select: { status: true, productCount: true } });
+    const shop = await prisma.shop.findUnique({
+      where: { shopId },
+      select: { status: true, productCount: true, imageUrl: true },
+    });
     if (!shop) continue;
-    const status = productCount > 0 && shop.status === 'discovered' ? 'linked' : shop.status;
+    const status =
+      productCount > 0 && shop.status === 'discovered' && !!shop.imageUrl ? 'linked' : shop.status;
     if (shop.productCount === productCount && status === shop.status) continue;
     await prisma.shop.update({ where: { shopId }, data: { productCount, status } });
     updated++;
@@ -384,7 +462,10 @@ module.exports = {
   toAppShops,
   mapApiShop,
   upsertFromApi,
+  ensureFromProduct,
   applyDetail,
+  listDetailQueue,
+  markDetailChecked,
   getByShopId,
   getById,
   existingShopIds,

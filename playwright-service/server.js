@@ -36,6 +36,8 @@ const jobRunsRepo = require('./lib/repositories/jobRuns');
 const { withJobRun } = require('./lib/jobRunner');
 const { buildAffiliateLink } = require('./lib/affiliateLink');
 const { backfillMissingCategories } = require('./lib/categoryEnrichment');
+const { backfillMissingShopIds } = require('./lib/shopLinkBackfill');
+const { enrichShopDetails } = require('./lib/shopDetailEnrichment');
 const zaloBot = require('./lib/zaloBot');
 const zaloMessageHandler = require('./lib/zaloMessageHandler');
 const adminAuth = require('./lib/adminAuth');
@@ -1823,6 +1825,43 @@ app.get('/admin/shop-product-sync', adminAuth.requireAdmin, (_req, res) => {
   res.json(shopProductSyncJob.getStatus());
 });
 
+// The manual half of lib/shopLinkBackfill.js. Answers synchronously rather than
+// 202+poll like the two jobs above: this one makes a single batched addlivetag
+// call, so it finishes in seconds and holds nothing - there is no long-running
+// state worth polling for.
+app.post('/admin/shop-link-backfill', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const has = (v) => v !== undefined && v !== null && v !== '';
+    const batchSize = has(req.body?.batchSize) ? Number(req.body.batchSize) : 50;
+    // 100 is addlivetag's own per-request ceiling for product-data-batch.php.
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+      return res.status(400).json({ error: 'body.batchSize must be an integer between 1 and 100' });
+    }
+    res.json(await withJobRun('shop-link-backfill', 'admin', () => backfillMissingShopIds({ batchSize })));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// The manual half of lib/shopDetailEnrichment.js. Runs whatever the
+// `shop_detail_enabled` switch says, on purpose: that switch governs the cron,
+// and an admin pressing the button is exactly how the batch gets eyeballed
+// before the switch is turned on.
+app.post('/admin/shop-detail-enrich', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const has = (v) => v !== undefined && v !== null && v !== '';
+    const batchSize = has(req.body?.batchSize)
+      ? Number(req.body.batchSize)
+      : await settingsRepo.getShopDetailBatchSize();
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 60) {
+      return res.status(400).json({ error: 'body.batchSize must be an integer between 1 and 60' });
+    }
+    res.json(await withJobRun('shop-detail-enrich', 'admin', () => enrichShopDetails({ batchSize })));
+  } catch (err) {
+    sendShopeeApiError(res, err);
+  }
+});
+
 app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
   try {
     res.json(await bannersRepo.listAll());
@@ -2049,6 +2088,43 @@ cron.schedule('*/15 * * * *', () => {
   })
     .then((result) => console.log(`cron category-backfill: ${JSON.stringify(result)}`))
     .catch((err) => console.error('cron category-backfill failed', err.message));
+});
+
+// Shop attribution backfill for the catalog rows that carry a shop name and no
+// shop - four times an hour, ~200 rows/hour, so the 3108 rows that predate
+// reading addlivetag's shop_id clear in under a day and then the queue sits
+// empty. Same minutes-offset discipline as the jobs below.
+//
+// No kill switch and no lock, for the same reason as the category backfill: it
+// only ever talks to addlivetag, never to Shopee, so there is no account to
+// protect and no browser to contend for.
+cron.schedule('8,23,38,53 * * * *', () => {
+  withJobRun('shop-link-backfill', 'cron', () => backfillMissingShopIds(), {
+    discardIf: (result) => result && result.scanned === 0,
+  })
+    .then((result) => console.log(`cron shop-link-backfill: ${JSON.stringify(result)}`))
+    .catch((err) => console.error('cron shop-link-backfill failed', err.message));
+});
+
+// Shop detail enrichment - avatar, cover, rating, sold total, followers - three
+// times an hour at ~60 shops/hour. Deliberately slow: it spends Shopee calls,
+// and there is no deadline, because a shop with no avatar simply stays out of
+// the app until this reaches it (see shops.refreshProductCounts).
+//
+// Gated on `shop_detail_enabled`, re-read every tick, like the two jobs below:
+// anything that touches Shopee must be stoppable from the dashboard without a
+// redeploy.
+cron.schedule('7,27,47 * * * *', async () => {
+  try {
+    if (!(await settingsRepo.getShopDetailEnabled())) return;
+    const batchSize = await settingsRepo.getShopDetailBatchSize();
+    const result = await withJobRun('shop-detail-enrich', 'cron', () => enrichShopDetails({ batchSize }), {
+      discardIf: (r) => r && r.scanned === 0,
+    });
+    console.log(`cron shop-detail-enrich: ${JSON.stringify(result)}`);
+  } catch (err) {
+    console.error('cron shop-detail-enrich failed', err.message);
+  }
 });
 
 // Shop-name resolution, ten past every ten minutes. The odd minutes are
