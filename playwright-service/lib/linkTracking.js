@@ -17,6 +17,23 @@ async function prepareSubId(zaloUserId, subIds) {
   };
 }
 
+// The same thing for a user we already hold by id, which is every caller behind
+// appAuth.requireAppUser. Those callers used to pass `user.zaloUserId` into
+// prepareSubId above, and an account created through email / Google / Facebook
+// has none - so the minted link carried NO sub id at all and a resulting order
+// could never be matched back to the buyer in reconciliation.js. Everything
+// still worked and looked fine; the cashback just silently never arrived.
+function prepareSubIdForUser(userId, subIds) {
+  if (!userId) return { finalSubIds: subIds, userId: null, subId: null };
+
+  const subId = linksRepo.generateSubId();
+  return {
+    finalSubIds: { ...(subIds || {}), sub_id1: subId },
+    userId: Number(userId),
+    subId,
+  };
+}
+
 // Persists the generated link once the Shopee call has returned, so it can
 // be looked up by sub_id during order reconciliation. `estimate` (userAmount/
 // userPct) is stored alongside so the app's link history can show the same
@@ -40,4 +57,4 @@ async function recordLink(userId, subId, productLinks, result, fallbackItemId, e
   });
 }
 
-module.exports = { prepareSubId, recordLink };
+module.exports = { prepareSubId, prepareSubIdForUser, recordLink };

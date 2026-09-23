@@ -69,4 +69,28 @@ async function findRecentByUserAndItem(userId, itemId, maxAgeMs) {
   });
 }
 
-module.exports = { generateSubId, saveLink, findBySubId, listByUser, findRecentByUserAndItem };
+// Shop links have no itemId to key on, so reuse is keyed on the storefront URL
+// instead. Unlike the product case above this saves no Shopee round trip -
+// building a shop link is pure string work (lib/shopLink.js) - it only stops a
+// user who taps the same shop ten times from leaving ten rows behind, each with
+// its own sub id, in the table reconciliation reads.
+async function findRecentByUserAndShopeeUrl(userId, shopeeUrl, maxAgeMs) {
+  if (!shopeeUrl) return null;
+  return prisma.link.findFirst({
+    where: {
+      userId: Number(userId),
+      shopeeUrl: String(shopeeUrl),
+      createdAt: { gte: new Date(Date.now() - maxAgeMs) },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+module.exports = {
+  generateSubId,
+  saveLink,
+  findBySubId,
+  listByUser,
+  findRecentByUserAndItem,
+  findRecentByUserAndShopeeUrl,
+};

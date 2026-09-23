@@ -36,6 +36,7 @@ const continuousJobs = require('./lib/continuousJobs');
 const jobRunsRepo = require('./lib/repositories/jobRuns');
 const { withJobRun } = require('./lib/jobRunner');
 const { buildAffiliateLink } = require('./lib/affiliateLink');
+const { buildShopLink } = require('./lib/shopLink');
 const { backfillMissingCategories } = require('./lib/categoryEnrichment');
 const { backfillMissingShopIds } = require('./lib/shopLinkBackfill');
 const { enrichShopDetails } = require('./lib/shopDetailEnrichment');
@@ -513,7 +514,7 @@ app.post('/app/link', appAuth.requireAppUser, async (req, res) => {
       return res.status(501).json({ error: 'coming_soon' });
     }
     const user = await usersRepo.getById(req.appUserId);
-    const tracking = await linkTracking.prepareSubId(user.zaloUserId, undefined);
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
     const result = await getLinkAndCommission([productUrl], tracking.finalSubIds);
     const estimate = estimateFromResult(result, await getEffectivePct(user));
 
@@ -912,6 +913,61 @@ app.get('/app/shops/:shopId', appAuth.optionalAppUser, async (req, res) => {
   }
 });
 
+// The shop-level twin of POST /app/shopping-products/:id/open, behind every
+// "Xem shop" affordance in the app and on the website.
+//
+// The alternative was to link the storefront directly (shop.shopUrl, i.e.
+// shopee.vn/shop/<id>). That URL carries no affiliate id whatsoever, so an
+// order placed after that tap pays nobody - not the buyer, not the operator.
+// Sending the tap through here instead costs no network call (lib/shopLink.js
+// rewrites the sub ids into the long_link Shopee already gave us) and keeps
+// both halves of the commission in play.
+const SHOP_LINK_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const shop = await shopsRepo.getByShopId(req.params.shopId, { visibleOnly: true });
+    if (!shop) return res.status(404).json({ error: 'not_found' });
+
+    // Logged out - the website serves guests. No sub id means no cashback for
+    // anyone, but the operator's commission still rides on the affiliate id in
+    // the link, so this is strictly better than the bare storefront URL.
+    if (!req.appUserId) {
+      const guest = await buildShopLink(shop, { subIds: [] });
+      return res.json({ affiliateUrl: guest.url, tracked: false, reused: false });
+    }
+
+    const canonicalUrl = `https://shopee.vn/shop/${shop.shopId}`;
+    const reused = await linksRepo.findRecentByUserAndShopeeUrl(req.appUserId, canonicalUrl, SHOP_LINK_REUSE_WINDOW_MS);
+    if (reused && reused.affiliateUrl) {
+      return res.json({ affiliateUrl: reused.affiliateUrl, tracked: true, reused: true });
+    }
+
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
+    const { url, tracked } = await buildShopLink(shop, { subIds: [tracking.subId] });
+
+    if (tracked) {
+      await linksRepo.saveLink({
+        userId: tracking.userId,
+        subId: tracking.subId,
+        // No itemId on purpose: the buyer picks the product on Shopee's side,
+        // so there is none yet. reconciliation.js matches on sub_id alone and
+        // does not care, and leaving it null keeps the recommendation engine
+        // from reading this row as interest in one specific item.
+        itemId: null,
+        shopeeUrl: canonicalUrl,
+        affiliateUrl: url,
+        shopName: shop.name,
+        imageUrl: shop.portraitUrl || shop.imageUrl,
+      });
+    }
+
+    res.json({ affiliateUrl: url, tracked, reused: false });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Real Shopee categories present in the catalog right now, most-stocked
 // first. The `category` column is backfilled gradually, so this can be a
 // short list or empty - clients must render nothing rather than invent a
@@ -962,7 +1018,7 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, async (req, 
       return res.json({ affiliateUrl: reused.affiliateUrl, estimate, reused: true });
     }
 
-    const tracking = await linkTracking.prepareSubId(user.zaloUserId, undefined);
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
     const result = await getCustomLinks([product.productUrl], tracking.finalSubIds);
     const first = (result.results || [])[0] || null;
     const affiliateUrl = first ? first.shortLink || first.longLink : null;

@@ -339,12 +339,53 @@ async function searchRanked({ search, limit = 1 } = {}) {
     .map((entry) => entry.shop);
 }
 
+// The fill below only considers shops with at least this many products. A
+// "Shop nổi bật" card that opens onto two items reads as broken, and most
+// visible shops are still thin: the by-shop crawl takes one pass per shop, so
+// productCount climbs for days after a shop first becomes visible.
+const FEATURED_FILL_MIN_PRODUCTS = 5;
+
+// Hand-picked shops first, then fill the rest of the rail automatically.
+//
+// The fill is what makes this usable on day one: nobody has ticked "Nổi bật"
+// yet, so without it every home screen would show an empty rail until an admin
+// curates one by hand. Highest cashback leads, which is what the rail sells.
+// An admin ticking shops pushes the fill out one slot at a time, so curation
+// always wins without needing a separate "auto or manual" setting.
+//
+// If too few shops clear FEATURED_FILL_MIN_PRODUCTS to fill the rail, the bar is
+// dropped rather than returning a short rail - a thin shop is still better than
+// a gap, and early on (or with a wide limit) that is the common case.
 async function listFeatured({ limit = 10 } = {}) {
-  return prisma.shop.findMany({
+  const picked = await prisma.shop.findMany({
     where: { ...VISIBLE_WHERE, isFeatured: true },
     orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     take: limit,
   });
+  if (picked.length >= limit) return picked;
+
+  const exclude = picked.map((shop) => shop.id);
+  const fill = (minProducts) =>
+    prisma.shop.findMany({
+      where: {
+        ...VISIBLE_WHERE,
+        // Overrides VISIBLE_WHERE's `productCount > 0` - spread order matters.
+        ...(minProducts > 1 ? { productCount: { gte: minProducts } } : {}),
+        id: { notIn: exclude },
+      },
+      // Postgres sorts NULLs first on DESC, which would put every shop whose
+      // commission we have not fetched yet at the head of the rail.
+      orderBy: [
+        { commissionRateValue: { sort: 'desc', nulls: 'last' } },
+        { productCount: 'desc' },
+        { id: 'asc' },
+      ],
+      take: limit - picked.length,
+    });
+
+  let rest = await fill(FEATURED_FILL_MIN_PRODUCTS);
+  if (picked.length + rest.length < limit) rest = await fill(1);
+  return [...picked, ...rest];
 }
 
 async function updateCuration(id, { isActive, isFeatured, sortOrder } = {}) {
