@@ -487,3 +487,29 @@ model ShopNameResolution {
   @@index([status, nextAttemptAt])
   @@map("shop_name_resolutions")
 }
+
+// One row per execution of a background job. Until now a job's outcome lived
+// only in a module-level variable (lib/productOfferSyncJob.js) or was
+// console.logged and forgotten (lib/categoryEnrichment.js), and this repo
+// auto-deploys on every push to master - so the one place that knew whether
+// last night's scrape worked was wiped several times a week. An anti-bot
+// block or an expired session needs to leave a trace that outlives a restart.
+model JobRun {
+  id         Int       @id @default(autoincrement())
+  // product-offer-sync | category-backfill | shop-name-resolve | shop-product-crawl
+  job        String
+  // running | done | error
+  status     String    @default("running")
+  // cron | admin | boot
+  trigger    String    @default("cron")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  durationMs Int?      @map("duration_ms")
+  // The job's own return value, verbatim. Kept as text rather than Json so a
+  // job that changes its counters never needs a migration.
+  resultJson String?   @map("result_json")
+  error      String?
+
+  @@index([job, startedAt])
+  @@map("job_runs")
+}
