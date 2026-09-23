@@ -98,6 +98,46 @@ async function applyDetail(shopId, detail) {
   });
 }
 
+/**
+ * The only shape of a shop an app user is ever allowed to see.
+ *
+ * `longLink` and `shopUrl` are the reason this function exists. Both open the
+ * storefront, and `longLink` even looks like a finished affiliate link - but it
+ * is the affiliate account's own link with an EMPTY subId, so an order placed
+ * through it can never be traced back to a user and nobody gets paid. Handing
+ * either of them to the client puts a working, plausible, unattributed "Xem
+ * shop trên Shopee" button one line of JSX away. Products inside the shop
+ * screen still mint a real per-user link on tap, which is the supported path.
+ *
+ * The rest is operational detail - crawl timestamps, the last crawl error,
+ * curation order, `status` - that a user has no use for and that would leak
+ * how the catalog is assembled.
+ */
+function toAppShop(shop) {
+  if (!shop) return null;
+  return {
+    // `id` stays because the app's infinite-query helpers dedupe on it.
+    id: shop.id,
+    shopId: shop.shopId,
+    name: shop.name,
+    imageUrl: shop.imageUrl,
+    portraitUrl: shop.portraitUrl,
+    coverUrl: shop.coverUrl,
+    commissionRateText: shop.commissionRateText,
+    commissionRateValue: shop.commissionRateValue,
+    rating: shop.rating,
+    soldTotal: shop.soldTotal,
+    followerCount: shop.followerCount,
+    followersText: shop.followersText,
+    productCount: shop.productCount,
+    isFeatured: shop.isFeatured,
+  };
+}
+
+function toAppShops(shops) {
+  return (shops || []).map(toAppShop);
+}
+
 async function getByShopId(shopId, { visibleOnly = false } = {}) {
   const shop = await prisma.shop.findUnique({ where: { shopId: String(shopId) } });
   if (!shop) return null;
@@ -340,6 +380,8 @@ async function markLinked(shopId) {
 
 module.exports = {
   VISIBLE_WHERE,
+  toAppShop,
+  toAppShops,
   mapApiShop,
   upsertFromApi,
   applyDetail,

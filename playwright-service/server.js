@@ -844,14 +844,14 @@ app.get('/app/shops', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const offset = Number(req.query.offset) || 0;
-    res.json(await shopsRepo.list({
+    res.json(shopsRepo.toAppShops(await shopsRepo.list({
       limit,
       offset,
       sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
       search: typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined,
       featuredOnly: req.query.featured === '1' || req.query.featured === 'true' ? true : undefined,
       visibleOnly: true,
-    }));
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -879,7 +879,7 @@ app.get('/app/shops/count', appAuth.optionalAppUser, async (req, res) => {
 app.get('/app/shops/featured', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 50);
-    res.json(await shopsRepo.listFeatured({ limit }));
+    res.json(shopsRepo.toAppShops(await shopsRepo.listFeatured({ limit })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -893,7 +893,7 @@ app.get('/app/shops/search', appAuth.optionalAppUser, async (req, res) => {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search : '';
     const limit = Math.min(Number(req.query.limit) || 1, 5);
-    res.json(await shopsRepo.searchRanked({ search, limit }));
+    res.json(shopsRepo.toAppShops(await shopsRepo.searchRanked({ search, limit })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -903,7 +903,7 @@ app.get('/app/shops/:shopId', appAuth.optionalAppUser, async (req, res) => {
   try {
     const shop = await shopsRepo.getByShopId(req.params.shopId, { visibleOnly: true });
     if (!shop) return res.status(404).json({ error: 'not_found' });
-    res.json(shop);
+    res.json(shopsRepo.toAppShop(shop));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
