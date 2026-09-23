@@ -58,6 +58,18 @@ export const getSessionUser = cache(async (): Promise<AppUser | null> => {
   }
 });
 
+// The same remote switch the mobile app reads, so one flip in the dashboard
+// turns the shop surfaces on or off everywhere instead of only in the app.
+// Deduped per request like getSessionUser: the home rail, the search shortcut
+// and the shop page all ask, and must not each hit the backend.
+//
+// Defaults to off, matching the app's own DEFAULTS: if /config cannot be read
+// we would rather show no shop UI than rails that quietly fail to load.
+export const getAppFeatures = cache(async (): Promise<{ shops: boolean }> => {
+  const payload = await appFetchSafe<{ config?: { features?: { shops?: boolean } } }>("/config", {});
+  return { shops: payload.config?.features?.shops === true };
+});
+
 export function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {

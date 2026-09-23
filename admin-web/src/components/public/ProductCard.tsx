@@ -5,14 +5,19 @@ import { useState } from "react";
 import { toast } from "@heroui/react";
 import { appClient, AppRequestError } from "@/lib/appClient";
 import { openAuthDialog } from "@/lib/authDialog";
+import { openPendingTab } from "@/lib/pendingTab";
 import { formatPct, formatVnd } from "@/lib/format";
 import type { ShoppingProduct, ShoppingProductOpenResult } from "@/lib/appTypes";
-import { ArrowRightIcon, ImageIcon } from "@/components/icons";
+import { useOpenShopOnShopee } from "@/components/public/useOpenShopOnShopee";
+import { ArrowRightIcon, ExternalLinkIcon, ImageIcon, StoreIcon } from "@/components/icons";
 
-// One card = one tap. The whole card opens the affiliate link, so there is no
-// separate CTA button and no "log in to earn" copy competing with the product
-// itself. A guest still gets the product (plain Shopee URL in a new tab) and
-// the sign-in dialog on this tab explaining why the tap did not earn cashback.
+// One card = two taps, and only two. The card body opens the product's own
+// cashback link; the storefront strip along the bottom opens the shop on
+// Shopee. They are separate elements rather than one button with a nested
+// button inside it, which is invalid HTML and behaves unpredictably.
+//
+// A guest still gets the product (plain Shopee URL in a new tab) and the
+// sign-in dialog on this tab explaining why the tap did not earn cashback.
 export default function ProductCard({
   product,
   isAuthenticated,
@@ -23,12 +28,19 @@ export default function ProductCard({
   className?: string;
 }) {
   const [loading, setLoading] = useState(false);
+  const { openShop, loading: openingShop } = useOpenShopOnShopee();
 
   const pct = product.userCommissionRateValue;
   const amount = product.userCommissionValue;
   const hasPct = pct != null && pct > 0;
   const hasAmount = amount != null && amount > 0;
   const tags = [product.isBestSeller && "Bán chạy", product.isXtraCommission && "Xtra"].filter(Boolean) as string[];
+
+  // Only products the shop-name resolver has mapped onto a real shop can be
+  // linked out; the rest keep the bare shop name as text, since there is
+  // nowhere to send anyone.
+  const shopId = product.shop?.shopId || product.shopId;
+  const shopName = product.shop?.name || product.shopName;
 
   async function open() {
     if (loading) return;
@@ -45,7 +57,10 @@ export default function ProductCard({
       return;
     }
 
-    const tab = window.open("", "_blank", "noopener,noreferrer");
+    // Minting a cashback link takes a few seconds (a real browser on the server
+    // has to ask Shopee for it), so the tab is opened first - inside the click
+    // handler, or the popup blocker eats it - and pointed at the URL after.
+    const tab = openPendingTab();
     setLoading(true);
     try {
       const result = await appClient.post<ShoppingProductOpenResult>(`/shopping-products/${product.id}/open`);
@@ -100,9 +115,12 @@ export default function ProductCard({
         </span>
 
         <span className="flex flex-1 flex-col px-3 pb-3 pt-2.5">
-          {(product.shopName || tags.length > 0) && (
+          {/* The shop name only appears here when there is no storefront to
+              link to - otherwise it lives in the strip below, where it can be
+              tapped. Repeating it in both places would just be noise. */}
+          {((shopName && !shopId) || tags.length > 0) && (
             <span className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-[var(--muted)]">
-              {product.shopName && <span className="truncate">{product.shopName}</span>}
+              {shopName && !shopId && <span className="truncate">{shopName}</span>}
               {tags.map((tag) => (
                 <span
                   key={tag}
@@ -138,6 +156,25 @@ export default function ProductCard({
           </span>
         </span>
       </button>
+
+      {/* Straight out to the shop's Shopee storefront, not to our own shop
+          page: someone who wants the whole catalogue should not have to come
+          back out through a second tap, and every tap that stops short of
+          Shopee is commission we never earn. Our shop page is still reachable
+          from the home rail and from search. */}
+      {shopId && shopName && (
+        <button
+          type="button"
+          onClick={() => openShop(shopId, isAuthenticated)}
+          disabled={openingShop}
+          aria-label={`Xem cửa hàng ${shopName} trên Shopee`}
+          className="flex w-full min-w-0 items-center gap-1.5 border-t border-[var(--border)] px-3 py-2 text-left text-[11px] font-bold leading-4 text-[var(--muted)] outline-none transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent-dark)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-60"
+        >
+          <StoreIcon className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{openingShop ? "Đang mở cửa hàng…" : shopName}</span>
+          <ExternalLinkIcon className="ml-auto h-3 w-3 shrink-0 opacity-70" />
+        </button>
+      )}
     </article>
   );
 }

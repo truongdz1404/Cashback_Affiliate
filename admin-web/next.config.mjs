@@ -12,6 +12,8 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: '**.susercontent.com' },
       { protocol: 'https', hostname: 'cf.shopee.vn' },
+      // Shop avatars come back off the Singapore CDN host, not the .vn one.
+      { protocol: 'https', hostname: 'cf.shopee.sg' },
       { protocol: 'https', hostname: 'refundmoney.tro247.online' },
     ],
   },

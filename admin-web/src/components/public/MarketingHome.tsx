@@ -3,13 +3,14 @@ import Link from "next/link";
 import type { ComponentType } from "react";
 import { Card, Chip } from "@heroui/react";
 import ProductRail from "@/components/public/ProductRail";
+import ShopRail from "@/components/public/ShopRail";
 import CampaignCard from "@/components/public/CampaignCard";
 import PlaceholderImage from "@/components/public/PlaceholderImage";
 import HowItWorks from "@/components/public/HowItWorks";
 import LinkTool from "@/components/public/LinkTool";
 import { PLAY_STORE_URL } from "@/lib/site";
 import { formatPct, formatVnd } from "@/lib/format";
-import type { Campaign, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
+import type { Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
 import {
   ArrowRightIcon,
   BagIcon,
@@ -64,6 +65,7 @@ export default function MarketingHome({
   topCashback,
   bestSellers,
   xtra,
+  shops,
   campaigns,
 }: {
   categories: ShoppingCategory[];
@@ -71,6 +73,7 @@ export default function MarketingHome({
   topCashback: ShoppingProduct[];
   bestSellers: ShoppingProduct[];
   xtra: ShoppingProduct[];
+  shops: Shop[];
   campaigns: Campaign[];
 }) {
   const bestRate = topCashback.reduce<number>((max, p) => Math.max(max, p.userCommissionRateValue ?? 0), 0);
@@ -230,6 +233,8 @@ export default function MarketingHome({
           isAuthenticated={false}
           accent={<StarIcon className="h-4 w-4 text-[var(--accent)]" />}
         />
+
+        <ShopRail shops={shops} subtitle="Cửa hàng đang có tỷ lệ hoàn tiền cao nhất trên Rewally" />
 
         <ProductRail
           title="Bán chạy nhất"

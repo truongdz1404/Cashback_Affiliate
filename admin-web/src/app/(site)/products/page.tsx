@@ -1,11 +1,12 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import type { Metadata } from "next";
-import { appFetchSafe, buildQuery, getSessionUser } from "@/lib/appApi";
-import type { ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
+import { appFetchSafe, buildQuery, getAppFeatures, getSessionUser } from "@/lib/appApi";
+import type { Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
 import ProductCard from "@/components/public/ProductCard";
 import ProductFilters from "@/components/public/ProductFilters";
 import Pagination from "@/components/public/Pagination";
+import { ShopSearchCard } from "@/components/public/ShopCard";
 import { SearchIcon } from "@/components/icons";
 
 export const dynamic = "force-dynamic";
@@ -49,11 +50,18 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const query = buildQuery({ ...filters, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
   const countQuery = buildQuery(filters);
 
-  const [user, products, countResult, categories] = await Promise.all([
+  const [user, features, products, countResult, categories, shops] = await Promise.all([
     getSessionUser(),
+    getAppFeatures(),
     appFetchSafe<ShoppingProduct[]>(`/shopping-products${query}`, []),
     appFetchSafe<{ total: number }>(`/shopping-products/count${countQuery}`, { total: 0 }),
     appFetchSafe<ShoppingCategory[]>("/shopping-categories?minCount=4", []),
+    // Only when someone typed something, and only on the first page - a
+    // shortcut to a storefront belongs at the top of the results, not halfway
+    // down page four. Most searches name a product and get nothing back here.
+    filters.search && page === 1
+      ? appFetchSafe<Shop[]>(`/shops/search${buildQuery({ search: filters.search, limit: 1 })}`, [])
+      : Promise.resolve<Shop[]>([]),
   ]);
 
   const total = countResult.total;
@@ -75,6 +83,13 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
       <Suspense fallback={<div className="h-9 rounded-full bg-white ring-1 ring-[var(--border)]" />}>
         <ProductFilters categories={categories.map((c) => c.category)} />
       </Suspense>
+
+      {/* Above the empty state as well as above the grid: a search for a shop
+          name can easily match no product at all, and that is precisely the
+          case where the storefront shortcut is the whole answer. */}
+      {(features.shops ? shops : []).map((shop) => (
+        <ShopSearchCard key={shop.id} shop={shop} />
+      ))}
 
       {products.length === 0 ? (
         <div className="mt-10 flex flex-col items-center rounded-2xl border border-dashed border-[var(--border)] px-6 py-16 text-center">

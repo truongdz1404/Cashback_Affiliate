@@ -61,6 +61,33 @@ export type Order = {
 // userCommissionRateValue / userCommissionValue are what THIS user actually
 // receives. Never display the raw commissionRateValue / commissionValue -
 // those are the operator-side gross figures and overstate the cashback.
+// A shop in Shopee's affiliate programme. Only shops that are active, resolved
+// to a real shop_id and actually holding products are ever served here, so the
+// site can render one without checking whether it leads anywhere.
+export type Shop = {
+  id: number;
+  shopId: string;
+  name: string;
+  imageUrl: string | null;
+  portraitUrl: string | null;
+  coverUrl: string | null;
+  commissionRateText: string | null;
+  commissionRateValue: number | null;
+  rating: number | null;
+  soldTotal: number | null;
+  followerCount: number | null;
+  followersText: string | null;
+  productCount: number;
+  isFeatured: boolean;
+};
+
+// The trimmed shop embedded in each product row, so a card can link to the
+// storefront without a request per product.
+export type EmbeddedShop = Pick<
+  Shop,
+  "shopId" | "name" | "imageUrl" | "portraitUrl" | "commissionRateText" | "isFeatured"
+>;
+
 export type ShoppingProduct = {
   id: number;
   productId: string;
@@ -79,6 +106,11 @@ export type ShoppingProduct = {
   offerUrl: string | null;
   imageUrl: string | null;
   category: string | null;
+  // Null until the shop-name resolver maps this product's `shopName` onto a
+  // real Shopee shop, so every consumer has to treat the storefront as
+  // optional - plenty of products will never get one.
+  shopId: string | null;
+  shop: EmbeddedShop | null;
   isBestSeller: boolean;
   isXtraCommission: boolean;
   scrapedAt: string | null;
@@ -86,6 +118,12 @@ export type ShoppingProduct = {
 };
 
 export type ShoppingCategory = { category: string; count: number };
+
+// POST /app/shops/:shopId/open. `tracked` is false when the link carries no sub
+// id - a logged-out visitor, or a shop we could not build an affiliate link for
+// at all. The buyer earns no cashback in that case, so the UI must not promise
+// any; the redirect still happens, because a dead button earns even less.
+export type ShopOpenResult = { affiliateUrl: string; tracked: boolean; reused: boolean };
 
 export type ShoppingProductOpenResult = {
   affiliateUrl: string;

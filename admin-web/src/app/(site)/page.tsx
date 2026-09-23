@@ -1,12 +1,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Chip } from "@heroui/react";
-import { appFetchSafe, buildQuery, getSessionUser } from "@/lib/appApi";
-import type { Banner, Campaign, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
+import { appFetchSafe, buildQuery, getAppFeatures, getSessionUser } from "@/lib/appApi";
+import type { Banner, Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
 import { PLAY_STORE_URL } from "@/lib/site";
 import { displayName } from "@/lib/format";
 import BannerCarousel from "@/components/public/BannerCarousel";
 import ProductRail from "@/components/public/ProductRail";
+import ShopRail from "@/components/public/ShopRail";
 import CampaignCard from "@/components/public/CampaignCard";
 import HowItWorks from "@/components/public/HowItWorks";
 import MarketingHome from "@/components/public/MarketingHome";
@@ -23,17 +24,27 @@ const FALLBACK_BANNERS: Banner[] = [
 ];
 
 export default async function HomePage() {
-  const [user, banners, categories, topCashback, bestSellers, xtra, recommended, campaigns, count] = await Promise.all([
-    getSessionUser(),
-    appFetchSafe<Banner[]>("/banners", []),
-    appFetchSafe<ShoppingCategory[]>("/shopping-categories?minCount=4", []),
-    appFetchSafe<ShoppingProduct[]>(`/shopping-products${buildQuery({ limit: RAIL_LIMIT, sort: "commission_desc" })}`, []),
-    appFetchSafe<ShoppingProduct[]>(`/shopping-products${buildQuery({ limit: RAIL_LIMIT, bestSeller: 1 })}`, []),
-    appFetchSafe<ShoppingProduct[]>(`/shopping-products${buildQuery({ limit: RAIL_LIMIT, xtra: 1 })}`, []),
-    appFetchSafe<ShoppingProduct[]>(`/recommendations${buildQuery({ limit: RAIL_LIMIT })}`, []),
-    appFetchSafe<Campaign[]>(`/campaigns${buildQuery({ limit: 4 })}`, []),
-    appFetchSafe<{ total: number }>("/shopping-products/count", { total: 0 }),
-  ]);
+  const [user, features, banners, categories, topCashback, bestSellers, xtra, recommended, shops, campaigns, count] =
+    await Promise.all([
+      getSessionUser(),
+      getAppFeatures(),
+      appFetchSafe<Banner[]>("/banners", []),
+      appFetchSafe<ShoppingCategory[]>("/shopping-categories?minCount=4", []),
+      appFetchSafe<ShoppingProduct[]>(
+        `/shopping-products${buildQuery({ limit: RAIL_LIMIT, sort: "commission_desc" })}`,
+        [],
+      ),
+      appFetchSafe<ShoppingProduct[]>(`/shopping-products${buildQuery({ limit: RAIL_LIMIT, bestSeller: 1 })}`, []),
+      appFetchSafe<ShoppingProduct[]>(`/shopping-products${buildQuery({ limit: RAIL_LIMIT, xtra: 1 })}`, []),
+      appFetchSafe<ShoppingProduct[]>(`/recommendations${buildQuery({ limit: RAIL_LIMIT })}`, []),
+      // Hand-picked shops first, topped up by the backend with the highest
+      // cashback shops that hold enough products to be worth opening. An empty
+      // array only means there are no visible shops at all - the rail then
+      // renders nothing rather than a gap.
+      appFetchSafe<Shop[]>(`/shops/featured${buildQuery({ limit: RAIL_LIMIT })}`, []),
+      appFetchSafe<Campaign[]>(`/campaigns${buildQuery({ limit: 4 })}`, []),
+      appFetchSafe<{ total: number }>("/shopping-products/count", { total: 0 }),
+    ]);
 
   const isAuthenticated = user != null;
   const slides = banners.length > 0 ? banners : FALLBACK_BANNERS;
@@ -46,6 +57,7 @@ export default async function HomePage() {
         topCashback={topCashback}
         bestSellers={bestSellers}
         xtra={xtra}
+        shops={features.shops ? shops : []}
         campaigns={campaigns}
       />
     );
@@ -121,6 +133,8 @@ export default async function HomePage() {
         isAuthenticated={isAuthenticated}
         accent={<StarIcon className="h-4 w-4 text-[var(--accent)]" />}
       />
+
+      <ShopRail shops={features.shops ? shops : []} subtitle="Cửa hàng đang có tỷ lệ hoàn tiền cao nhất trên Rewally" />
 
       <ProductRail
         title="Bán chạy nhất"
