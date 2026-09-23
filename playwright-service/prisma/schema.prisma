@@ -342,13 +342,25 @@ model ShoppingProduct {
   // which never have an image column.
   imageUrl           String?  @map("image_url")
   // Real Shopee taxonomy only (e.g. "Thời trang nữ"), sourced exclusively from
-  // addlivetag's catName - lib/categoryEnrichment.js's cron backfill for rows
-  // missing it, or lib/repositories/shoppingProducts.js's ensureExists for a
-  // row created on the fly from a POST /app/link lookup (see server.js). Never
-  // written from the scraper's tab label any more (see sourceTab below) so it
-  // stays on the same source as Link.catName, which is what the recommendation
-  // engine's category-match signal actually compares against.
+  // addlivetag's catPath leaf (see commission.js's pickCatName) - either
+  // lib/categoryEnrichment.js's cron backfill for rows missing it, or
+  // lib/repositories/shoppingProducts.js's ensureExists for a row created on
+  // the fly from a POST /app/link lookup (see server.js). Never written from
+  // the scraper's tab label any more (see sourceTab below) so it stays on the
+  // same source as Link.catName, which is what the recommendation engine's
+  // category-match signal actually compares against.
   category           String?  @map("category")
+  // When the backfill last got a real answer about this row from addlivetag -
+  // set whether or not that answer carried a category, and left alone when the
+  // source never got to the row (budget/cooldown/outage).
+  //
+  // This exists because "category IS NULL" alone is a queue that can jam. The
+  // backfill takes the oldest N null rows every tick, so a handful addlivetag
+  // genuinely can't classify would sit at the head forever and starve every
+  // row behind them - which is exactly what happened while catPath was being
+  // read under the wrong key: 30 scanned, 30 failed, same 30 rows, every 15
+  // minutes. Stamping the attempt rotates those to the back instead.
+  categoryCheckedAt  DateTime? @map("category_checked_at")
   // The product_offer tab this row was scraped under, verbatim (e.g. "Tất cả",
   // "Bán chạy nhất", "Hoa hồng Xtra", or a real category name) - kept as a raw
   // audit trail of where the row came from. isBestSeller/isXtraCommission below
@@ -383,6 +395,9 @@ model ShoppingProduct {
   // string equality (Shopee's API returns the same shop_name the product CSV
   // carries), so there is nothing to normalise.
   @@index([shopName])
+  // Drives lib/categoryEnrichment.js's queue: the null-category rows least
+  // recently asked about, oldest first.
+  @@index([category, categoryCheckedAt])
   @@map("shopping_products")
 }
 

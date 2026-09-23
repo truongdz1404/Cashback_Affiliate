@@ -10,21 +10,37 @@ const { mapMetaToProductFields } = require('./shoppingProductMapper');
 // doubles as the max_api value we request.
 const DEFAULT_BATCH_SIZE = 30;
 
+// How long a row addlivetag answered about but couldn't classify sits out
+// before being asked again. Long, because the answer rarely changes - this is
+// a slow second chance for products that get a taxonomy later, not a retry.
+const RECHECK_AFTER_DAYS = 7;
+
 /**
  * Backfills `category` on catalog rows that don't have one - either left
  * over from the migration that cleared the old tab-derived value (see
  * prisma/migrations/20260922120000_split_shopping_product_category) or an
  * admin CSV/XLSX import (lib/shoppingProductImport.js), which never had a
  * category at all. Runs on a cron schedule (server.js) in small batches via
- * the batch endpoint rather than looping the single-item one - a miss here
- * just gets retried next run (same rows resurface since they stay
- * category: null), so it isn't worth spending a scarce Playwright page (the
- * VPS's warm custom-link pool, see browserManager.js) on the fallback.
+ * the batch endpoint rather than looping the single-item one - it isn't worth
+ * spending a scarce Playwright page (the VPS's warm custom-link pool, see
+ * browserManager.js) on the fallback.
+ *
+ * The queue is "category IS NULL, least recently asked about first". It is
+ * deliberately NOT just "category IS NULL": that version took the same oldest
+ * N rows every tick, so rows addlivetag can't classify parked themselves at
+ * the head and starved everything behind them. Stamping `categoryCheckedAt`
+ * on every row the source actually answered for - classified or not - is what
+ * makes the queue drain. Rows the source never got to (budget exhausted,
+ * cooldown, outage) are left unstamped so they keep their place.
  */
 async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
+  const recheckBefore = new Date(Date.now() - RECHECK_AFTER_DAYS * 24 * 60 * 60 * 1000);
   const products = await prisma.shoppingProduct.findMany({
-    where: { category: null },
-    orderBy: { scrapedAt: 'asc' },
+    where: {
+      category: null,
+      OR: [{ categoryCheckedAt: null }, { categoryCheckedAt: { lt: recheckBefore } }],
+    },
+    orderBy: [{ categoryCheckedAt: { sort: 'asc', nulls: 'first' } }, { scrapedAt: 'asc' }],
     take: batchSize,
   });
 
@@ -45,15 +61,18 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
     return { scanned: products.length, updated: 0, failed: 0, retryable: products.length, error: err.message };
   }
 
+  const checkedAt = new Date();
   let updated = 0;
   let failed = 0;
   let retryable = 0;
+  const answeredButUnclassified = [];
 
   for (const product of products) {
     const entry = byItemId.get(String(product.productId));
 
     // Not attempted this round (api budget/source cooldown/time budget) or a
-    // stale-but-unusable shape - leave category null so the next run retries.
+    // stale-but-unusable shape - leave category null AND leave the stamp
+    // alone, so this row keeps its place at the front of the queue.
     if (!entry || (entry.status !== 'success' && entry.status !== 'stale')) {
       retryable++;
       continue;
@@ -61,8 +80,9 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
 
     const fields = mapMetaToProductFields(entry.meta, entry.commissionTable);
     if (!fields.category) {
-      // addlivetag itself doesn't know this product's category either -
-      // leave category null so the next run picks it up again.
+      // addlivetag answered and genuinely has no taxonomy for this product.
+      // Stamp it so it rotates to the back instead of jamming the queue.
+      answeredButUnclassified.push(product.id);
       failed++;
       continue;
     }
@@ -71,6 +91,7 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
       where: { id: product.id },
       data: {
         category: fields.category,
+        categoryCheckedAt: checkedAt,
         isXtraCommission: fields.isXtraCommission ?? product.isXtraCommission,
         shopName: product.shopName ?? fields.shopName ?? null,
         priceValue: product.priceValue ?? fields.priceValue ?? null,
@@ -78,6 +99,13 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
       },
     });
     updated++;
+  }
+
+  if (answeredButUnclassified.length) {
+    await prisma.shoppingProduct.updateMany({
+      where: { id: { in: answeredButUnclassified } },
+      data: { categoryCheckedAt: checkedAt },
+    });
   }
 
   return {

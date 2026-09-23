@@ -1,8 +1,10 @@
 const net = require('net');
 const configStore = require('./configStore');
+const settingsRepo = require('./repositories/settings');
 const { getTransporter } = require('./mailer');
 
 const TIMEOUT_MS = 8000;
+const DOWN_STATE_KEY = 'health_check_down_state';
 
 // HTTP services: any response (even 4xx/5xx) = UP; network error/timeout = DOWN
 // TCP services: successful connection = UP
@@ -17,8 +19,53 @@ const SERVICES = [
   { name: 'Zalo Bot API',                      type: 'zalo' },
 ];
 
-// In-memory state: track when each service went down and last alert time
+/**
+ * Which services are currently down, and when each was last alerted about.
+ *
+ * Backed by a settings row rather than living only in RAM, because this repo
+ * auto-deploys on every push to master: a container restart used to wipe the
+ * map, so the very next tick saw every still-down service as *newly* down and
+ * mailed about it again. Anything still broken therefore generated one alert
+ * per deploy on top of the hourly re-alert - which is what trained everyone to
+ * ignore these emails. Persisting it means a restart changes nothing about
+ * what gets sent.
+ */
 const downState = new Map();
+let stateLoaded = false;
+
+async function loadDownState() {
+  if (stateLoaded) return;
+  stateLoaded = true; // even on failure: a missing row must not retry forever
+  try {
+    const row = await settingsRepo.getRaw(DOWN_STATE_KEY);
+    const parsed = row && row.value ? JSON.parse(row.value) : null;
+    if (!parsed || typeof parsed !== 'object') return;
+    const known = new Set(SERVICES.map((s) => s.name));
+    for (const [name, v] of Object.entries(parsed)) {
+      // Drop entries for services that have since been renamed or removed
+      // from SERVICES, otherwise they'd sit in the row forever unreferenced.
+      if (!known.has(name)) continue;
+      downState.set(name, {
+        since: new Date(v.since),
+        lastAlertAt: new Date(v.lastAlertAt),
+      });
+    }
+  } catch (err) {
+    console.warn('health-check: could not load down state:', err.message);
+  }
+}
+
+async function saveDownState() {
+  try {
+    const plain = {};
+    for (const [name, v] of downState) {
+      plain[name] = { since: v.since.toISOString(), lastAlertAt: v.lastAlertAt.toISOString() };
+    }
+    await settingsRepo.setRaw(DOWN_STATE_KEY, JSON.stringify(plain));
+  } catch (err) {
+    console.warn('health-check: could not save down state:', err.message);
+  }
+}
 
 async function checkHttp(url) {
   try {
@@ -99,6 +146,7 @@ async function sendAlert(items, subject, emoji) {
 }
 
 async function runHealthCheck() {
+  await loadDownState();
   const results = await runChecks();
   const nowMs   = Date.now();
 
@@ -132,6 +180,10 @@ async function runHealthCheck() {
     `health-check: ${passed.length}/${results.length} OK` +
     (failed.length ? ` | DOWN: ${failed.map(r => r.name).join(', ')}` : '')
   );
+
+  if (newlyDown.length || reAlerts.length || recovered.length) {
+    await saveDownState();
+  }
 
   if (newlyDown.length || reAlerts.length) {
     await sendAlert(

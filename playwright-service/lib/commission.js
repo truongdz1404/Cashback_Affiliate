@@ -89,11 +89,31 @@ function formatAmount(n) {
 // for by this same request, so callers can snapshot it for free instead of
 // having only a bare itemId to work with (see server.js /app/link,
 // lib/linkTracking.js, lib/categoryEnrichment.js).
+/**
+ * addlivetag has never actually returned a `catName` key - verified 23/09/2026
+ * against both product-data.php and product-data-batch.php, on cache hits and
+ * live fetches alike. What it returns is `catPath`, the taxonomy breadcrumb
+ * ordered root-first, e.g. ["Thời Trang Nữ","Áo","Áo thun"].
+ *
+ * The leaf is the value we want: checked against 8 rows whose category was
+ * already stored, the last element matched byte-for-byte every time ("Áo thun",
+ * "Rèm & Màn sáo", "Sản phẩm cạo râu & hớt tóc"...), while the root never did.
+ * That also keeps this on the same granularity as Link.catName, which is what
+ * the recommendation engine's category-match signal compares against.
+ *
+ * `info.catName` stays first in case the source ever adds the key back.
+ */
+function pickCatName(info) {
+  if (info.catName) return info.catName;
+  const path = Array.isArray(info.catPath) ? info.catPath.filter(Boolean) : [];
+  return path.length ? path[path.length - 1] : null;
+}
+
 function mapInfoToMeta(info) {
   return {
     itemName: info.productName ?? null,
     catId: info.catId ?? null,
-    catName: info.catName ?? null,
+    catName: pickCatName(info),
     shopName: info.shopName ?? null,
     priceValue: parseNumber(info.price),
     imageUrl: info.imageUrl ?? null,
