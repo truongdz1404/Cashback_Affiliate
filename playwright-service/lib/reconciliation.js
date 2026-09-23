@@ -8,14 +8,13 @@ const referralsRepo = require('./repositories/referrals');
 const referralCommissionsRepo = require('./repositories/referralCommissions');
 const clawbackRepo = require('./repositories/clawback');
 const { getEffectivePct, splitAmount } = require('./commissionSplit');
+// Shared with the decoder that reads the same payload back out of
+// orders.raw_json for the app's order card - both must use the same scale.
+const { SHOPEE_AMOUNT_SCALE } = require('./orderItems');
+const { parseSubId } = require('./subId');
 
 const REPORT_LIST_URL = 'https://affiliate.shopee.vn/api/v3/report/list';
 const PAGE_SIZE = 50;
-// Confirmed against live orders (via /debug/report-list) by comparing against
-// the affiliate dashboard's own numbers: report/list returns money/commission
-// fields as fixed-point integers scaled by 1e5 (e.g. item_price 16600000000
-// for a ₫166.000 product) - divide by this to get plain VND.
-const SHOPEE_AMOUNT_SCALE = 100000;
 // Safety cap so a shape/pagination mismatch can't spin this into an
 // unbounded loop against Shopee's API.
 const MAX_PAGES = 200;
@@ -48,7 +47,9 @@ function pick(entry, ...keys) {
  */
 function mapEntry(entry, order) {
   const orderSn = pick(order, 'order_sn', 'orderSn', 'order_id', 'orderId');
-  const subId = pick(entry, 'utm_content', 'utmContent', 'sub_id1', 'subId1');
+  // utm_content is the five sub ids joined with '-'; only the first one is
+  // ours, and it is what links.sub_id holds (see lib/subId.js).
+  const subId = parseSubId(pick(entry, 'utm_content', 'utmContent', 'sub_id1', 'subId1'));
   const items = Array.isArray(order.items) ? order.items : [];
   // Per item, Shopee splits commission into a platform share (item_commission)
   // and, for brand/Xtra deals, an extra brand share (capped_brand_commission) -

@@ -1,5 +1,7 @@
 const prisma = require('../prisma');
 const clawbackRepo = require('./clawback');
+const { decodeOrderItems } = require('../orderItems');
+const { parseSubId } = require('../subId');
 
 // display_order_status 3 = Cancelled. When an order Shopee previously
 // reported as something else (often 2/Completed) flips to Cancelled, any
@@ -80,13 +82,99 @@ async function countOrders({ payoutStatus, displayStatus } = {}) {
   return prisma.order.count({ where });
 }
 
+// The app's order card shows the same detail Shopee's own order list does
+// (shop, thumbnail, product title, variation, quantity, price, order total),
+// all of which lives in raw_json - decoded here so the app never has to parse
+// Shopee's payload itself. raw_json itself is dropped from the response: it's
+// several KB per order of fields nothing on the client reads.
 async function listByUser(userId, { limit = 50, offset = 0 } = {}) {
-  return prisma.order.findMany({
+  const rows = await prisma.order.findMany({
     where: { userId: Number(userId) },
     orderBy: { id: 'desc' },
     take: limit,
     skip: offset,
   });
+  return withItems(rows, Number(userId));
+}
+
+async function withItems(rows, userId) {
+  const decoded = rows.map((row) => ({ row, items: decodeOrderItems(row.rawJson) }));
+  const affiliateUrls = await resolveAffiliateUrls(decoded, userId);
+
+  return decoded.map(({ row, items }) => {
+    const { rawJson, ...order } = row;
+    const withUrls = items.map((item) => ({
+      ...item,
+      affiliateUrl: affiliateUrls.get(affiliateKey(row.subId, item.itemId)) ?? null,
+    }));
+    return {
+      ...order,
+      items: withUrls,
+      // Every line of a Shopee order belongs to the same shop, so the card's
+      // header can use the first item's.
+      shopName: withUrls.find((item) => item.shopName)?.shopName ?? null,
+      itemCount: withUrls.reduce((sum, item) => sum + item.qty, 0),
+      orderAmount: withUrls.length
+        ? withUrls.reduce((sum, item) => sum + (item.amount ?? 0), 0)
+        : null,
+    };
+  });
+}
+
+function affiliateKey(subId, itemId) {
+  return `${subId ?? ''}::${itemId ?? ''}`;
+}
+
+// Tapping a product in the order list should re-open it through this user's
+// own affiliate link, so a repeat purchase is attributed (and earns cashback)
+// exactly like the first one. Best source is the very link that produced the
+// order (orders.sub_id -> links.sub_id); for the other lines of a multi-item
+// order that link points at a different product, so fall back to the newest
+// link this user has for that item. Both lookups are batched over the whole
+// page - never one query per row.
+async function resolveAffiliateUrls(decoded, userId) {
+  // Rows reconciled before the utm_content parsing fix still hold the joined
+  // form ('e77053aa49----'), so normalise on read too - otherwise those orders
+  // never match their own link (see lib/subId.js).
+  const subIds = [...new Set(decoded.map(({ row }) => parseSubId(row.subId)).filter(Boolean))];
+  const itemIds = [...new Set(decoded.flatMap(({ items }) => items.map((i) => i.itemId)).filter(Boolean))];
+  if (!subIds.length && !itemIds.length) return new Map();
+
+  const [bySubId, byItem] = await Promise.all([
+    subIds.length
+      ? prisma.link.findMany({
+          where: { subId: { in: subIds } },
+          select: { subId: true, itemId: true, affiliateUrl: true },
+        })
+      : [],
+    itemIds.length && Number.isFinite(userId)
+      ? prisma.link.findMany({
+          where: { userId, itemId: { in: itemIds }, affiliateUrl: { not: null } },
+          orderBy: { createdAt: 'desc' },
+          select: { itemId: true, affiliateUrl: true },
+        })
+      : [],
+  ]);
+
+  const newestByItem = new Map();
+  for (const link of byItem) {
+    if (!newestByItem.has(link.itemId)) newestByItem.set(link.itemId, link.affiliateUrl);
+  }
+  const orderLinks = new Map(bySubId.map((link) => [link.subId, link]));
+
+  const resolved = new Map();
+  for (const { row, items } of decoded) {
+    for (const item of items) {
+      const rowSubId = parseSubId(row.subId);
+      const orderLink = rowSubId ? orderLinks.get(rowSubId) : null;
+      const url =
+        orderLink && orderLink.itemId === item.itemId && orderLink.affiliateUrl
+          ? orderLink.affiliateUrl
+          : newestByItem.get(item.itemId) ?? null;
+      if (url) resolved.set(affiliateKey(row.subId, item.itemId), url);
+    }
+  }
+  return resolved;
 }
 
 // display_order_status: 1=Pending, 2=Completed, 3=Cancelled, 4=Unpaid.
