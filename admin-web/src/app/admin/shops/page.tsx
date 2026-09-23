@@ -1,0 +1,833 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  AlertDialog,
+  Button,
+  Card,
+  Checkbox,
+  Chip,
+  Input,
+  InputGroup,
+  Label,
+  ListBox,
+  Select,
+  Table,
+  TextField,
+  toast,
+} from "@heroui/react";
+import { clientApi } from "@/lib/clientApi";
+import { formatDateTime } from "@/lib/format";
+import { ArrowRightIcon, RefreshIcon, SearchIcon, TrashIcon } from "@/components/icons";
+
+const PAGE_SIZE = 20;
+
+type Shop = {
+  id: number;
+  shopId: string;
+  name: string;
+  status: string;
+  imageUrl?: string | null;
+  portraitUrl?: string | null;
+  commissionRateText?: string | null;
+  rating?: number | null;
+  soldTotal?: number | null;
+  followerCount?: number | null;
+  followersText?: string | null;
+  productCount: number;
+  isActive: boolean;
+  isFeatured: boolean;
+  sortOrder: number;
+  source: string;
+  detailFetchedAt?: string | null;
+  lastCrawledAt?: string | null;
+  lastCrawlError?: string | null;
+};
+
+type ShopSettings = {
+  shopResolveEnabled: boolean;
+  shopResolveBatchSize: number;
+  shopCrawlEnabled: boolean;
+  shopCrawlMaxShops: number;
+  shopCrawlMaxPages: number;
+};
+
+type ResolveResult = {
+  scanned?: number;
+  resolved?: number;
+  ambiguous?: number;
+  notFound?: number;
+  failed?: number;
+  retryable?: number;
+  productsLinked?: number;
+  shopsCreated?: number;
+  namesDiscovered?: number;
+  detailsFetched?: number;
+  error?: string;
+};
+
+type CrawlResult = {
+  shopsVisited?: number;
+  scraped?: number;
+  saved?: number;
+  empty?: number;
+  failed?: number;
+  stoppedEarly?: string | null;
+  error?: string;
+};
+
+type JobStatus<R> = {
+  status: "idle" | "running" | "done" | "error";
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  result?: R | null;
+  error?: string | null;
+};
+
+type JobRun = {
+  id: number;
+  job: string;
+  status: string;
+  trigger: string;
+  startedAt: string;
+  finishedAt?: string | null;
+  durationMs?: number | null;
+  resultJson?: string | null;
+  error?: string | null;
+};
+
+const STATUS_FILTERS = [
+  { value: "linked", label: "Đã link (hiện cho user)" },
+  { value: "discovered", label: "Mới phát hiện (ẩn)" },
+  { value: "all", label: "Tất cả" },
+];
+
+const STATUS_LABELS: Record<string, { label: string; color: "success" | "warning" | "danger" }> = {
+  linked: { label: "Đã link", color: "success" },
+  discovered: { label: "Mới phát hiện", color: "warning" },
+};
+
+function SectionCard({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>{title}</Card.Title>
+        {description && <Card.Description>{description}</Card.Description>}
+      </Card.Header>
+      <Card.Content>{children}</Card.Content>
+    </Card>
+  );
+}
+
+function ShopAvatar({ shop }: { shop: Shop }) {
+  const src = shop.portraitUrl || shop.imageUrl;
+  if (!src) {
+    return (
+      <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-[var(--surface-secondary)] text-xs font-bold text-[var(--muted)]">
+        {shop.name.trim().charAt(0).toUpperCase() || "?"}
+      </div>
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt="" className="h-9 w-9 flex-none rounded-lg border border-[var(--border)] object-cover" />;
+}
+
+/**
+ * The two cron kill switches plus the numbers they run with. These are settings
+ * rows rather than env vars precisely so they can be flipped from here without
+ * a redeploy - the resolve job talks to Shopee's own API and the blast radius of
+ * leaving it running while blocked is the affiliate account itself.
+ */
+function OperationsSection({ onChanged }: { onChanged: () => void }) {
+  const [settings, setSettings] = useState<ShopSettings | null>(null);
+  const [batchSize, setBatchSize] = useState("");
+  const [maxShops, setMaxShops] = useState("");
+  const [maxPages, setMaxPages] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get<ShopSettings>("/api/settings");
+      setSettings(data);
+      setBatchSize(String(data.shopResolveBatchSize ?? ""));
+      setMaxShops(String(data.shopCrawlMaxShops ?? ""));
+      setMaxPages(String(data.shopCrawlMaxPages ?? ""));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Không tải được cài đặt");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Toggles save immediately: a kill switch nobody remembered to press "Lưu"
+  // after is not a kill switch.
+  async function toggle(key: "shopResolveEnabled" | "shopCrawlEnabled", value: boolean) {
+    setSettings((s) => (s ? { ...s, [key]: value } : s));
+    try {
+      await clientApi.put("/api/settings", { [key]: value });
+      toast.success(value ? "Đã bật" : "Đã tắt");
+      onChanged();
+    } catch (err) {
+      setSettings((s) => (s ? { ...s, [key]: !value } : s));
+      toast.danger(err instanceof Error ? err.message : "Lưu thất bại");
+    }
+  }
+
+  async function saveNumbers() {
+    setSaving(true);
+    setError("");
+    try {
+      await clientApi.put("/api/settings", {
+        shopResolveBatchSize: Number(batchSize),
+        shopCrawlMaxShops: Number(maxShops),
+        shopCrawlMaxPages: Number(maxPages),
+      });
+      toast.success("Đã lưu");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Vận hành"
+      description="Hai job chạy nền: tra tên shop (10 phút/lần) và crawl sản phẩm theo shop (02:30 hằng đêm). Tắt công tắc ở đây có hiệu lực ngay từ lần chạy kế tiếp, không cần deploy lại."
+    >
+      {!settings ? (
+        <p className="text-sm text-[var(--muted)]">Đang tải...</p>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <Checkbox isSelected={settings.shopResolveEnabled} onChange={(v) => toggle("shopResolveEnabled", v)}>
+                <Checkbox.Control>
+                  <Checkbox.Indicator />
+                </Checkbox.Control>
+                <Checkbox.Content>Tra tên shop tự động</Checkbox.Content>
+              </Checkbox>
+              <p className="mt-1.5 text-xs text-[var(--muted)]">
+                Gọi API Shopee để đổi tên shop trong bảng sản phẩm thành shop_id, rồi link sản phẩm về shop.
+              </p>
+            </div>
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <Checkbox isSelected={settings.shopCrawlEnabled} onChange={(v) => toggle("shopCrawlEnabled", v)}>
+                <Checkbox.Control>
+                  <Checkbox.Indicator />
+                </Checkbox.Control>
+                <Checkbox.Content>Crawl sản phẩm theo shop tự động</Checkbox.Content>
+              </Checkbox>
+              <p className="mt-1.5 text-xs text-[var(--muted)]">
+                Mở trang shop bằng trình duyệt và lấy sản phẩm. Đây là job nặng nhất, chạy ban đêm.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <TextField name="batchSize" value={batchSize} onChange={setBatchSize}>
+              <Label>Số tên tra mỗi lượt (1-50)</Label>
+              <Input inputMode="numeric" />
+            </TextField>
+            <TextField name="maxShops" value={maxShops} onChange={setMaxShops}>
+              <Label>Số shop crawl mỗi lượt (1-50)</Label>
+              <Input inputMode="numeric" />
+            </TextField>
+            <TextField name="maxPages" value={maxPages} onChange={setMaxPages}>
+              <Label>Số trang mỗi shop (1-20)</Label>
+              <Input inputMode="numeric" />
+            </TextField>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button onPress={saveNumbers} isPending={saving}>
+              Lưu
+            </Button>
+            {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * Both manual runners. Each is a 202 + poll, same contract as the product-offer
+ * sync: the backend starts the job and answers immediately, because a held-open
+ * request dies at Cloudflare's ~100s upstream timeout long before a batch that
+ * paces itself against Shopee finishes.
+ */
+function ManualRunSection({ onFinished }: { onFinished: () => void }) {
+  const [resolveBusy, setResolveBusy] = useState(false);
+  const [resolveMsg, setResolveMsg] = useState("");
+  const [oneName, setOneName] = useState("");
+  const [oneNameBusy, setOneNameBusy] = useState(false);
+  const [crawlBusy, setCrawlBusy] = useState(false);
+  const [crawlMsg, setCrawlMsg] = useState("");
+  const [crawlShopId, setCrawlShopId] = useState("");
+
+  // Every interval this component starts, so a poll can never outlive the page
+  // and keep firing requests at a dashboard nobody is looking at.
+  const timers = useRef<ReturnType<typeof setInterval>[]>([]);
+  useEffect(() => {
+    const started = timers.current;
+    return () => started.forEach(clearInterval);
+  }, []);
+
+  const describeResolve = useCallback((s: JobStatus<ResolveResult>) => {
+    if (s.status === "error") return s.error || "Chạy thất bại";
+    if (s.status === "done" && s.result) {
+      const r = s.result;
+      if (r.error) return `Dừng sớm: ${r.error}`;
+      return `Xong: quét ${r.scanned ?? 0} tên, khớp ${r.resolved ?? 0}, mơ hồ ${r.ambiguous ?? 0}, không thấy ${r.notFound ?? 0} · link ${r.productsLinked ?? 0} sản phẩm · thêm ${r.shopsCreated ?? 0} shop.`;
+    }
+    return "Đang tra tên shop, có thể mất vài phút...";
+  }, []);
+
+  const describeCrawl = useCallback((s: JobStatus<CrawlResult>) => {
+    if (s.status === "error") return s.error || "Chạy thất bại";
+    if (s.status === "done" && s.result) {
+      const r = s.result;
+      if (r.error) return `Dừng sớm: ${r.error}`;
+      const base = `Xong: ${r.shopsVisited ?? 0} shop, cào ${r.scraped ?? 0} sản phẩm, lưu ${r.saved ?? 0}.`;
+      const notes = [
+        r.empty ? `${r.empty} shop không có sản phẩm` : "",
+        r.failed ? `${r.failed} shop lỗi` : "",
+        r.stoppedEarly ? `dừng sớm: ${r.stoppedEarly}` : "",
+      ].filter(Boolean);
+      return notes.length ? `${base} (${notes.join(", ")})` : base;
+    }
+    return "Đang crawl sản phẩm, có thể mất khá lâu...";
+  }, []);
+
+  function poll<R>(
+    path: string,
+    describe: (s: JobStatus<R>) => string,
+    setBusy: (v: boolean) => void,
+    setMsg: (v: string) => void,
+  ) {
+    const interval = setInterval(async () => {
+      try {
+        const status = await clientApi.get<JobStatus<R>>(path);
+        if (status.status === "running") return;
+        clearInterval(interval);
+        setBusy(false);
+        setMsg(describe(status));
+        onFinished();
+      } catch (err) {
+        clearInterval(interval);
+        setBusy(false);
+        setMsg(err instanceof Error ? err.message : "Không kiểm tra được trạng thái");
+      }
+    }, 3000);
+    timers.current.push(interval);
+  }
+
+  async function runResolve() {
+    setResolveBusy(true);
+    setResolveMsg("Đang tra tên shop, có thể mất vài phút...");
+    try {
+      const status = await clientApi.post<JobStatus<ResolveResult>>("/api/shops/resolve", {});
+      if (status.status !== "running") {
+        setResolveBusy(false);
+        setResolveMsg(describeResolve(status));
+        onFinished();
+        return;
+      }
+      poll("/api/shops/resolve", describeResolve, setResolveBusy, setResolveMsg);
+    } catch (err) {
+      setResolveBusy(false);
+      setResolveMsg(err instanceof Error ? err.message : "Chạy thất bại");
+    }
+  }
+
+  // One name is a single API call, so the backend answers it synchronously with
+  // the outcome - an admin fixing one shop wants the answer, not a job to poll.
+  async function resolveOneName() {
+    const shopName = oneName.trim();
+    if (!shopName) return;
+    setOneNameBusy(true);
+    try {
+      const r = await clientApi.post<{
+        status: string;
+        shopId?: string | null;
+        productsLinked?: number;
+      }>("/api/shops/resolve", { shopName });
+      toast.success(
+        r.status === "resolved" ? `Khớp shop ${r.shopId}, link ${r.productsLinked ?? 0} sản phẩm` : `Kết quả: ${r.status}`,
+      );
+      setOneName("");
+      onFinished();
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Tra thất bại");
+    } finally {
+      setOneNameBusy(false);
+    }
+  }
+
+  async function runCrawl(shopId?: string) {
+    setCrawlBusy(true);
+    setCrawlMsg("Đang crawl sản phẩm, có thể mất khá lâu...");
+    try {
+      const status = await clientApi.post<JobStatus<CrawlResult>>("/api/shop-product-sync", shopId ? { shopId } : {});
+      if (status.status !== "running") {
+        setCrawlBusy(false);
+        setCrawlMsg(describeCrawl(status));
+        onFinished();
+        return;
+      }
+      poll("/api/shop-product-sync", describeCrawl, setCrawlBusy, setCrawlMsg);
+    } catch (err) {
+      setCrawlBusy(false);
+      setCrawlMsg(err instanceof Error ? err.message : "Chạy thất bại");
+    }
+  }
+
+  return (
+    <SectionCard title="Chạy thủ công">
+      <div className="space-y-5">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onPress={runResolve} isPending={resolveBusy} isDisabled={resolveBusy}>
+              Tra tên shop ngay
+            </Button>
+            {resolveMsg && <p className="text-sm text-[var(--muted)]">{resolveMsg}</p>}
+          </div>
+          <div className="mt-3 flex flex-wrap items-end gap-2">
+            <TextField name="oneName" value={oneName} onChange={setOneName} className="min-w-[280px]">
+              <Label className="text-xs">Hoặc tra đúng một tên shop</Label>
+              <Input placeholder="Dán nguyên văn tên shop trong bảng sản phẩm" />
+            </TextField>
+            <Button variant="outline" onPress={resolveOneName} isPending={oneNameBusy} isDisabled={!oneName.trim()}>
+              Tra tên này
+            </Button>
+          </div>
+          <p className="mt-1.5 text-xs text-[var(--muted)]">
+            Tên phải trùng khít với cột &quot;Shop&quot; ở trang Sản phẩm — hệ thống so khớp chính xác, không bỏ dấu, không
+            cắt hậu tố.
+          </p>
+        </div>
+
+        <div className="border-t border-[var(--border)] pt-4">
+          <div className="flex flex-wrap items-end gap-2">
+            <Button onPress={() => runCrawl()} isPending={crawlBusy} isDisabled={crawlBusy}>
+              Crawl theo hàng đợi
+            </Button>
+            <TextField name="crawlShopId" value={crawlShopId} onChange={setCrawlShopId} className="min-w-[200px]">
+              <Label className="text-xs">Hoặc crawl đúng một shop</Label>
+              <Input placeholder="shop_id, ví dụ 1024405393" inputMode="numeric" />
+            </TextField>
+            <Button
+              variant="outline"
+              onPress={() => runCrawl(crawlShopId.trim())}
+              isDisabled={crawlBusy || !crawlShopId.trim()}
+            >
+              Crawl shop này
+            </Button>
+          </div>
+          {crawlMsg && <p className="mt-2 text-sm text-[var(--muted)]">{crawlMsg}</p>}
+          <p className="mt-1.5 text-xs text-[var(--muted)]">
+            Chạy đúng một shop là cách duy nhất crawl shop đang ở trạng thái &quot;Mới phát hiện&quot; — hàng đợi tự động chỉ
+            lấy shop đã link.
+          </p>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
+function JobRunsSection({ reloadKey }: { reloadKey: number }) {
+  const [runs, setRuns] = useState<JobRun[]>([]);
+
+  useEffect(() => {
+    clientApi
+      .get<{ items: JobRun[] }>("/api/job-runs?limit=10")
+      .then((data) => setRuns(data.items || []))
+      .catch(() => {});
+  }, [reloadKey]);
+
+  if (!runs.length) return null;
+
+  return (
+    <SectionCard
+      title="Lượt chạy gần đây"
+      description="Một lượt cron quét xong mà không có việc gì để làm thì cố ý không được ghi lại — nếu không, 144 dòng rỗng mỗi ngày sẽ chôn mất những lượt thật sự chạy."
+    >
+      <Table>
+        <Table.ScrollContainer>
+          <Table.Content aria-label="Lượt chạy job" className="min-w-[720px]">
+            <Table.Header>
+              <Table.Column isRowHeader>Job</Table.Column>
+              <Table.Column>Bắt đầu</Table.Column>
+              <Table.Column>Nguồn</Table.Column>
+              <Table.Column>Trạng thái</Table.Column>
+              <Table.Column>Kết quả</Table.Column>
+            </Table.Header>
+            <Table.Body>
+              {runs.map((r) => (
+                <Table.Row key={r.id}>
+                  <Table.Cell>{r.job}</Table.Cell>
+                  <Table.Cell>{formatDateTime(r.startedAt)}</Table.Cell>
+                  <Table.Cell>{r.trigger}</Table.Cell>
+                  <Table.Cell>
+                    <Chip color={r.status === "done" ? "success" : r.status === "error" ? "danger" : "warning"}>
+                      {r.status}
+                    </Chip>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <span
+                      className="block max-w-[420px] truncate text-xs text-[var(--muted)]"
+                      title={r.error || r.resultJson || ""}
+                    >
+                      {r.error || r.resultJson || "-"}
+                    </span>
+                  </Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Content>
+        </Table.ScrollContainer>
+      </Table>
+    </SectionCard>
+  );
+}
+
+function DeleteShopButton({ shop, onDeleted }: { shop: Shop; onDeleted: () => void }) {
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await clientApi.delete(`/api/shops/${shop.id}`);
+      toast.success("Đã xoá shop");
+      onDeleted();
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Xoá thất bại");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <AlertDialog>
+      <Button isIconOnly variant="ghost" size="sm" aria-label="Xoá shop">
+        <TrashIcon className="h-4 w-4 text-[var(--danger)]" />
+      </Button>
+      <AlertDialog.Backdrop>
+        <AlertDialog.Container>
+          <AlertDialog.Dialog className="sm:max-w-[420px]">
+            <AlertDialog.CloseTrigger />
+            <AlertDialog.Header>
+              <AlertDialog.Icon status="danger" />
+              <AlertDialog.Heading>Xoá shop này?</AlertDialog.Heading>
+            </AlertDialog.Header>
+            <AlertDialog.Body>
+              <p className="truncate font-medium">{shop.name}</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                {shop.productCount} sản phẩm của shop vẫn còn trong app, chỉ bị bỏ liên kết với shop. Lần tra tên sau có thể
+                tạo lại shop này. Muốn ẩn tạm thì bỏ tick &quot;Hiện&quot; thay vì xoá.
+              </p>
+            </AlertDialog.Body>
+            <AlertDialog.Footer>
+              <Button slot="close" variant="tertiary" isDisabled={deleting}>
+                Huỷ
+              </Button>
+              <Button slot="close" variant="danger" isPending={deleting} onPress={handleDelete}>
+                Xoá
+              </Button>
+            </AlertDialog.Footer>
+          </AlertDialog.Dialog>
+        </AlertDialog.Container>
+      </AlertDialog.Backdrop>
+    </AlertDialog>
+  );
+}
+
+function ShopRow({ shop, onChanged }: { shop: Shop; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [sortOrder, setSortOrder] = useState(String(shop.sortOrder ?? 0));
+
+  async function patch(body: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      await clientApi.put(`/api/shops/${shop.id}`, body);
+      onChanged();
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshDetail() {
+    setBusy(true);
+    try {
+      await clientApi.post(`/api/shops/${shop.id}/refresh`);
+      toast.success("Đã cập nhật đánh giá / lượt theo dõi");
+      onChanged();
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Cập nhật thất bại");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const badge = STATUS_LABELS[shop.status];
+  const meta = [
+    shop.rating != null ? `${shop.rating.toFixed(1)}★` : "",
+    shop.followersText || (shop.followerCount != null ? `${shop.followerCount.toLocaleString("vi-VN")} theo dõi` : ""),
+  ].filter(Boolean);
+
+  return (
+    <Table.Row>
+      <Table.Cell>
+        <div className="flex items-center gap-2.5">
+          <ShopAvatar shop={shop} />
+          <div className="min-w-0">
+            <p className="max-w-[240px] truncate text-sm font-medium text-[var(--foreground)]" title={shop.name}>
+              {shop.name}
+            </p>
+            <p className="text-xs text-[var(--muted)]">
+              {shop.shopId}
+              {meta.length ? ` · ${meta.join(" · ")}` : ""}
+            </p>
+          </div>
+        </div>
+      </Table.Cell>
+      <Table.Cell>{badge ? <Chip color={badge.color}>{badge.label}</Chip> : shop.status}</Table.Cell>
+      <Table.Cell className="text-right">{shop.productCount.toLocaleString("vi-VN")}</Table.Cell>
+      <Table.Cell className="text-right">{shop.commissionRateText || "-"}</Table.Cell>
+      <Table.Cell>
+        <div className="flex items-center gap-3">
+          <Checkbox isSelected={shop.isActive} isDisabled={busy} onChange={(v) => patch({ isActive: v })}>
+            <Checkbox.Control>
+              <Checkbox.Indicator />
+            </Checkbox.Control>
+            <Checkbox.Content className="text-xs">Hiện</Checkbox.Content>
+          </Checkbox>
+          <Checkbox isSelected={shop.isFeatured} isDisabled={busy} onChange={(v) => patch({ isFeatured: v })}>
+            <Checkbox.Control>
+              <Checkbox.Indicator />
+            </Checkbox.Control>
+            <Checkbox.Content className="text-xs">Nổi bật</Checkbox.Content>
+          </Checkbox>
+          <TextField
+            name={`sortOrder-${shop.id}`}
+            value={sortOrder}
+            onChange={setSortOrder}
+            aria-label="Thứ tự"
+            className="w-16"
+          >
+            <Input
+              inputMode="numeric"
+              className="text-xs"
+              onBlur={() => {
+                const next = Number(sortOrder);
+                if (Number.isInteger(next) && next !== shop.sortOrder) patch({ sortOrder: next });
+              }}
+            />
+          </TextField>
+        </div>
+      </Table.Cell>
+      <Table.Cell>
+        <span className="text-xs text-[var(--muted)]" title={shop.lastCrawlError || ""}>
+          {shop.lastCrawledAt ? formatDateTime(shop.lastCrawledAt) : "Chưa crawl"}
+          {shop.lastCrawlError ? " ⚠" : ""}
+        </span>
+      </Table.Cell>
+      <Table.Cell className="text-right">
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            isIconOnly
+            variant="ghost"
+            size="sm"
+            aria-label="Cập nhật thông tin shop từ Shopee"
+            isDisabled={busy}
+            onPress={refreshDetail}
+          >
+            <RefreshIcon className="h-4 w-4" />
+          </Button>
+          <DeleteShopButton shop={shop} onDeleted={onChanged} />
+        </div>
+      </Table.Cell>
+    </Table.Row>
+  );
+}
+
+export default function ShopsPage() {
+  const [items, setItems] = useState<Shop[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [status, setStatus] = useState("linked");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const [ambiguous, setAmbiguous] = useState(0);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(page * PAGE_SIZE),
+        status,
+      });
+      if (search) params.set("search", search);
+      const data = await clientApi.get<{ items: Shop[]; total: number }>(`/api/shops?${params.toString()}`);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Không tải được danh sách shop");
+    } finally {
+      setLoading(false);
+    }
+  }, [page, search, status]);
+
+  useEffect(() => {
+    load();
+  }, [load, reloadKey]);
+
+  // The ambiguous count drives the badge on the queue link - it is the only
+  // state in this whole pipeline that cannot resolve itself and needs a person.
+  useEffect(() => {
+    clientApi
+      .get<{ counts?: Record<string, number> }>("/api/shop-name-resolutions?status=ambiguous&limit=1")
+      .then((data) => setAmbiguous(data.counts?.ambiguous || 0))
+      .catch(() => {});
+  }, [reloadKey]);
+
+  const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--foreground)]">Shop ({total})</h1>
+          <p className="mt-0.5 max-w-3xl text-xs text-[var(--muted)]">
+            Shop trong chương trình affiliate Shopee. Shop chỉ hiện cho user khi đang bật, ở trạng thái &quot;Đã link&quot;
+            và có ít nhất một sản phẩm — shop &quot;Mới phát hiện&quot; là shop tình cờ tìm thấy khi tra tên, chưa có sản
+            phẩm nào.
+          </p>
+        </div>
+        <Link
+          href="/admin/shops/resolutions"
+          className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--surface-secondary)]"
+        >
+          Hàng đợi tra tên
+          {ambiguous > 0 && <Chip color="warning">{ambiguous} cần chọn</Chip>}
+          <ArrowRightIcon className="h-4 w-4" />
+        </Link>
+      </div>
+
+      <OperationsSection onChanged={refresh} />
+      <ManualRunSection onFinished={refresh} />
+      <JobRunsSection reloadKey={reloadKey} />
+
+      <SectionCard title="Danh sách shop">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="max-w-xs flex-1">
+            <TextField
+              name="search"
+              value={searchInput}
+              onChange={(v) => {
+                setPage(0);
+                setSearchInput(v);
+                setSearch(v.trim());
+              }}
+              aria-label="Tìm shop"
+            >
+              <Label className="sr-only">Tìm shop</Label>
+              <InputGroup>
+                <InputGroup.Prefix>
+                  <SearchIcon className="h-4 w-4 text-[var(--muted)]" />
+                </InputGroup.Prefix>
+                <InputGroup.Input placeholder="Tìm theo tên shop..." />
+              </InputGroup>
+            </TextField>
+          </div>
+          <Select
+            aria-label="Lọc theo trạng thái"
+            selectedKey={status}
+            onSelectionChange={(key) => {
+              setPage(0);
+              setStatus(String(key ?? "linked"));
+            }}
+          >
+            <Select.Trigger className="min-w-[220px]">
+              <Select.Value />
+              <Select.Indicator />
+            </Select.Trigger>
+            <Select.Popover>
+              <ListBox>
+                {STATUS_FILTERS.map((opt) => (
+                  <ListBox.Item key={opt.value} id={opt.value}>
+                    {opt.label}
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </Select.Popover>
+          </Select>
+        </div>
+
+        {error && <p className="mb-3 text-sm text-[var(--danger)]">{error}</p>}
+
+        <Table>
+          <Table.ScrollContainer>
+            <Table.Content aria-label="Danh sách shop" className="min-w-[980px]">
+              <Table.Header>
+                <Table.Column isRowHeader>Shop</Table.Column>
+                <Table.Column>Trạng thái</Table.Column>
+                <Table.Column className="text-right">Sản phẩm</Table.Column>
+                <Table.Column className="text-right">Hoa hồng</Table.Column>
+                <Table.Column>Hiển thị</Table.Column>
+                <Table.Column>Crawl lần cuối</Table.Column>
+                <Table.Column className="text-right">Thao tác</Table.Column>
+              </Table.Header>
+              <Table.Body
+                renderEmptyState={() => (
+                  <span className="text-sm text-[var(--muted)]">{loading ? "Đang tải..." : "Chưa có shop nào"}</span>
+                )}
+              >
+                {items.map((s) => (
+                  <ShopRow key={s.id} shop={s} onChanged={refresh} />
+                ))}
+              </Table.Body>
+            </Table.Content>
+          </Table.ScrollContainer>
+        </Table>
+
+        <div className="mt-4 flex items-center justify-between text-sm text-[var(--muted)]">
+          <span>
+            Trang {page + 1} / {totalPages}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => setPage((p) => Math.max(0, p - 1))}
+              isDisabled={page === 0 || loading}
+            >
+              Trước
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              isDisabled={page >= totalPages - 1 || loading}
+            >
+              Sau
+            </Button>
+          </div>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}

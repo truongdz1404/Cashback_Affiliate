@@ -60,6 +60,14 @@ export const BagIcon = base(
   </>
 );
 
+export const StoreIcon = base(
+  <>
+    <path d="M3.4 3.2h13.2l1.1 4.1a2.3 2.3 0 0 1-4.5.7 2.3 2.3 0 0 1-4.4 0 2.3 2.3 0 0 1-4.5-.7z" />
+    <path d="M4.3 9.2v6.4a1.2 1.2 0 0 0 1.2 1.2h9a1.2 1.2 0 0 0 1.2-1.2V9.2" />
+    <path d="M8.2 16.8v-4.3h3.6v4.3" />
+  </>
+);
+
 export const ImageIcon = base(
   <>
     <rect x="2.5" y="3.8" width="15" height="12.4" rx="1.6" />

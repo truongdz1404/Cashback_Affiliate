@@ -14,6 +14,7 @@ import {
   MegaphoneIcon,
   ReceiptIcon,
   SlidersIcon,
+  StoreIcon,
   UsersIcon,
   WalletIcon,
 } from "@/components/icons";
@@ -26,6 +27,10 @@ const LINKS = [
   { href: "/admin/customers", label: "Khách hàng", icon: UsersIcon },
   { href: "/admin/campaigns", label: "Sự kiện", icon: MegaphoneIcon },
   { href: "/admin/products", label: "Sản phẩm", icon: BagIcon },
+  // The name-resolution queue lives at /admin/shops/resolutions rather than a
+  // second top-level entry, so `startsWith` below keeps this item lit while an
+  // admin works the queue - it is the same section, not a sibling.
+  { href: "/admin/shops", label: "Shop", icon: StoreIcon },
   { href: "/admin/banners", label: "Banner", icon: ImageIcon },
   { href: "/admin/withdrawals", label: "Rút tiền", icon: WalletIcon },
   { href: "/admin/referrals", label: "Giới thiệu", icon: GiftIcon },
