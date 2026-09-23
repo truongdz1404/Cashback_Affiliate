@@ -8,14 +8,21 @@ const DOWN_STATE_KEY = 'health_check_down_state';
 
 // HTTP services: any response (even 4xx/5xx) = UP; network error/timeout = DOWN
 // TCP services: successful connection = UP
+//
+// Two entries were removed on 23/09/2026 because neither could ever pass, so
+// both did nothing but mail an alert every hour:
+//   'nginx + tro247.online'      - the bare apex resolves to 127.0.1.1 inside
+//     this container (the VPS's own-hostname line in /etc/hosts), so the check
+//     dialled the container's own loopback and never once reached the real
+//     site. The subdomains below resolve through Cloudflare and do test it.
+//   'PostgreSQL tro247 [:5432]'  - `ss -lntp` on the host shows nothing bound
+//     to 5432 at all; that database is gone, so the check had no recovery path.
 const SERVICES = [
   { name: 'nginx + bot.tro247.online',         type: 'http', url: 'https://bot.tro247.online/' },
-  { name: 'nginx + tro247.online',             type: 'http', url: 'https://tro247.online/' },
   { name: 'nginx + app.tro247.online',         type: 'http', url: 'https://app.tro247.online/' },
   { name: 'nginx + refundmoney.tro247.online', type: 'http', url: 'https://refundmoney.tro247.online/' },
   { name: 'nginx + n8n.tro247.online',         type: 'http', url: 'https://n8n.tro247.online/' },
   { name: 'PostgreSQL shopee-affiliate',       type: 'tcp',  host: 'shopee-affiliate-db', port: 5432 },
-  { name: 'PostgreSQL tro247 [:5432]',         type: 'tcp',  host: '42.96.13.38',      port: 5432 },
   { name: 'Zalo Bot API',                      type: 'zalo' },
 ];
 
