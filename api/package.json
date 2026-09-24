@@ -1,0 +1,30 @@
+{
+  "name": "shopee-affiliate-api",
+  "version": "1.0.0",
+  "description": "Playwright microservice that logs into affiliate.shopee.vn via injected cookies, generates custom affiliate links, and scrapes commission data. Called from n8n over HTTP.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:xvfb": "bash scripts/start-xvfb.sh",
+    "start:withdrawal-worker": "node worker/withdrawalWorker.js",
+    "postinstall": "playwright install chromium && prisma generate",
+    "seed-login": "node scripts/login-from-file.js",
+    "migrate-data": "node scripts/migrate-sqlite-to-postgres.js",
+    "sync-banks": "node scripts/syncBanks.js",
+    "set-role": "node scripts/set-role.js",
+    "probe-brand-offer": "node scripts/probe-brand-offer.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.0",
+    "amqplib": "^0.10.9",
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.1",
+    "playwright": "^1.47.0",
+    "prisma": "^6.16.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

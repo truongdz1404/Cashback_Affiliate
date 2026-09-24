@@ -20,6 +20,8 @@ jobs:
             set -euo pipefail
             cd ${{ secrets.VPS_DEPLOY_PATH }}
             git pull --ff-only
-            docker compose up -d --build
+            # --remove-orphans: the web service used to be called admin-web. Without it
+            # the old container keeps port 4100 and the renamed one cannot start.
+            docker compose up -d --build --remove-orphans
             docker image prune -f
             docker builder prune -f --filter unused-for=24h

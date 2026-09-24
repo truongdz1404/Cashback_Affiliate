@@ -1,6 +1,6 @@
 services:
   shopee-affiliate:
-    build: ./playwright-service
+    build: ./api
     container_name: shopee-affiliate
     restart: unless-stopped
     ports:
@@ -25,10 +25,10 @@ services:
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
       ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM}
     volumes:
-      - ./playwright-service/storage:/app/storage
-      - ./playwright-service/public/bank-logos:/app/public/bank-logos
+      - ./api/storage:/app/storage
+      - ./api/public/bank-logos:/app/public/bank-logos
       # Uploaded banner artwork - outside the image so a rebuild never wipes it.
-      - ./playwright-service/public/banner-uploads:/app/public/banner-uploads
+      - ./api/public/banner-uploads:/app/public/banner-uploads
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
@@ -42,7 +42,7 @@ services:
   # routine deploy of the main API service doesn't restart it mid-processing.
   withdrawal-worker:
     build:
-      context: ./playwright-service
+      context: ./api
       dockerfile: Dockerfile.worker
     container_name: shopee-affiliate-withdrawal-worker
     restart: unless-stopped
@@ -87,9 +87,9 @@ services:
     networks:
       - shared_net
 
-  admin-web:
-    build: ./admin-web
-    container_name: shopee-affiliate-admin-web
+  client:
+    build: ./client
+    container_name: shopee-affiliate-client
     restart: unless-stopped
     ports:
       - "4100:3000"

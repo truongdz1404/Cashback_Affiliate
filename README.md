@@ -10,18 +10,19 @@ n8n never talks to Shopee directly — it calls a small local **Playwright micro
 
 ```
 shopee-affiliate-automation/
-├── playwright-service/     Node.js + Express + Playwright
+├── api/     Node.js + Express + Playwright
 │   ├── server.js            HTTP API: /login /status /custom-link /commission/:pid
 │   ├── lib/browserManager.js  cookie injection, session persistence
 │   ├── lib/customLink.js
 │   └── lib/commission.js
+├── client/  Next.js website + admin panel
 └── n8n/shopee-affiliate-workflow.json   importable n8n workflow
 ```
 
 ## 1. Set up the Playwright service
 
 ```bash
-cd shopee-affiliate-automation/playwright-service
+cd shopee-affiliate-automation/api
 npm install
 npx playwright install chromium
 copy .env.example .env
@@ -53,12 +54,12 @@ Test login directly against the service first. Two ways:
     -H "Content-Type: application/json" \
     -d '{"cookies": [{"name":"SPC_EC","value":"...","domain":".shopee.vn"}, ...]}'
   ```
-- **From a file** (recommended so the raw cookie string never has to be typed into a terminal command/shell history): paste your `name1=value1; name2=value2; ...` cookie string into `playwright-service/storage/session-cookie.txt` (already gitignored - never commit it, it's equivalent to your login session), then:
+- **From a file** (recommended so the raw cookie string never has to be typed into a terminal command/shell history): paste your `name1=value1; name2=value2; ...` cookie string into `api/storage/session-cookie.txt` (already gitignored - never commit it, it's equivalent to your login session), then:
   ```bash
   npm run seed-login
   ```
 
-A `{"loggedIn": true, ...}` response means it worked. The session is persisted to `playwright-service/storage/storageState.json`, so you don't need to log in again on every call — only when cookies expire.
+A `{"loggedIn": true, ...}` response means it worked. The session is persisted to `api/storage/storageState.json`, so you don't need to log in again on every call — only when cookies expire.
 
 **If `/login` fails or later calls redirect to a captcha page** (`.../verify/captcha?...&scene=crawler_item`): that's Shopee Shield's headless-browser detection, unrelated to whether the cookie itself is valid. Set `HEADLESS=false` in `.env` first and retest - a visible Chromium window is far less likely to be fingerprinted as a crawler than the default headless mode.
 
@@ -100,9 +101,9 @@ Response is the merged result of `Get Custom Link` + `Get Commission`. Cookies o
 
 Node + Playwright run fine on Linux, but a server has no physical display, so `HEADLESS=false` (the setting that let this pass without a captcha) can't open a real window like it did on your Windows desktop. Two options:
 
-**Option A — Docker (recommended).** The included [Dockerfile](playwright-service/Dockerfile) is based on the official Playwright image, installs `xvfb`, and starts the service under `xvfb-run` so Chromium still runs "headed" against a virtual display instead of falling back to the headless flag.
+**Option A — Docker (recommended).** The included [Dockerfile](api/Dockerfile) is based on the official Playwright image, installs `xvfb`, and starts the service under `xvfb-run` so Chromium still runs "headed" against a virtual display instead of falling back to the headless flag.
 ```bash
-cd shopee-affiliate-automation/playwright-service
+cd shopee-affiliate-automation/api
 docker build -t shopee-affiliate-service .
 docker run -d --name shopee-affiliate -p 4000:4000 \
   -e SERVICE_API_KEY=<your key> \
@@ -114,13 +115,13 @@ docker run -d --name shopee-affiliate -p 4000:4000 \
 **Option B — bare metal (systemd/pm2).**
 ```bash
 sudo apt-get update && sudo apt-get install -y xvfb
-cd shopee-affiliate-automation/playwright-service
+cd shopee-affiliate-automation/api
 npm install
 npx playwright install --with-deps chromium   # --with-deps pulls the Linux system libs Chromium needs
 cp .env.example .env   # edit SERVICE_API_KEY
 npm run start:xvfb     # wraps `node server.js` in xvfb-run
 ```
-Wrap `npm run start:xvfb` in a systemd unit (`ExecStart=/usr/bin/npm run start:xvfb`, `WorkingDirectory=.../playwright-service`) or `pm2 start npm --name shopee-affiliate -- run start:xvfb` so it survives reboots/crashes.
+Wrap `npm run start:xvfb` in a systemd unit (`ExecStart=/usr/bin/npm run start:xvfb`, `WorkingDirectory=.../api`) or `pm2 start npm --name shopee-affiliate -- run start:xvfb` so it survives reboots/crashes.
 
 Either way, `HEADLESS` stays `false` — Xvfb only supplies the missing display, it doesn't change what Chromium reports about itself.
 
@@ -130,7 +131,7 @@ Either way, `HEADLESS` stays `false` — Xvfb only supplies the missing display,
 
 ## CI/CD: docker-compose + GitHub Actions
 
-[`docker-compose.yml`](docker-compose.yml) (repo root) builds [`playwright-service/Dockerfile`](playwright-service/Dockerfile) as its own standalone stack — separate repo, separate compose project, own default Docker network. It does **not** join the `quanlytro` project's `tro247_network`: this service has no dependency on that Postgres/API stack, so keeping it fully separate means deploying it can never affect the live quanlytro containers. Port `4000` is published to the VPS host, so anything on that VPS (n8n included, whether containerized or not) reaches it via `http://<vps-ip>:4000` or `http://host.docker.internal:4000` from inside another container.
+[`docker-compose.yml`](docker-compose.yml) (repo root) builds [`api/Dockerfile`](api/Dockerfile) as its own standalone stack — separate repo, separate compose project, own default Docker network. It does **not** join the `quanlytro` project's `tro247_network`: this service has no dependency on that Postgres/API stack, so keeping it fully separate means deploying it can never affect the live quanlytro containers. Port `4000` is published to the VPS host, so anything on that VPS (n8n included, whether containerized or not) reaches it via `http://<vps-ip>:4000` or `http://host.docker.internal:4000` from inside another container.
 
 **One-time setup on the VPS:**
 ```bash
@@ -139,7 +140,7 @@ cd /opt/shopee-affiliate
 cp .env.example .env                # edit SERVICE_API_KEY
 docker compose up -d --build        # first deploy, manual
 ```
-`playwright-service/storage/` is bind-mounted so the logged-in session (`storageState.json`) survives redeploys — after the first deploy, seed it once with the cookie file + `docker compose exec shopee-affiliate npm run seed-login` (or `POST /login` over the network), same as local.
+`api/storage/` is bind-mounted so the logged-in session (`storageState.json`) survives redeploys — after the first deploy, seed it once with the cookie file + `docker compose exec shopee-affiliate npm run seed-login` (or `POST /login` over the network), same as local.
 
 **GitHub Actions** ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) runs on every push to `main`: SSHes into the VPS and does `git pull` + `docker compose up -d --build`. It does **not** copy files over — the VPS pulls from git itself, so `.env` (gitignored) is never touched by deploys.
 
@@ -169,4 +170,4 @@ and adjust the locator in `lib/customLink.js` / `lib/commission.js` accordingly.
 ## Notes
 
 - This automates *your own* affiliate account using *your own* session cookies — no credentials are typed into any form and none are stored in n8n; only the `SERVICE_API_KEY` (a secret you invent for talking to your own local service) lives in the workflow.
-- Keep `playwright-service/storage/storageState.json` and `.env` out of version control (already covered by `.gitignore`) — it contains your live session.
+- Keep `api/storage/storageState.json` and `.env` out of version control (already covered by `.gitignore`) — it contains your live session.
