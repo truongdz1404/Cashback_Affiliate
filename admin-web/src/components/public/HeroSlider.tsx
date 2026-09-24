@@ -192,7 +192,7 @@ export default function HeroSlider() {
                 </div>
 
                 <div
-                  className={`relative px-5 pb-8 pt-6 sm:px-8 lg:absolute lg:inset-y-0 lg:left-0 lg:flex lg:w-[43%] lg:flex-col lg:px-0 lg:pb-0 lg:pl-[5%] lg:pr-4 ${
+                  className={`relative px-5 pb-24 pt-6 sm:px-8 lg:absolute lg:inset-y-0 lg:left-0 lg:flex lg:w-[43%] lg:flex-col lg:px-0 lg:pb-0 lg:pl-[5%] lg:pr-4 ${
                     slide.align === "top" ? "lg:justify-start lg:pt-[7%]" : "lg:justify-center lg:pt-0"
                   }`}
                 >
@@ -234,8 +234,9 @@ export default function HeroSlider() {
       </button>
 
       {/* The artwork is pale, so white dots would vanish - they sit on a frosted
-          pill and are drawn in the brand green instead. */}
-      <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/70 px-2.5 py-1.5 ring-1 ring-black/5 backdrop-blur lg:bottom-5 lg:left-[5%] lg:translate-x-0">
+          pill and are drawn in the brand green instead. They also sit well clear
+          of the bottom edge, because the stats card tucks under the banner. */}
+      <div className="absolute bottom-14 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/70 px-2.5 py-1.5 ring-1 ring-black/5 backdrop-blur lg:left-[5%] lg:translate-x-0">
         {SLIDES.map((slide, i) => (
           <button
             key={slide.id}

@@ -97,7 +97,7 @@ export default function MarketingHome({
       </section>
 
       {stats.length > 0 && (
-        <div className="mx-auto mt-6 max-w-5xl px-4 sm:px-6">
+        <div className="relative z-10 mx-auto -mt-10 max-w-5xl px-4 sm:px-6">
           <Card className="overflow-hidden rounded-[22px] border border-[var(--border)] shadow-[0_18px_48px_-28px_rgba(20,49,34,0.55)]">
             <Card.Content className="grid grid-cols-2 p-0 lg:grid-cols-4">
               {stats.map((stat, index) => (
