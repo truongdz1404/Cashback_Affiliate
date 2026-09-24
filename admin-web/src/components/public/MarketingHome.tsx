@@ -8,9 +8,10 @@ import CampaignCard from "@/components/public/CampaignCard";
 import PlaceholderImage from "@/components/public/PlaceholderImage";
 import HowItWorks from "@/components/public/HowItWorks";
 import LinkTool from "@/components/public/LinkTool";
+import BannerCarousel from "@/components/public/BannerCarousel";
 import { PLAY_STORE_URL } from "@/lib/site";
 import { formatPct, formatVnd } from "@/lib/format";
-import type { Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
+import type { Banner, Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
 import {
   ArrowRightIcon,
   BagIcon,
@@ -67,6 +68,7 @@ export default function MarketingHome({
   xtra,
   shops,
   campaigns,
+  banners,
 }: {
   categories: ShoppingCategory[];
   productCount: number;
@@ -75,6 +77,7 @@ export default function MarketingHome({
   xtra: ShoppingProduct[];
   shops: Shop[];
   campaigns: Campaign[];
+  banners: Banner[];
 }) {
   const bestRate = topCashback.reduce<number>((max, p) => Math.max(max, p.userCommissionRateValue ?? 0), 0);
   const stats =
@@ -153,6 +156,18 @@ export default function MarketingHome({
       )}
 
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        {/* Operator-managed artwork from the "Banner web" list. These are
+            full-width heroes in their own right - 2.4:1, with their own
+            headline and button - so they get the whole column here rather
+            than being shrunk into the green block above. The carousel
+            renders null on an empty list, hence the guard: without it the
+            margin below would leave a gap over the link tool. */}
+        {banners.length > 0 && (
+          <section className="mt-12">
+            <BannerCarousel banners={banners} />
+          </section>
+        )}
+
         {/* The paste-a-link tool is the main revenue action: give it the first
             slot after the hero, on both the guest and the signed-in home. */}
         <section className="mt-12 grid items-center gap-6 rounded-[28px] bg-white p-5 shadow-[0_24px_60px_-40px_rgba(20,49,34,0.6)] ring-1 ring-[var(--border)] sm:p-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-10">
