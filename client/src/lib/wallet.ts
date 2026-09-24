@@ -13,6 +13,10 @@ export const EMPTY_WALLET: WalletSummary = {
   availableAmount: 0,
   minWithdrawAmount: 0,
   pendingWithdrawal: null,
+  coinBalance: 0,
+  coinPending: 0,
+  coinAvailable: 0,
+  coinWithdrawEnabled: false,
 };
 
 export type WalletTotals = {

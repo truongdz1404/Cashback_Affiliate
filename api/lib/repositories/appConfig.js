@@ -101,6 +101,23 @@ const DEFAULTS = {
       { name: 'Watsons', reward: 'Hoàn 4%', iconUrl: 'https://www.google.com/s2/favicons?domain=watsons.vn&sz=64' },
     ],
   },
+  coins: {
+    // Daily check-in. Coins are worth 1 VND each when withdrawn but are not
+    // part of the cashback wallet - see lib/repositories/coins.js.
+    enabled: true,
+    title: 'Điểm danh nhận xu',
+    subtitle: 'Mỗi ngày mở app điểm danh một lần để nhận xu',
+    // What each rung of the ladder pays. The ladder repeats: with seven rungs,
+    // the eighth day in a row pays what the first paid. Length is the cycle.
+    cycleRewards: [100, 100, 100, 100, 100, 100, 100],
+    // true  - miss a day and the ladder starts over at rung one.
+    // false - miss a day and you simply resume where you left off.
+    resetOnMiss: true,
+    // Lets coins be cashed out alongside a withdrawal request. Turning this
+    // off leaves existing balances untouched, it just hides the option.
+    withdrawEnabled: true,
+    note: 'Xu được quy đổi 1 xu = 1đ khi rút cùng yêu cầu thanh toán.',
+  },
   link: {
     platforms: [
       { key: 'shopee', label: 'Shopee', logoUri: 'https://cdn.simpleicons.org/shopee/EE4D2D', enabled: true, brandColor: '#EE4D2D', soft: '#FFF0EC' },
@@ -219,6 +236,19 @@ function list(value, fallback, itemFn, { maxItems = 50 } = {}) {
   return items.length > 0 ? items : fallback;
 }
 
+// A ladder of whole, non-negative coin rewards. An empty or unparseable list
+// falls back to the default rather than leaving a check-in screen with no
+// rungs to draw - and a zero rung is allowed, since "day 3 pays nothing" is a
+// legitimate shape for the ladder.
+function rewardLadder(value, fallback) {
+  if (!Array.isArray(value) || value.length === 0) return fallback;
+  const rungs = value
+    .slice(0, 31)
+    .map((entry) => int(entry, null, 0, 1000000))
+    .filter((entry) => entry !== null);
+  return rungs.length > 0 ? rungs : fallback;
+}
+
 function normalizeHomePlatform(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const name = str(raw.name, '', { maxLength: 40, allowEmpty: false });
@@ -303,6 +333,7 @@ function normalize(raw) {
   const maintenance = sec('maintenance');
   const features = sec('features');
   const home = sec('home');
+  const coins = sec('coins');
   const link = sec('link');
   const shopping = sec('shopping');
   const guide = sec('guide');
@@ -357,6 +388,15 @@ function normalize(raw) {
       recommendationsLimit: int(home.recommendationsLimit, d.home.recommendationsLimit, 1, 50),
       taskFallbackSubtitle: str(home.taskFallbackSubtitle, d.home.taskFallbackSubtitle, { maxLength: 160 }),
       platforms: list(home.platforms, d.home.platforms, normalizeHomePlatform, { maxItems: 20 }),
+    },
+    coins: {
+      enabled: bool(coins.enabled, d.coins.enabled),
+      title: str(coins.title, d.coins.title, { maxLength: 80, allowEmpty: false }),
+      subtitle: str(coins.subtitle, d.coins.subtitle, { maxLength: 200 }),
+      cycleRewards: rewardLadder(coins.cycleRewards, d.coins.cycleRewards),
+      resetOnMiss: bool(coins.resetOnMiss, d.coins.resetOnMiss),
+      withdrawEnabled: bool(coins.withdrawEnabled, d.coins.withdrawEnabled),
+      note: str(coins.note, d.coins.note, { maxLength: 300 }),
     },
     link: {
       platforms: list(link.platforms, d.link.platforms, normalizeLinkPlatform, { maxItems: 20 }),

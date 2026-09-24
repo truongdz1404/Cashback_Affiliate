@@ -83,6 +83,14 @@ export const WalletIcon = base(
   </>
 );
 
+// A coin seen face-on with a "V" struck into it - the check-in currency.
+export const CoinIcon = base(
+  <>
+    <circle cx="10" cy="10" r="7.2" />
+    <path d="M7.5 7.2 10 13l2.5-5.8" />
+  </>
+);
+
 export const GearIcon = base(
   <>
     <circle cx="10" cy="10" r="2.6" />

@@ -28,6 +28,14 @@ model User {
   // PUT /admin/users/:id/role, scripts/set-role.js, or automatically for the
   // ADMIN_EMAILS allowlist on sign-in.
   role                String   @default("user")
+  // Daily check-in bookkeeping. Kept on the user rather than derived from the
+  // ledger because "what day of the streak am I on" is read on every home
+  // screen load, while the ledger is only read when someone opens the history.
+  // `lastCheckinDate` is a Vietnam-time calendar day ("2026-09-24"), never a
+  // timestamp: the streak has to break at local midnight, not at 07:00 when
+  // UTC rolls over.
+  coinStreak          Int      @default(0) @map("coin_streak")
+  lastCheckinDate     String?  @map("last_checkin_date")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
@@ -44,6 +52,7 @@ model User {
   withdrawalRequests  WithdrawalRequest[]
   clawbackFlags       ClawbackFlag[]
   emailVerifications  EmailVerification[]
+  coinTransactions    CoinTransaction[]
 
   @@index([role])
   @@map("users")
@@ -299,6 +308,12 @@ model WithdrawalRequest {
   id              Int      @id @default(autoincrement())
   userId          Int      @map("user_id")
   amount          Float
+  // The coin half of the same payout request, in coins (1 coin = 1 VND).
+  // Deliberately a second column instead of being folded into `amount`: the
+  // two come out of different balances, the admin paying this out needs to
+  // know the split, and every existing row keeps meaning exactly what it did.
+  // The bank transfer is amount + coinAmount.
+  coinAmount      Int      @default(0) @map("coin_amount")
   method          String   @default("bank")
   status          String   @default("pending")
   createdAt       DateTime @default(now()) @map("created_at")
@@ -621,4 +636,41 @@ model JobRun {
 
   @@index([job, startedAt])
   @@map("job_runs")
+}
+
+// The coin ledger. Coins are a currency of their own - 1 coin is worth 1 VND
+// when it is paid out, but it never touches the cashback wallet: no order, no
+// reconciliation and no clawback can move a coin, and no coin can inflate the
+// cashback figures the operator reports.
+//
+// Balance is SUM(amount) over a user's rows, never a running total on the user
+// row. A stored balance and a ledger can disagree after a crash; a sum cannot.
+// Earning is positive, spending negative, so the two directions are the same
+// code path.
+model CoinTransaction {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  // Positive = earned, negative = spent. Whole coins only; there is no such
+  // thing as half a coin and rounding one would leak value.
+  amount    Int
+  // "checkin" | "withdraw" | "withdraw_refund" | "admin_adjust"
+  kind      String
+  // What makes an earn idempotent. For a check-in it is the Vietnam-time day
+  // ("2026-09-24"); for a withdrawal it is the request's clientRequestId. The
+  // unique index below is the real guard - two taps a millisecond apart both
+  // reach the database and exactly one of them commits. Null for rows that are
+  // genuinely allowed to repeat, such as a manual admin adjustment, and
+  // Postgres treats nulls as distinct so those never collide.
+  dedupeKey String?  @map("dedupe_key")
+  // Shown verbatim in the user's coin history.
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, kind, dedupeKey])
+  // The history screen asks for one user's rows newest first; the balance sums
+  // the same slice.
+  @@index([userId, id])
+  @@map("coin_transactions")
 }

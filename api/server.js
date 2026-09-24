@@ -19,6 +19,7 @@ const bannersRepo = require('./lib/repositories/banners');
 const referralsRepo = require('./lib/repositories/referrals');
 const referralCommissionsRepo = require('./lib/repositories/referralCommissions');
 const withdrawalsRepo = require('./lib/repositories/withdrawals');
+const coinsRepo = require('./lib/repositories/coins');
 const banksRepo = require('./lib/repositories/banks');
 const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
 const recommendationsRepo = require('./lib/repositories/recommendations');
@@ -627,11 +628,20 @@ app.get('/app/wallet', appAuth.requireAppUser, async (req, res) => {
     const { summary, available } = await availableAmountForUser(req.appUserId);
     const pendingWithdrawal = (await withdrawalsRepo.latestPendingForUser(req.appUserId)) ?? null;
     const minWithdrawAmount = await settingsRepo.getMinWithdrawAmount();
+    // Coins ride along in the same response so the withdraw form can be drawn
+    // in one pass. They stay in their own fields - nothing here is added to
+    // availableAmount, which remains pure cashback.
+    const coins = await coinsRepo.availableForUser(req.appUserId);
+    const { config } = await appConfigRepo.getPayload();
     res.json({
       ...summary,
       availableAmount: available,
       minWithdrawAmount,
       pendingWithdrawal,
+      coinBalance: coins.balance,
+      coinPending: coins.pending,
+      coinAvailable: coins.available,
+      coinWithdrawEnabled: config.coins.enabled && config.coins.withdrawEnabled,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -651,12 +661,34 @@ function sleep(ms) {
 // requests and pays out manually, then marks the request 'paid'.
 app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
   try {
-    const amount = Number(req.body.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const amount = Number(req.body.amount) || 0;
+    const coinAmount = Math.trunc(Number(req.body.coinAmount) || 0);
+    if (!Number.isFinite(amount) || amount < 0) {
       return res.status(400).json({ error: 'body.amount must be a positive number' });
     }
+    if (!Number.isFinite(coinAmount) || coinAmount < 0) {
+      return res.status(400).json({ error: 'body.coinAmount must be a positive whole number' });
+    }
+    if (amount + coinAmount <= 0) {
+      return res.status(400).json({ error: 'body.amount must be a positive number' });
+    }
+
+    const { config } = await appConfigRepo.getPayload();
+    if (coinAmount > 0 && !(config.coins.enabled && config.coins.withdrawEnabled)) {
+      return res.status(400).json({ error: 'coin_withdraw_disabled' });
+    }
+    if (coinAmount > 0) {
+      const coins = await coinsRepo.availableForUser(req.appUserId);
+      if (coinAmount > coins.available) {
+        return res.status(400).json({ error: 'coin_amount_exceeds_balance' });
+      }
+    }
+
+    // The minimum is a payout floor, so it applies to what actually leaves the
+    // bank account: cash plus coins. Splitting 50k as 30k cash + 20k coins is
+    // one transfer of 50k and should pass, and does.
     const minWithdrawAmount = await settingsRepo.getMinWithdrawAmount();
-    if (amount < minWithdrawAmount) {
+    if (amount + coinAmount < minWithdrawAmount) {
       return res.status(400).json({ error: `so tien toi thieu la ${minWithdrawAmount}` });
     }
 
@@ -671,7 +703,7 @@ app.post('/app/wallet/withdraw', appAuth.requireAppUser, async (req, res) => {
     }
 
     const clientRequestId = randomUUID();
-    await publishWithdrawalRequest({ clientRequestId, userId: req.appUserId, amount, method: 'bank' });
+    await publishWithdrawalRequest({ clientRequestId, userId: req.appUserId, amount, coinAmount, method: 'bank' });
 
     const deadline = Date.now() + WITHDRAW_POLL_TIMEOUT_MS;
     let request = null;
@@ -698,6 +730,77 @@ app.get('/app/wallet/withdrawals', appAuth.requireAppUser, async (req, res) => {
     const limit = parseLimit(req.query.limit, 20, 100);
     const offset = parseOffset(req.query.offset);
     res.json(await withdrawalsRepo.listForUser(req.appUserId, { limit, offset }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Coins
+//
+// A currency of its own: earned by checking in once a Vietnam-time day, spent
+// only by cashing out alongside a withdrawal request at 1 coin = 1 VND. It
+// never mixes into the cashback wallet, so nothing here can affect an order,
+// a reconciliation, or the operator's commission figures.
+// ---------------------------------------------------------------------------
+
+// The check-in ladder is admin-editable, so every route reads it fresh rather
+// than caching it - an edit takes effect on the next request.
+async function coinSettings() {
+  const { config } = await appConfigRepo.getPayload();
+  return config.coins;
+}
+
+app.get('/app/coins', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const coins = await coinSettings();
+    const status = await coinsRepo.statusForUser(req.appUserId, {
+      rewards: coins.cycleRewards,
+      resetOnMiss: coins.resetOnMiss,
+    });
+    res.json({
+      ...status,
+      enabled: coins.enabled,
+      withdrawEnabled: coins.withdrawEnabled,
+      title: coins.title,
+      subtitle: coins.subtitle,
+      note: coins.note,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Claims today's coins. Idempotent: tapping twice, or a retry after a dropped
+// response, answers `alreadyClaimed` instead of crediting again.
+app.post('/app/coins/checkin', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const coins = await coinSettings();
+    if (!coins.enabled) return res.status(403).json({ error: 'checkin_disabled' });
+
+    const result = await coinsRepo.checkin(req.appUserId, {
+      rewards: coins.cycleRewards,
+      resetOnMiss: coins.resetOnMiss,
+    });
+
+    const status = await coinsRepo.statusForUser(req.appUserId, {
+      rewards: coins.cycleRewards,
+      resetOnMiss: coins.resetOnMiss,
+    });
+
+    // 200 either way. "You already claimed today" is the expected answer to a
+    // retry, not a failure the app should show as an error.
+    res.json({ ...status, claimed: !result.alreadyClaimed, reward: result.reward ?? 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/coins/history', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
+    res.json(await coinsRepo.listForUser(req.appUserId, { limit, offset }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

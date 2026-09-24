@@ -14,6 +14,7 @@ import { BankIcon, CheckIcon } from "@/components/icons";
 export default function WithdrawForm({ wallet, user }: { wallet: WalletSummary; user: AppUser }) {
   const router = useRouter();
   const [amount, setAmount] = useState("");
+  const [withCoins, setWithCoins] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -23,13 +24,21 @@ export default function WithdrawForm({ wallet, user }: { wallet: WalletSummary; 
   const minAmount = wallet.minWithdrawAmount ?? 0;
   const amountNumber = Number(amount.replace(/[^0-9]/g, "")) || 0;
 
+  // Coins go out whole or not at all: they are a bonus balance, not something
+  // to nibble at, and one tick box is far less to explain than a second
+  // amount field. 1 xu = 1d, so the totals just add up.
+  const coinAvailable = wallet.coinAvailable ?? 0;
+  const coinsOffered = (wallet.coinWithdrawEnabled ?? false) && coinAvailable > 0;
+  const coinAmount = coinsOffered && withCoins ? coinAvailable : 0;
+  const total = amountNumber + coinAmount;
+
   const canSubmit =
-    !missingBankInfo && !pendingWithdrawal && amountNumber >= minAmount && amountNumber <= available;
+    !missingBankInfo && !pendingWithdrawal && total >= minAmount && amountNumber <= available;
 
   // Only the reason the button is disabled that the user can actually fix by
   // typing - the bank/pending cases already have their own visible blocks.
   let amountProblem: string | null = null;
-  if (amountNumber > 0 && amountNumber < minAmount) amountProblem = `Tối thiểu ${formatVnd(minAmount)}`;
+  if (total > 0 && total < minAmount) amountProblem = `Tối thiểu ${formatVnd(minAmount)}`;
   else if (amountNumber > available) amountProblem = "Vượt quá số dư khả dụng";
 
   function askConfirm(e: React.FormEvent) {
@@ -44,8 +53,9 @@ export default function WithdrawForm({ wallet, user }: { wallet: WalletSummary; 
     setConfirming(false);
     setSubmitting(true);
     try {
-      await appClient.post<WithdrawalRequest>("/wallet/withdraw", { amount: amountNumber });
+      await appClient.post<WithdrawalRequest>("/wallet/withdraw", { amount: amountNumber, coinAmount });
       setAmount("");
+      setWithCoins(false);
       toast.success("Đã gửi yêu cầu", { description: "Yêu cầu thanh toán của bạn đang chờ admin duyệt." });
       router.refresh();
     } catch (err) {
@@ -96,6 +106,33 @@ export default function WithdrawForm({ wallet, user }: { wallet: WalletSummary; 
           {amountProblem && <p className="text-xs font-bold text-[var(--danger)]">{amountProblem}</p>}
         </div>
       </div>
+
+      {coinsOffered && (
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3.5 transition has-[:checked]:border-[var(--accent)] has-[:checked]:bg-[var(--accent-soft)]">
+          <input
+            type="checkbox"
+            checked={withCoins}
+            onChange={(e) => setWithCoins(e.target.checked)}
+            disabled={submitting || !!pendingWithdrawal}
+            className="mt-0.5 h-4.5 w-4.5 shrink-0 accent-[var(--accent)]"
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-extrabold text-[var(--foreground)]">
+              Rút cả {coinAvailable.toLocaleString("vi-VN")} xu
+            </span>
+            <span className="block text-xs text-[var(--muted)]">
+              1 xu = 1đ. Xu được cộng vào cùng lần chuyển khoản này, tương đương {formatVnd(coinAvailable)}.
+            </span>
+          </span>
+        </label>
+      )}
+
+      {coinAmount > 0 && (
+        <div className="flex items-center justify-between rounded-xl bg-[var(--accent-soft)] px-4 py-3">
+          <span className="text-sm font-bold text-[var(--foreground)]">Tổng nhận được</span>
+          <span className="text-base font-extrabold tabular-nums text-[var(--accent-dark)]">{formatVnd(total)}</span>
+        </div>
+      )}
 
       <div>
         <p className="mb-1.5 text-sm font-bold text-[var(--foreground)]">Phương thức nhận</p>
@@ -161,7 +198,8 @@ export default function WithdrawForm({ wallet, user }: { wallet: WalletSummary; 
               Xác nhận thanh toán
             </h3>
             <p className="mt-2 text-sm leading-relaxed text-[var(--muted)]">
-              Rút <span className="font-extrabold text-[var(--accent)]">{formatVnd(amountNumber)}</span> về{" "}
+              Rút <span className="font-extrabold text-[var(--accent)]">{formatVnd(total)}</span>
+              {coinAmount > 0 && ` (${formatVnd(amountNumber)} tiền hoàn + ${coinAmount.toLocaleString("vi-VN")} xu)`} về{" "}
               {user.bankName} · {user.bankAccountNumber} ({user.bankAccountHolder})?
             </p>
             <div className="mt-5 flex gap-3">
@@ -201,6 +239,12 @@ function translate(message: string): string {
       return "Số tiền vượt quá số dư khả dụng hoặc bạn đang có yêu cầu khác.";
     case "body.amount must be a positive number":
       return "Số tiền không hợp lệ.";
+    case "body.coinAmount must be a positive whole number":
+      return "Số xu không hợp lệ.";
+    case "coin_withdraw_disabled":
+      return "Tính năng rút xu đang tạm tắt.";
+    case "coin_amount_exceeds_balance":
+      return "Số xu vượt quá số xu khả dụng.";
     default:
       return message || "Vui lòng thử lại.";
   }

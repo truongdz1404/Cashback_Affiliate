@@ -36,6 +36,33 @@ export type WalletSummary = {
   availableAmount: number;
   minWithdrawAmount: number;
   pendingWithdrawal: WithdrawalRequest | null;
+  // Coins are their own currency at 1 xu = 1d. They are never added to
+  // availableAmount; the only place the two meet is a withdrawal request.
+  coinBalance: number;
+  coinPending: number;
+  coinAvailable: number;
+  coinWithdrawEnabled: boolean;
+};
+
+export type CoinDay = { day: number; reward: number; claimed: boolean; isToday: boolean };
+
+export type CoinStatus = {
+  balance: number;
+  pending: number;
+  available: number;
+  streak: number;
+  cycleLength: number;
+  claimedToday: boolean;
+  canClaim: boolean;
+  nextReward: number;
+  days: CoinDay[];
+  today: string;
+  msUntilNextDay: number;
+  enabled: boolean;
+  withdrawEnabled: boolean;
+  title: string;
+  subtitle: string;
+  note: string;
 };
 
 // display_order_status: 1=Pending, 2=Completed, 3=Cancelled, 4=Unpaid.
@@ -135,6 +162,7 @@ export type WithdrawalRequest = {
   id: number;
   userId: number;
   amount: number;
+  coinAmount?: number;
   method: "bank";
   status: "pending" | "approved" | "rejected" | "paid";
   createdAt: string | null;

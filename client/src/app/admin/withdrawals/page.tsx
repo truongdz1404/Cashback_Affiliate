@@ -11,6 +11,7 @@ type WithdrawalRequest = {
   id: number | string;
   userPhone?: string | null;
   amount: number;
+  coinAmount?: number | null;
   method: string;
   status: WithdrawalStatus;
   createdAt?: string | null;
@@ -102,10 +103,12 @@ export default function WithdrawalsPage() {
         <Card.Content>
           <Table>
             <Table.ScrollContainer>
-              <Table.Content aria-label="Yêu cầu thanh toán" className="min-w-[760px]">
+              <Table.Content aria-label="Yêu cầu thanh toán" className="min-w-[900px]">
                 <Table.Header>
                   <Table.Column isRowHeader>Khách hàng</Table.Column>
-                  <Table.Column className="text-right">Số tiền</Table.Column>
+                  <Table.Column className="text-right">Tiền hoàn</Table.Column>
+                  <Table.Column className="text-right">Xu</Table.Column>
+                  <Table.Column className="text-right">Tổng chuyển</Table.Column>
                   <Table.Column>Phương thức</Table.Column>
                   <Table.Column>Trạng thái</Table.Column>
                   <Table.Column>Ngày tạo</Table.Column>
@@ -120,6 +123,12 @@ export default function WithdrawalsPage() {
                     <Table.Row key={r.id}>
                       <Table.Cell>{r.userPhone || "-"}</Table.Cell>
                       <Table.Cell className="text-right">{formatAmount(r.amount)}</Table.Cell>
+                      <Table.Cell className="text-right text-[var(--muted)]">
+                        {r.coinAmount ? `${r.coinAmount.toLocaleString("vi-VN")} xu` : "-"}
+                      </Table.Cell>
+                      <Table.Cell className="text-right font-semibold">
+                        {formatAmount(r.amount + (r.coinAmount || 0))}
+                      </Table.Cell>
                       <Table.Cell className="text-[var(--muted)]">{r.method}</Table.Cell>
                       <Table.Cell>
                         <Chip color={STATUS_COLORS[r.status] || "default"}>{STATUS_LABELS[r.status] || r.status}</Chip>
@@ -179,7 +188,7 @@ export default function WithdrawalsPage() {
       </Card>
 
       <p className="text-xs text-[var(--muted)]">
-        Lưu ý: duyệt/đánh dấu đã thanh toán ở đây không tự động chuyển khoản — admin vẫn chuyển khoản thủ công và đánh dấu từng đơn hàng liên quan đã trả ở trang Đơn hàng.
+        Lưu ý: duyệt/đánh dấu đã thanh toán ở đây không tự động chuyển khoản — admin vẫn chuyển khoản thủ công và đánh dấu từng đơn hàng liên quan đã trả ở trang Đơn hàng. Số tiền cần chuyển là cột <strong>Tổng chuyển</strong> (tiền hoàn + xu, 1 xu = 1đ). Từ chối một yêu cầu sẽ tự hoàn xu về cho người dùng.
       </p>
     </div>
   );

@@ -1,5 +1,6 @@
 const { Prisma } = require('@prisma/client');
 const prisma = require('../prisma');
+const coinsRepo = require('./coins');
 
 // Requests still in 'pending' or already 'approved' both hold the user's
 // money reserved - only 'paid'/'rejected' release it. Filtering on
@@ -7,11 +8,14 @@ const prisma = require('../prisma');
 // balance before the first was marked 'paid'.
 const RESERVED_STATUSES = ['pending', 'approved'];
 
-async function create({ userId, amount, method = 'bank', clientRequestId, status } = {}, tx = prisma) {
+async function create({ userId, amount, coinAmount = 0, method = 'bank', clientRequestId, status } = {}, tx = prisma) {
   return tx.withdrawalRequest.create({
     data: {
       userId: Number(userId),
       amount,
+      // Coins are paid out in the same bank transfer but tracked apart, so
+      // the admin sees the split and the cashback wallet keeps its own total.
+      coinAmount: Math.trunc(Number(coinAmount) || 0),
       method,
       clientRequestId: clientRequestId ?? null,
       ...(status ? { status } : {}),
@@ -21,9 +25,9 @@ async function create({ userId, amount, method = 'bank', clientRequestId, status
 
 // Idempotent create for the RabbitMQ consumer: a redelivered message must
 // not create a second request. Relies on the unique clientRequestId column.
-async function createIdempotent({ userId, amount, method = 'bank', clientRequestId, status }, tx = prisma) {
+async function createIdempotent({ userId, amount, coinAmount = 0, method = 'bank', clientRequestId, status }, tx = prisma) {
   try {
-    return await create({ userId, amount, method, clientRequestId, status }, tx);
+    return await create({ userId, amount, coinAmount, method, clientRequestId, status }, tx);
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       return findByClientRequestId(clientRequestId, tx);
@@ -86,9 +90,23 @@ async function setStatus(id, status) {
   if (current.status !== status && !allowed.includes(status)) {
     throw new Error(`cannot transition withdrawal request from '${current.status}' to '${status}'`);
   }
-  return prisma.withdrawalRequest.update({
-    where: { id: Number(id) },
-    data: { status, processedAt: new Date().toISOString() },
+  // Cash needs no refund: it is never deducted, only reserved by the row's
+  // own status. Coins are a ledger, so a rejection has to write the money
+  // back. Same transaction as the status change, and the refund is keyed by
+  // the request id so a double click cannot pay it twice.
+  const refundCoins = status === 'rejected' && current.status !== 'rejected' && current.coinAmount > 0;
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.withdrawalRequest.update({
+      where: { id: Number(id) },
+      data: { status, processedAt: new Date().toISOString() },
+    });
+    if (refundCoins) {
+      await coinsRepo.refundWithdrawal(
+        { userId: current.userId, coinAmount: current.coinAmount, withdrawalId: current.id },
+        tx,
+      );
+    }
+    return updated;
   });
 }
 

@@ -32,6 +32,15 @@ type AppConfig = {
     shops: boolean;
   };
   home: { bannerAutoplayMs: number; recommendationsLimit: number; taskFallbackSubtitle: string; platforms: HomePlatform[] };
+  coins: {
+    enabled: boolean;
+    title: string;
+    subtitle: string;
+    cycleRewards: number[];
+    resetOnMiss: boolean;
+    withdrawEnabled: boolean;
+    note: string;
+  };
   link: { platforms: LinkPlatform[]; comingSoon: string[] };
   shopping: {
     pricePresets: PricePreset[];
@@ -414,6 +423,53 @@ export default function AppConfigPage() {
               <Field label="Link icon" value={item.iconUrl} onChange={(iconUrl) => update({ iconUrl })} />
             </div>
           )}
+        />
+      </SectionCard>
+
+      <SectionCard
+        title="Điểm danh nhận xu"
+        description="Mỗi ngày người dùng điểm danh một lần để nhận xu. 1 xu = 1đ, nhưng xu là đơn vị riêng, không cộng vào ví hoàn tiền — chỉ quy đổi khi rút."
+      >
+        <Toggle
+          label="Bật điểm danh"
+          hint="Tắt thì app ẩn thẻ điểm danh và chặn mọi lượt nhận xu mới."
+          value={config.coins.enabled}
+          onChange={(enabled) => patch("coins", { enabled })}
+        />
+        <Toggle
+          label="Cho rút xu cùng yêu cầu rút tiền"
+          hint="Người dùng tích ô 'rút cả xu' trong màn Ví; số xu được cộng vào cùng một lần chuyển khoản."
+          value={config.coins.withdrawEnabled}
+          onChange={(withdrawEnabled) => patch("coins", { withdrawEnabled })}
+        />
+        <Toggle
+          label="Bỏ lỡ một ngày là mất chuỗi"
+          hint="Bật: quên điểm danh thì quay lại ngày 1. Tắt: giữ nguyên vị trí, chỉ mất xu của ngày hôm đó."
+          value={config.coins.resetOnMiss}
+          onChange={(resetOnMiss) => patch("coins", { resetOnMiss })}
+        />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Tiêu đề" value={config.coins.title} onChange={(title) => patch("coins", { title })} />
+          <Field label="Phụ đề" value={config.coins.subtitle} onChange={(subtitle) => patch("coins", { subtitle })} />
+        </div>
+        <Field
+          label="Mốc thưởng theo ngày"
+          value={config.coins.cycleRewards.join(", ")}
+          onChange={(value) =>
+            patch("coins", {
+              cycleRewards: csvToList(value)
+                .map((part) => Number(part.replace(/[^\d]/g, "")))
+                .filter((part) => Number.isFinite(part)),
+            })
+          }
+          placeholder="100, 100, 100, 100, 100, 100, 200"
+          hint="Số xu cho ngày 1, ngày 2… ngăn cách bằng dấu phẩy. Hết chuỗi thì quay lại mốc đầu, nên 7 số là một tuần."
+        />
+        <AreaField
+          label="Ghi chú hiển thị cho người dùng"
+          rows={2}
+          value={config.coins.note}
+          onChange={(note) => patch("coins", { note })}
         />
       </SectionCard>
 
