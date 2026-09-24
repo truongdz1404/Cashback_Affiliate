@@ -25,6 +25,11 @@ type Slide = {
   body: string;
   primary: Cta;
   secondary?: Cta;
+  /** Used instead of `primary`/`secondary` for a signed-in member: the guest
+   *  copy invites them to register, which they have already done. A slide that
+   *  omits these keeps the same buttons for everyone. */
+  memberPrimary?: Cta;
+  memberSecondary?: Cta;
 };
 
 // The artwork in public/rewally-banner is drawn with an empty left column on
@@ -42,6 +47,8 @@ const SLIDES: Slide[] = [
     body: "Mua hàng Shopee như bình thường, chỉ cần đi qua Rewally. Hoàn tiền được ghi nhận theo từng đơn và rút về ngân hàng khi đủ điều kiện.",
     primary: { label: "Tham gia nhận hoàn tiền", href: "/register" },
     secondary: { label: "Xem sản phẩm", href: "/products" },
+    memberPrimary: { label: "Săn deal hoàn tiền", href: "/products" },
+    memberSecondary: { label: "Ví hoàn tiền của tôi", href: "/account/wallet" },
   },
   {
     id: "deals",
@@ -64,6 +71,7 @@ const SLIDES: Slide[] = [
     body: "Theo dõi từng đơn, biết rõ khi nào khoản hoàn được duyệt và rút về tài khoản của bạn.",
     primary: { label: "Tạo tài khoản", href: "/register" },
     secondary: { label: "Cách hoạt động", href: "/guide" },
+    memberPrimary: { label: "Mở ví hoàn tiền", href: "/account/wallet" },
   },
   {
     id: "link",
@@ -86,6 +94,7 @@ const SLIDES: Slide[] = [
     body: "Mỗi người bạn giới thiệu thành công đều mang thêm hoàn tiền về cho bạn.",
     primary: { label: "Nhận mã giới thiệu", href: "/register" },
     secondary: { label: "Tìm hiểu thêm", href: "/guide" },
+    memberPrimary: { label: "Lấy mã giới thiệu", href: "/account/referral" },
   },
   {
     id: "app",
@@ -125,7 +134,19 @@ function CtaLink({ cta, tone }: { cta: Cta; tone: "primary" | "secondary" }) {
   );
 }
 
-export default function HeroSlider() {
+// The same hero runs on both home pages - signed out and signed in - so the
+// site does not change shape the moment someone logs in. Only the buttons
+// differ: `isAuthenticated` swaps the sign-up calls to action for member ones.
+export default function HeroSlider({
+  isAuthenticated = false,
+  tuckedCard = false,
+}: {
+  isAuthenticated?: boolean;
+  /** True when the page slides a card up over the banner's bottom edge (the
+   *  stats strip on the signed-out home). The dots and the mobile copy then
+   *  keep clear of it; on a page with nothing underneath they sit lower. */
+  tuckedCard?: boolean;
+}) {
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const touchStart = useRef<number | null>(null);
@@ -167,6 +188,8 @@ export default function HeroSlider() {
       >
         {SLIDES.map((slide, i) => {
           const Title = i === 0 ? "h1" : "h2";
+          const primary = (isAuthenticated && slide.memberPrimary) || slide.primary;
+          const secondary = (isAuthenticated && slide.memberSecondary) || slide.secondary;
           return (
             <div
               key={slide.id}
@@ -192,7 +215,9 @@ export default function HeroSlider() {
                 </div>
 
                 <div
-                  className={`relative px-5 pb-24 pt-6 sm:px-8 lg:absolute lg:inset-y-0 lg:left-0 lg:flex lg:w-[43%] lg:flex-col lg:px-0 lg:pb-0 lg:pl-[5%] lg:pr-4 ${
+                  className={`relative px-5 pt-6 sm:px-8 lg:absolute lg:inset-y-0 lg:left-0 lg:flex lg:w-[43%] lg:flex-col lg:px-0 lg:pb-0 lg:pl-[5%] lg:pr-4 ${
+                    tuckedCard ? "pb-24" : "pb-14"
+                  } ${
                     slide.align === "top" ? "lg:justify-start lg:pt-[7%]" : "lg:justify-center lg:pt-0"
                   }`}
                 >
@@ -206,8 +231,8 @@ export default function HeroSlider() {
                     {slide.body}
                   </p>
                   <div className="mt-5 flex flex-wrap items-center gap-3 lg:mt-6">
-                    <CtaLink cta={slide.primary} tone="primary" />
-                    {slide.secondary && <CtaLink cta={slide.secondary} tone="secondary" />}
+                    <CtaLink cta={primary} tone="primary" />
+                    {secondary && <CtaLink cta={secondary} tone="secondary" />}
                   </div>
                 </div>
               </div>
@@ -234,9 +259,13 @@ export default function HeroSlider() {
       </button>
 
       {/* The artwork is pale, so white dots would vanish - they sit on a frosted
-          pill and are drawn in the brand green instead. They also sit well clear
-          of the bottom edge, because the stats card tucks under the banner. */}
-      <div className="absolute bottom-14 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/70 px-2.5 py-1.5 ring-1 ring-black/5 backdrop-blur lg:left-[5%] lg:translate-x-0">
+          pill and are drawn in the brand green instead. They lift clear of the
+          bottom edge only where a card tucks under the banner. */}
+      <div
+        className={`absolute left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/70 px-2.5 py-1.5 ring-1 ring-black/5 backdrop-blur lg:left-[5%] lg:translate-x-0 ${
+          tuckedCard ? "bottom-14" : "bottom-4"
+        }`}
+      >
         {SLIDES.map((slide, i) => (
           <button
             key={slide.id}

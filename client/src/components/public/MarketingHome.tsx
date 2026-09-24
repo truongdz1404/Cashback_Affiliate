@@ -93,7 +93,7 @@ export default function MarketingHome({
           column so the headline and buttons can be HTML on top of it - see
           HeroSlider for why that beats baking the copy into the image. */}
       <section className="mx-auto max-w-6xl px-4 pt-5 sm:px-6 sm:pt-7">
-        <HeroSlider />
+        <HeroSlider tuckedCard={stats.length > 0} />
       </section>
 
       {stats.length > 0 && (

@@ -2,10 +2,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { Chip } from "@heroui/react";
 import { appFetchSafe, buildQuery, getAppFeatures, getSessionUser } from "@/lib/appApi";
-import type { Banner, Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
+import type { Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
 import { PLAY_STORE_URL } from "@/lib/site";
 import { displayName } from "@/lib/format";
-import BannerCarousel from "@/components/public/BannerCarousel";
+import HeroSlider from "@/components/public/HeroSlider";
 import ProductRail from "@/components/public/ProductRail";
 import ShopRail from "@/components/public/ShopRail";
 import CampaignCard from "@/components/public/CampaignCard";
@@ -19,15 +19,10 @@ export const dynamic = "force-dynamic";
 const RAIL_LIMIT = 12;
 
 export default async function HomePage() {
-  const [user, features, banners, categories, topCashback, bestSellers, xtra, recommended, shops, campaigns, count] =
+  const [user, features, categories, topCashback, bestSellers, xtra, recommended, shops, campaigns, count] =
     await Promise.all([
       getSessionUser(),
       getAppFeatures(),
-      // ?platform=web: the app and the website keep separate banner lists and
-      // the backend answers with the app's one when no surface is named. The
-      // fallback here is [] - there used to be four hard-coded images that were
-      // never added to public/, so the carousel rendered four broken slides.
-      appFetchSafe<Banner[]>("/banners?platform=web", []),
       appFetchSafe<ShoppingCategory[]>("/shopping-categories?minCount=4", []),
       appFetchSafe<ShoppingProduct[]>(
         `/shopping-products${buildQuery({ limit: RAIL_LIMIT, sort: "commission_desc" })}`,
@@ -63,13 +58,11 @@ export default async function HomePage() {
 
   return (
     <main className="mx-auto max-w-6xl px-4 pb-14 sm:px-6">
-      {/* The carousel renders null on an empty list, so the section wrapper is
-          conditional too - otherwise it leaves a gap above the link tool. */}
-      {banners.length > 0 && (
-        <section className="pt-5">
-          <BannerCarousel banners={banners} />
-        </section>
-      )}
+      {/* The same hero the signed-out home shows, so logging in does not change
+          the shape of the page. Its buttons switch to member destinations. */}
+      <section className="pt-5 sm:pt-7">
+        <HeroSlider isAuthenticated />
+      </section>
 
       {/* The paste-a-link tool is the main revenue action, so it sits right under the banner. */}
       <section className="mt-5 rounded-[26px] bg-[var(--accent-soft)] p-4 ring-1 ring-[var(--accent)]/25 sm:p-6">
