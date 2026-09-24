@@ -25,11 +25,13 @@ services:
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
       ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM}
     # Named volumes, not bind mounts into the checkout. These three
-    # directories are gitignored, which means anything that cleans the working
-    # tree deletes them - and on 2026-09-24 something did, taking the logged-in
-    # Shopee session with it: every crawl then failed with "tabs seen: none"
-    # while /status still reported a healthy login. A named volume lives
-    # outside the checkout, so only an explicit `docker volume rm` can empty it.
+    # directories are gitignored, so they follow the checkout's layout without
+    # git ever moving them: renaming playwright-service/ to api/ in af8f627
+    # moved only the tracked files, the mounts started pointing at brand-new
+    # empty api/ directories, and the container came back up with no Shopee
+    # session at all - every crawl then failed with "tabs seen: none" while
+    # /status still reported a healthy login. A named volume is keyed by its
+    # own name, so it survives any rename, clean or rebuild of the checkout.
     volumes:
       - shopee-affiliate-session:/app/storage
       - shopee-affiliate-bank-logos:/app/public/bank-logos
