@@ -39,19 +39,60 @@ const CANDIDATE_POOL_SIZE = 5000;
 // Eight words, not twenty: each one is its own ILIKE scan of the catalog, and
 // past the strongest few they are all describing the same one or two recent
 // signals anyway ("Romand", "Juicy", "Lasting" and "Tint" came off one link).
-const POOL_WORDS = 8;
+//
+// How the pool splits between "what this user is into" and "what else is in
+// the catalogue" is not fixed: it follows how much history there is to go on.
+// Someone with one link has almost nothing to personalize with and needs the
+// catalogue backdrop to have a screenful at all; someone with a dozen signals
+// is better served by more of their own interests and less filler. `strength`
+// runs 0..1 across that range and scales the two sides in opposite
+// directions - the interest quotas up, the fresh slice down.
+const FULL_SIGNAL_AT = 12;
+// Signal buys DEPTH per interest, not more interests: a larger `take` rides a
+// scan we are already paying for, whereas an extra word is an extra scan. So
+// the *_RICH quotas below grow with the user's history and this one does not.
+//
+// This is also the only constant in this file that describes the MACHINE
+// rather than the recommendations. Each word is a concurrent query, so the
+// useful number of them is bounded by how many the database can really run at
+// once, and past that bound they queue and make each other slower. Eight is
+// right for the two cores this runs on today: measured, sixteen took the pool
+// from 0.9s to 10.1s - and the eight extra words were restating signals the
+// first eight already carried, so it bought nothing for the 11s.
+//
+// Hence an env knob rather than a literal. On a 4-core box the ceiling moves,
+// but raise it from a measurement, not from the core count: Prisma's own
+// connection pool (num_cpus * 2 + 1 unless connection_limit says otherwise) is
+// a second ceiling sitting behind this one, and the words past the strongest
+// few have little left to say regardless of how fast they run.
+const POOL_WORDS = Number(process.env.RECO_POOL_WORDS) || 8;
 const POOL_PER_WORD = 200;
+const POOL_PER_WORD_RICH = 400;
 const POOL_PER_CATEGORY = 500;
+const POOL_PER_CATEGORY_RICH = 900;
 const POOL_PER_SHOP = 300;
+const POOL_PER_SHOP_RICH = 600;
 // Plus a slice of the plain catalog, so the feed still has something to offer
 // beyond what the user's history already describes - and so a brand-new user
-// with one link does not get a four-product feed.
-const POOL_FRESH = 2000;
-// The Shopping tab is a catalogue listing, not a short suggestions feed: it
-// scrolls, and before this it could scroll CANDIDATE_POOL_SIZE products deep.
-// Its fresh slice keeps that depth so the interest-driven rows are added to
-// what browse already showed rather than replacing most of it.
-const POOL_FRESH_BROWSE = CANDIDATE_POOL_SIZE;
+// with one link does not get a four-product feed. It used to be a flat 5000
+// for browse, which was 79% of the pool and (see freshSlice) the single most
+// expensive part of building one.
+const POOL_FRESH_MAX = 1500;
+const POOL_FRESH_MIN = 500;
+// The categorised part of the fresh slice is dealt from a window this many
+// times its own size - wide enough for a lot of categories to be represented,
+// cheap because the window is read as ids and categories only.
+const FRESH_WINDOW_FACTOR = 4;
+// ...and this share of it is held for products categoryEnrichment has not
+// reached yet. They are the NEWEST rows there are, so shutting them out would
+// mean the backdrop never showed anything from the last few crawls - but left
+// ungoverned they are not part of the slice, they are the whole slice, which
+// is exactly the bug freshSlice exists to fix.
+const FRESH_UNCATEGORISED_SHARE = 0.2;
+
+// Interpolates a quota across `strength`. Reads in the order the quota moves,
+// so a shrinking one is written mix(max, min, strength).
+const mix = (from, to, strength) => Math.round(from + (to - from) * strength);
 
 // Exactly the columns scoreProduct and interleaveByGroup read, and nothing
 // else. The pool is thousands of rows but only the ~20 that end up on the
@@ -358,6 +399,10 @@ async function buildAffinity(userId) {
 
   return {
     hasSignal: true,
+    // How many things the user actually did. candidatePool sizes itself off
+    // this: it is the difference between "we know what they like" and "we are
+    // guessing from one tap".
+    signalCount: signals.length,
     alreadyLinkedItemIds,
     catWeights,
     shopWeights,
@@ -574,14 +619,88 @@ function strongest(map, limit) {
 }
 
 /**
- * The rows the Home feed is allowed to rank: everything the user's own history
- * points at, plus a slice of the newest catalog.
+ * The "what else is new" part of the pool, dealt round-robin across categories.
+ *
+ * Taking the newest N rows outright was quietly broken. The crawler writes a
+ * product before categoryEnrichment fills its category in, so the newest rows
+ * are precisely the uncategorised ones - on production the newest 4,508
+ * products all have category NULL. A flat `ORDER BY id DESC LIMIT 5000` was
+ * therefore a slice with no categories in it at all, which means
+ * scoreProduct's category match (its second-strongest signal) could not fire
+ * on a single row of it, and whatever handful of shops uploaded last was the
+ * entire backdrop.
+ *
+ * So the slice is taken in two parts. The categorised rows are read newest
+ * first and then dealt round-robin across their categories, so no one category
+ * can take more than its turn; the uncategorised rows get a fixed share
+ * (FRESH_UNCATEGORISED_SHARE) rather than all of it.
+ *
+ * Splitting them is not an optimisation, it is the only thing that works: the
+ * uncategorised block is CONTIGUOUS at the newest end and thousands of rows
+ * deep, so a single window over the newest rows never reaches a categorised
+ * one, and the round-robin would have exactly one bucket to deal from.
+ *
+ * Both reads are ids and categories only - backward index scans on the primary
+ * key, ~8ms each - and only the ids that survive the deal are read as rows.
+ */
+async function freshSlice(where, count) {
+  const uncategorised = Math.round(count * FRESH_UNCATEGORISED_SHARE);
+  const [window, newest] = await Promise.all([
+    prisma.shoppingProduct.findMany({
+      where: { ...where, category: { not: null } },
+      select: { id: true, category: true },
+      orderBy: { id: 'desc' },
+      take: (count - uncategorised) * FRESH_WINDOW_FACTOR,
+    }),
+    prisma.shoppingProduct.findMany({
+      where: { ...where, category: null },
+      select: { id: true },
+      orderBy: { id: 'desc' },
+      take: uncategorised,
+    }),
+  ]);
+
+  // Buckets keep insertion order, and the window arrives newest-first, so a
+  // category something was just uploaded to is dealt from before a dormant
+  // one. Within a bucket the order is newest-first for the same reason.
+  const buckets = new Map();
+  for (const row of window) {
+    const key = row.category || '';
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(row.id);
+    else buckets.set(key, [row.id]);
+  }
+
+  const lists = [...buckets.values()];
+  const picked = newest.map((row) => row.id);
+  for (let round = 0; picked.length < count; round += 1) {
+    let dealt = false;
+    for (const list of lists) {
+      if (round >= list.length) continue;
+      picked.push(list[round]);
+      dealt = true;
+      if (picked.length >= count) break;
+    }
+    // Every bucket is exhausted - the window held fewer rows than asked for.
+    if (!dealt) break;
+  }
+
+  if (!picked.length) return [];
+  return prisma.shoppingProduct.findMany({ where: { id: { in: picked } }, select: POOL_SELECT });
+}
+
+/**
+ * The rows a surface is allowed to rank: everything the user's own history
+ * points at, plus a category-spread slice of the newest catalog (freshSlice).
+ *
+ * The split between the two is not fixed - see FULL_SIGNAL_AT. The more
+ * history there is, the more of the pool is the user's own interests and the
+ * smaller the catalogue backdrop, because past a certain amount of signal the
+ * filler is just displacing something better.
  *
  * The interest queries select ids only and are capped per interest, so the
- * price of the whole thing is a handful of small scans - and the result is
- * SMALLER than the blind 5000-row pool it replaces, not larger. Products the
- * user already made a link for are excluded here rather than after scoring,
- * exactly as before.
+ * price of the whole thing is a handful of small scans. Products the user
+ * already made a link for are excluded here rather than after scoring.
  *
  * Matching is by accented word (rawTokens) because this is a LIKE against
  * Shopee's own titles - see the note on rawTokens in lib/textMatch.js.
@@ -589,14 +708,20 @@ function strongest(map, limit) {
  * Returns POOL_SELECT-shaped rows, NOT full products: callers rank these and
  * then hydrate the page they actually serve through productsInOrder.
  */
-async function candidatePool(affinity, { fresh: freshCount = POOL_FRESH, excludeLinked = true } = {}) {
-  const { alreadyLinkedItemIds, hintWords, hintCategories, hintShopIds } = affinity;
+async function candidatePool(affinity, { excludeLinked = true } = {}) {
+  const { alreadyLinkedItemIds, hintWords, hintCategories, hintShopIds, signalCount = 0 } = affinity;
   // The Home feed hides what the user has already linked - suggesting it back
   // is noise. The Shopping tab must not: it is the catalogue, and a product
   // vanishing from browse because the user once made a link for it would look
   // like the catalogue lost it.
   const notLinked =
     excludeLinked && alreadyLinkedItemIds.size ? { productId: { notIn: [...alreadyLinkedItemIds] } } : {};
+
+  // 0 = one thing to go on, 1 = a dozen signals or more. Everything below is
+  // sized off this: the more the history says, the more of the pool is the
+  // user's own interests and the less of it is catalogue filler.
+  const strength = Math.min(1, signalCount / FULL_SIGNAL_AT);
+  const freshCount = mix(POOL_FRESH_MAX, POOL_FRESH_MIN, strength);
 
   const words = strongest(hintWords, POOL_WORDS);
   const categories = strongest(hintCategories, 8);
@@ -607,7 +732,7 @@ async function candidatePool(affinity, { fresh: freshCount = POOL_FRESH, exclude
       where: { ...notLinked, name: { contains: word, mode: 'insensitive' } },
       select: { id: true },
       orderBy: { id: 'desc' },
-      take: POOL_PER_WORD,
+      take: mix(POOL_PER_WORD, POOL_PER_WORD_RICH, strength),
     })
   );
   if (categories.length) {
@@ -616,7 +741,7 @@ async function candidatePool(affinity, { fresh: freshCount = POOL_FRESH, exclude
         where: { ...notLinked, category: { in: categories } },
         select: { id: true },
         orderBy: { id: 'desc' },
-        take: POOL_PER_CATEGORY,
+        take: mix(POOL_PER_CATEGORY, POOL_PER_CATEGORY_RICH, strength),
       })
     );
   }
@@ -626,20 +751,12 @@ async function candidatePool(affinity, { fresh: freshCount = POOL_FRESH, exclude
         where: { ...notLinked, shopId: { in: shopIds } },
         select: { id: true },
         orderBy: { id: 'desc' },
-        take: POOL_PER_SHOP,
+        take: mix(POOL_PER_SHOP, POOL_PER_SHOP_RICH, strength),
       })
     );
   }
 
-  const [fresh, ...idRows] = await Promise.all([
-    prisma.shoppingProduct.findMany({
-      where: notLinked,
-      select: POOL_SELECT,
-      orderBy: { id: 'desc' },
-      take: freshCount,
-    }),
-    ...idQueries,
-  ]);
+  const [fresh, ...idRows] = await Promise.all([freshSlice(notLinked, freshCount), ...idQueries]);
 
   // The fresh slice is already loaded, so only fetch the interest hits it does
   // not already cover.
@@ -793,7 +910,7 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
         orderBy: { id: 'desc' },
         take: CANDIDATE_POOL_SIZE,
       })
-    : await candidatePool(affinity, { fresh: POOL_FRESH_BROWSE, excludeLinked: false });
+    : await candidatePool(affinity, { excludeLinked: false });
 
   const scored = candidates.map((product) => ({ product, ...scoreProduct(product, affinity) }));
 
