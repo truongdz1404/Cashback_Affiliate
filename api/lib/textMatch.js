@@ -39,6 +39,21 @@ function tokenize(text) {
     .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
 }
 
+// The same words tokenize() keeps, but with their diacritics left ON.
+//
+// tokenize() folds "Sắc" down to "sac", which is the right thing when both
+// sides of the comparison are already in memory, and the wrong thing when one
+// side is a SQL LIKE against Shopee's own titles: nothing in the catalogue is
+// spelled "sac", so a folded token pre-filters to zero rows. Both the user's
+// history and the catalogue come from Shopee, so the accented word matches
+// literally - which is what makes it usable as a database filter.
+function rawTokens(text) {
+  if (!text) return [];
+  return String(text)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length >= 3 && !STOPWORDS.has(stripDiacritics(word.toLowerCase())));
+}
+
 // Lowercased, diacritic-free, whitespace-collapsed - the form to compare two
 // names in when "Cửa Hàng ABC" and "cua hang abc" must count as equal.
 //
@@ -50,4 +65,4 @@ function foldForSearch(s) {
   return stripDiacritics(String(s || '').toLowerCase()).trim().replace(/\s+/g, ' ');
 }
 
-module.exports = { STOPWORDS, stripDiacritics, normalizeName, tokenize, foldForSearch };
+module.exports = { STOPWORDS, stripDiacritics, normalizeName, tokenize, rawTokens, foldForSearch };

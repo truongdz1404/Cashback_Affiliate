@@ -3,7 +3,7 @@ const searchHistoryRepo = require('./searchHistory');
 // normalizeName/tokenize (and the STOPWORDS list they use)
 // moved to lib/textMatch.js unchanged so the shop search ranker could share
 // them - see the header there.
-const { normalizeName, tokenize } = require('../textMatch');
+const { normalizeName, tokenize, rawTokens } = require('../textMatch');
 // Every product this module hands back is serialized straight to a client, so
 // it must carry the same embedded shop summary the filtered listing does - see
 // the SHOP_INCLUDE comment in ./shoppingProducts.js for why all five query
@@ -14,16 +14,39 @@ const { SHOP_INCLUDE } = require('./shoppingProducts');
 // (not "all links ever") so a long-time user's taste can drift - their most
 // recent handful of links should dominate the scoring, not their first ever.
 const LINK_HISTORY_LIMIT = 50;
-// Safety cap only, not a relevance cutoff - the catalog is currently a few
-// thousand rows and scoring is a cheap in-memory pass, so we score the whole
-// thing rather than pre-filtering by recency. A recency-based `take` here
-// previously combined with `orderBy: scrapedAt desc` to silently and
-// non-deterministically drop real matches: most rows share the same
-// scrapedAt (one scrape batch), so ties broke in an unstable order and
-// arbitrarily excluded some of them from every pool. If the catalog grows
-// past this cap, revisit with a real pre-filter (e.g. by shop/category)
-// instead of raising the number.
+// Safety cap for rankProductsForUser, whose pool is the (usually
+// search-filtered) catalog in id order. A recency-based `take` here previously
+// combined with `orderBy: scrapedAt desc` to silently and non-deterministically
+// drop real matches: most rows share the same scrapedAt (one scrape batch), so
+// ties broke in an unstable order and arbitrarily excluded some of them from
+// every pool. `id desc` is stable.
 const CANDIDATE_POOL_SIZE = 5000;
+
+// The Home feed builds its pool from the user's interests instead - see
+// candidatePool(). It used to take the newest CANDIDATE_POOL_SIZE rows here
+// too, on the assumption written into the comment above that "the catalog is
+// currently a few thousand rows". The catalog is now ~78k, and those newest
+// 5000 are whatever the last few scrapes happened to cover: when this was
+// written they held 746 of the catalog's lipsticks... 9, and exactly 0 rows in
+// category "Sac Dep". A user who had just searched "son" and linked two of
+// them got a feed of nothing but shirts, because there was no lipstick in the
+// pool to rank - no amount of scoring can recommend a row it never sees.
+//
+// Per-interest caps rather than one big OR query: the whole point of
+// interleaveByGroup below is that every interest gets a turn, and a single
+// `take` over a combined match set would let one broad word ("Quan", matching
+// thousands of recent rows) crowd the others out before scoring even starts.
+// Eight words, not twenty: each one is its own ILIKE scan of the catalog, and
+// past the strongest few they are all describing the same one or two recent
+// signals anyway ("Romand", "Juicy", "Lasting" and "Tint" came off one link).
+const POOL_WORDS = 8;
+const POOL_PER_WORD = 200;
+const POOL_PER_CATEGORY = 500;
+const POOL_PER_SHOP = 300;
+// Plus a slice of the plain catalog, so the feed still has something to offer
+// beyond what the user's history already describes - and so a brand-new user
+// with one link does not get a four-product feed.
+const POOL_FRESH = 2000;
 
 // Recent Shopping-tab search terms are a weaker, noisier signal than an
 // actual "Tạo link" action (a search doesn't mean a purchase), so they fold
@@ -217,18 +240,18 @@ async function hydrateLinksFromCatalog(links) {
 // affinity can drive both the Home-tab "Gợi ý cho bạn" widget and the
 // Shopping-tab personalized ordering, without scoring twice differently.
 async function buildAffinity(userId) {
-  const [rawLinks, recentSearchTerms] = await Promise.all([
+  const [rawLinks, recentSearches] = await Promise.all([
     prisma.link.findMany({
       where: { userId: Number(userId) },
       orderBy: { createdAt: 'desc' },
       take: LINK_HISTORY_LIMIT,
     }),
-    searchHistoryRepo.recentTerms(userId),
+    searchHistoryRepo.recentSearches(userId),
   ]);
 
   const links = await hydrateLinksFromCatalog(rawLinks);
   const withSignal = links.filter((l) => l.catName || l.shopName || l.itemName || l.shopId);
-  if (withSignal.length === 0 && recentSearchTerms.length === 0) {
+  if (withSignal.length === 0 && recentSearches.length === 0) {
     return { hasSignal: false, alreadyLinkedItemIds: new Set() };
   }
 
@@ -237,25 +260,49 @@ async function buildAffinity(userId) {
   const shopWeights = new Map();
   const shopIdWeights = new Map();
   const keywordWeights = new Map();
+  // Same three interests, but keyed for a DATABASE filter instead of for
+  // scoring: accented words, raw category names, raw shop ids. See
+  // candidatePool() for what they buy us.
+  const hintWords = new Map();
+  const hintCategories = new Map();
+  const hintShopIds = new Map();
   const prices = [];
 
-  withSignal.forEach((link, index) => {
+  // Links and searches are ONE timeline ordered by when they happened, not two
+  // lists with the searches appended.
+  //
+  // They used to be appended: `searchIndexBase = withSignal.length` put every
+  // search after every link, so a term typed a minute ago was weighted like the
+  // 50th-oldest link (1/sqrt(50) * 0.5 ~ 0.07) and could not influence anything.
+  // A search is still the weaker signal of the two - SEARCH_TERM_WEIGHT keeps it
+  // at half a link's - but it is now weak for being a search, not for being old
+  // when it is in fact the most recent thing the user did.
+  const signals = [
+    ...withSignal.map((link) => ({ at: link.createdAt, link })),
+    ...recentSearches.map((search) => ({ at: search.createdAt, term: search.term })),
+  ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+  signals.forEach((signal, index) => {
     const weight = weightAt(index);
+
+    if (signal.term) {
+      const searchWeight = weight * SEARCH_TERM_WEIGHT;
+      for (const token of tokenize(signal.term)) bump(keywordWeights, token, searchWeight, index);
+      for (const word of rawTokens(signal.term)) bump(hintWords, word, searchWeight, index);
+      return;
+    }
+
+    const link = signal.link;
     bump(shopIdWeights, link.shopId, weight, index);
     bump(catWeights, normalizeName(link.catName), weight, index);
     bump(shopWeights, normalizeName(link.shopName), weight, index);
     for (const token of tokenize(link.itemName)) bump(keywordWeights, token, weight, index);
     for (const token of tokenize(link.catName)) bump(keywordWeights, token, weight * 0.5, index);
+    for (const word of rawTokens(link.itemName)) bump(hintWords, word, weight, index);
+    for (const word of rawTokens(link.catName)) bump(hintWords, word, weight * 0.5, index);
+    bump(hintCategories, normalizeName(link.catName), weight, index);
+    bump(hintShopIds, link.shopId, weight, index);
     if (link.priceValue != null) prices.push(link.priceValue);
-  });
-
-  // Searches continue the same index line rather than restarting at 0, so a
-  // term typed today cannot outweigh a link actually created today.
-  const searchIndexBase = withSignal.length;
-  recentSearchTerms.forEach((term, offset) => {
-    const index = searchIndexBase + offset;
-    const weight = weightAt(index) * SEARCH_TERM_WEIGHT;
-    for (const token of tokenize(term)) bump(keywordWeights, token, weight, index);
   });
 
   const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null;
@@ -271,6 +318,9 @@ async function buildAffinity(userId) {
     shopWeights,
     shopIdWeights,
     keywordWeights,
+    hintWords,
+    hintCategories,
+    hintShopIds,
     avgPrice,
     priceLow,
     priceHigh,
@@ -469,6 +519,88 @@ function interleaveByGroup(entries, limit, { capShare = MAX_SHOP_SHARE, capWindo
   return out;
 }
 
+// Top `limit` keys of a weight map built by bump(), heaviest first.
+function strongest(map, limit) {
+  return [...map.entries()]
+    .sort((a, b) => b[1].weight - a[1].weight)
+    .slice(0, limit)
+    .map(([key]) => key)
+    .filter((key) => key != null && key !== '');
+}
+
+/**
+ * The rows the Home feed is allowed to rank: everything the user's own history
+ * points at, plus a slice of the newest catalog.
+ *
+ * The interest queries select ids only and are capped per interest, so the
+ * price of the whole thing is a handful of small scans - and the result is
+ * SMALLER than the blind 5000-row pool it replaces, not larger. Products the
+ * user already made a link for are excluded here rather than after scoring,
+ * exactly as before.
+ *
+ * Matching is by accented word (rawTokens) because this is a LIKE against
+ * Shopee's own titles - see the note on rawTokens in lib/textMatch.js.
+ */
+async function candidatePool(affinity) {
+  const { alreadyLinkedItemIds, hintWords, hintCategories, hintShopIds } = affinity;
+  const notLinked = alreadyLinkedItemIds.size ? { productId: { notIn: [...alreadyLinkedItemIds] } } : {};
+
+  const words = strongest(hintWords, POOL_WORDS);
+  const categories = strongest(hintCategories, 8);
+  const shopIds = strongest(hintShopIds, 8);
+
+  const idQueries = words.map((word) =>
+    prisma.shoppingProduct.findMany({
+      where: { ...notLinked, name: { contains: word, mode: 'insensitive' } },
+      select: { id: true },
+      orderBy: { id: 'desc' },
+      take: POOL_PER_WORD,
+    })
+  );
+  if (categories.length) {
+    idQueries.push(
+      prisma.shoppingProduct.findMany({
+        where: { ...notLinked, category: { in: categories } },
+        select: { id: true },
+        orderBy: { id: 'desc' },
+        take: POOL_PER_CATEGORY,
+      })
+    );
+  }
+  if (shopIds.length) {
+    idQueries.push(
+      prisma.shoppingProduct.findMany({
+        where: { ...notLinked, shopId: { in: shopIds } },
+        select: { id: true },
+        orderBy: { id: 'desc' },
+        take: POOL_PER_SHOP,
+      })
+    );
+  }
+
+  const [fresh, ...idRows] = await Promise.all([
+    prisma.shoppingProduct.findMany({
+      where: notLinked,
+      include: SHOP_INCLUDE,
+      orderBy: { id: 'desc' },
+      take: POOL_FRESH,
+    }),
+    ...idQueries,
+  ]);
+
+  // The fresh slice is already loaded in full, so only fetch the interest hits
+  // it does not already cover.
+  const ids = new Set(idRows.flat().map((row) => row.id));
+  for (const product of fresh) ids.delete(product.id);
+  if (!ids.size) return fresh;
+
+  const targeted = await prisma.shoppingProduct.findMany({
+    where: { id: { in: [...ids] } },
+    include: SHOP_INCLUDE,
+  });
+  return [...fresh, ...targeted];
+}
+
 /**
  * Recommends shopping_products for a user based on their "Tạo link" history
  * (the links table) plus recent Shopping-tab searches - the only per-user
@@ -531,13 +663,7 @@ async function recommendForUser(userId, { limit = 10, offset = 0 } = {}) {
     return { items: await fallbackProducts(limit, new Set(), offset), reason: 'no_history' };
   }
 
-  const { alreadyLinkedItemIds } = affinity;
-  const candidates = await prisma.shoppingProduct.findMany({
-    where: alreadyLinkedItemIds.size ? { productId: { notIn: [...alreadyLinkedItemIds] } } : undefined,
-    include: SHOP_INCLUDE,
-    orderBy: { id: 'desc' },
-    take: CANDIDATE_POOL_SIZE,
-  });
+  const candidates = await candidatePool(affinity);
 
   const scored = candidates
     .map((product) => ({ product, ...scoreProduct(product, affinity) }))
