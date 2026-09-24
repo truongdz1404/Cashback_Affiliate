@@ -8,12 +8,11 @@ import CampaignCard from "@/components/public/CampaignCard";
 import PlaceholderImage from "@/components/public/PlaceholderImage";
 import HowItWorks from "@/components/public/HowItWorks";
 import LinkTool from "@/components/public/LinkTool";
-import BannerCarousel from "@/components/public/BannerCarousel";
+import HeroSlider from "@/components/public/HeroSlider";
 import { PLAY_STORE_URL } from "@/lib/site";
 import { formatPct, formatVnd } from "@/lib/format";
-import type { Banner, Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
+import type { Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
 import {
-  ArrowRightIcon,
   BagIcon,
   BoltIcon,
   DownloadIcon,
@@ -68,7 +67,6 @@ export default function MarketingHome({
   xtra,
   shops,
   campaigns,
-  banners,
 }: {
   categories: ShoppingCategory[];
   productCount: number;
@@ -77,7 +75,6 @@ export default function MarketingHome({
   xtra: ShoppingProduct[];
   shops: Shop[];
   campaigns: Campaign[];
-  banners: Banner[];
 }) {
   const bestRate = topCashback.reduce<number>((max, p) => Math.max(max, p.userCommissionRateValue ?? 0), 0);
   const stats =
@@ -92,51 +89,15 @@ export default function MarketingHome({
 
   return (
     <main className="overflow-hidden bg-[var(--background)] pb-14">
-      <section className="relative bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent)_46%,#9BE0B6_100%)] text-white">
-        <div className="mx-auto grid max-w-6xl items-center gap-8 px-4 pb-20 pt-10 sm:px-6 lg:grid-cols-[0.95fr_1.05fr] lg:pb-24 lg:pt-14">
-          <div className="relative z-10 max-w-xl">
-            <Chip color="success" variant="soft" size="sm" className="bg-white/18 text-white">
-              Miễn phí tham gia
-            </Chip>
-            <h1 className="mt-5 max-w-lg text-[2.35rem] font-extrabold leading-[1.06] tracking-normal sm:text-5xl">
-              Cứ mua sắm là được hoàn tiền
-            </h1>
-            <p className="mt-4 max-w-md text-sm font-medium leading-6 text-white/88 sm:text-[15px]">
-              Mua hàng Shopee như bình thường, chỉ cần đi qua Rewally. Hoàn tiền được ghi nhận theo đơn và rút về ngân
-              hàng khi đủ điều kiện.
-            </p>
-            <div className="mt-6 flex flex-wrap items-center gap-3">
-              <Link
-                href="/register"
-                className="inline-flex h-11 items-center gap-2 rounded-full bg-[var(--foreground)] px-5 text-sm font-extrabold text-white shadow-[0_16px_36px_-20px_rgba(0,0,0,0.7)] transition hover:opacity-90"
-              >
-                Tham gia nhận hoàn tiền ngay
-                <ArrowRightIcon className="h-4 w-4" />
-              </Link>
-              <Link
-                href="/products"
-                className="inline-flex h-11 items-center rounded-full border border-white/45 px-5 text-sm font-bold text-white transition hover:bg-white/12"
-              >
-                Xem sản phẩm
-              </Link>
-            </div>
-          </div>
-
-          <div className="relative mx-auto aspect-[16/9] w-full max-w-[620px] overflow-hidden rounded-[30px] shadow-[0_28px_76px_-36px_rgba(20,49,34,0.7)]">
-            <Image
-              src="/marketing/cashback-hero.png"
-              alt="Minh họa hoàn tiền Rewally với ví, đồng xu và các danh mục mua sắm"
-              fill
-              priority
-              sizes="(max-width: 1024px) 100vw, 620px"
-              className="object-cover object-center"
-            />
-          </div>
-        </div>
+      {/* The slider is the hero. Its artwork is drawn with an empty left
+          column so the headline and buttons can be HTML on top of it - see
+          HeroSlider for why that beats baking the copy into the image. */}
+      <section className="mx-auto max-w-6xl px-4 pt-5 sm:px-6 sm:pt-7">
+        <HeroSlider />
       </section>
 
       {stats.length > 0 && (
-        <div className="mx-auto -mt-10 max-w-5xl px-4 sm:px-6">
+        <div className="mx-auto mt-6 max-w-5xl px-4 sm:px-6">
           <Card className="overflow-hidden rounded-[22px] border border-[var(--border)] shadow-[0_18px_48px_-28px_rgba(20,49,34,0.55)]">
             <Card.Content className="grid grid-cols-2 p-0 lg:grid-cols-4">
               {stats.map((stat, index) => (
@@ -156,18 +117,6 @@ export default function MarketingHome({
       )}
 
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
-        {/* Operator-managed artwork from the "Banner web" list. These are
-            full-width heroes in their own right - 2.4:1, with their own
-            headline and button - so they get the whole column here rather
-            than being shrunk into the green block above. The carousel
-            renders null on an empty list, hence the guard: without it the
-            margin below would leave a gap over the link tool. */}
-        {banners.length > 0 && (
-          <section className="mt-12">
-            <BannerCarousel banners={banners} />
-          </section>
-        )}
-
         {/* The paste-a-link tool is the main revenue action: give it the first
             slot after the hero, on both the guest and the signed-in home. */}
         <section className="mt-12 grid items-center gap-6 rounded-[28px] bg-white p-5 shadow-[0_24px_60px_-40px_rgba(20,49,34,0.6)] ring-1 ring-[var(--border)] sm:p-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-10">

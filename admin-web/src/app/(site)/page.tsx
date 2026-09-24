@@ -57,7 +57,6 @@ export default async function HomePage() {
         xtra={xtra}
         shops={features.shops ? shops : []}
         campaigns={campaigns}
-        banners={banners}
       />
     );
   }
