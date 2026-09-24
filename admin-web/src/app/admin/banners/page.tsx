@@ -1,9 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AlertDialog, Button, Card, Checkbox, Chip, Input, Label, TextField } from "@heroui/react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { AlertDialog, Button, Card, Checkbox, Chip, Input, Label, Tabs, TextField } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
-import { PlusIcon, TrashIcon } from "@/components/icons";
+import { PlusIcon, TrashIcon, UploadIcon } from "@/components/icons";
+
+// The app and the website keep separate banner lists: the app's carousel is a
+// phone-width card, the website's is a wide 2.4:1 strip, so an image that fits
+// one is cropped badly on the other. Each tab below edits one list; nothing a
+// tab does can touch the other one.
+type Platform = "app" | "web";
+
+const SURFACES: { id: Platform; label: string; hint: string; ratio: string }[] = [
+  {
+    id: "app",
+    label: "Banner app",
+    hint: "Ảnh slide đầu màn hình chính của app. Không bật banner nào thì app tự dùng ảnh mặc định đóng gói sẵn trong bản cài.",
+    ratio: "aspect-[2/1]",
+  },
+  {
+    id: "web",
+    label: "Banner web",
+    hint: "Ảnh slide đầu trang chủ website, chỉ hiện với thành viên đã đăng nhập. Không bật banner nào thì phần này ẩn hẳn.",
+    ratio: "aspect-[2.4/1]",
+  },
+];
 
 type Banner = {
   id: number | string;
@@ -11,6 +32,7 @@ type Banner = {
   linkUrl?: string | null;
   sortOrder: number;
   isActive: boolean;
+  platform?: Platform;
 };
 
 type BannerFormState = {
@@ -34,10 +56,14 @@ function SectionCard({ title, children }: { title: string; children: ReactNode }
 }
 
 function BannerForm({
+  platform,
+  ratio,
   initial,
   onSaved,
   onCancel,
 }: {
+  platform: Platform;
+  ratio: string;
   initial?: Banner;
   onSaved: () => void;
   onCancel?: () => void;
@@ -52,13 +78,40 @@ function BannerForm({
         }
       : EMPTY_FORM
   );
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // Uploading only produces a URL - it fills the field below, it does not save
+  // the banner. That keeps one save path for both ways of supplying an image,
+  // so a picked file and a pasted link end up on exactly the same row shape.
+  async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setMsg("");
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/banners/upload", { method: "POST", body: formData });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!res.ok) throw new Error((data && data.error) || `Tải ảnh thất bại: ${res.status}`);
+      setForm((f) => ({ ...f, imageUrl: data.url }));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Tải ảnh thất bại");
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function save() {
     setMsg("");
     if (!form.imageUrl.trim()) {
-      setMsg("Link ảnh là bắt buộc.");
+      setMsg("Cần tải ảnh lên hoặc dán link ảnh.");
       return;
     }
 
@@ -69,6 +122,7 @@ function BannerForm({
         linkUrl: form.linkUrl.trim() || null,
         sortOrder: Number(form.sortOrder) || 0,
         isActive: form.isActive,
+        platform,
       };
       if (initial) {
         await clientApi.put(`/api/banners/${initial.id}`, payload);
@@ -86,15 +140,33 @@ function BannerForm({
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
-        <TextField
-          name="imageUrl"
-          value={form.imageUrl}
-          onChange={(v) => setForm((f) => ({ ...f, imageUrl: v }))}
-          className="sm:col-span-2"
-        >
-          <Label>Link ảnh banner</Label>
-          <Input placeholder="https://.../banner.png" />
-        </TextField>
+        <div className="space-y-2 sm:col-span-2">
+          <TextField name="imageUrl" value={form.imageUrl} onChange={(v) => setForm((f) => ({ ...f, imageUrl: v }))}>
+            <Label>Ảnh banner</Label>
+            <Input placeholder="Dán link ảnh, hoặc tải ảnh từ máy bằng nút bên dưới" />
+          </TextField>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            onChange={handleFileChange}
+            disabled={uploading}
+            className="hidden"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onPress={() => fileInputRef.current?.click()}
+              isDisabled={uploading || saving}
+              isPending={uploading}
+            >
+              <UploadIcon className="h-4 w-4" />
+              {uploading ? "Đang tải ảnh..." : "Tải ảnh từ máy"}
+            </Button>
+            <span className="text-xs text-[var(--muted)]">PNG, JPG, WEBP hoặc GIF, tối đa 8MB.</span>
+          </div>
+        </div>
         <TextField
           name="linkUrl"
           value={form.linkUrl}
@@ -102,7 +174,7 @@ function BannerForm({
           className="sm:col-span-2"
         >
           <Label>Link khi bấm vào (không bắt buộc)</Label>
-          <Input placeholder="https://... hoặc rewally://campaigns" />
+          <Input placeholder={platform === "web" ? "/products hoặc https://..." : "https://... hoặc rewally://campaigns"} />
         </TextField>
         <TextField name="sortOrder" value={form.sortOrder} onChange={(v) => setForm((f) => ({ ...f, sortOrder: v }))}>
           <Label>Thứ tự hiển thị</Label>
@@ -110,8 +182,14 @@ function BannerForm({
         </TextField>
       </div>
       {form.imageUrl.trim() && (
+        // Previewed at the surface's own ratio so a wrongly-shaped image is
+        // obvious here instead of on the live carousel.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={form.imageUrl.trim()} alt="preview" className="h-28 w-full rounded-lg border border-[var(--border)] object-cover" />
+        <img
+          src={form.imageUrl.trim()}
+          alt="preview"
+          className={`w-full max-w-md rounded-lg border border-[var(--border)] object-cover ${ratio}`}
+        />
       )}
       <Checkbox isSelected={form.isActive} onChange={(isActive) => setForm((f) => ({ ...f, isActive }))}>
         <Checkbox.Control>
@@ -120,7 +198,7 @@ function BannerForm({
         <Checkbox.Content>Đang hiển thị</Checkbox.Content>
       </Checkbox>
       <div className="flex items-center gap-2">
-        <Button onPress={save} isPending={saving}>
+        <Button onPress={save} isPending={saving} isDisabled={uploading}>
           Lưu
         </Button>
         {onCancel && (
@@ -178,7 +256,10 @@ function DeleteBannerButton({ banner, onDeleted }: { banner: Banner; onDeleted: 
   );
 }
 
-export default function BannersPage() {
+// One surface's list. Mounted per tab panel, so switching tabs refetches that
+// surface rather than filtering a list already in memory - the two lists are
+// short and the dashboard is edited by one person at a time.
+function BannerList({ platform, ratio, hint }: { platform: Platform; ratio: string; hint: string }) {
   const [banners, setBanners] = useState<Banner[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<Banner["id"] | null>(null);
@@ -186,11 +267,12 @@ export default function BannersPage() {
 
   const load = useCallback(async () => {
     try {
-      setBanners(await clientApi.get<Banner[]>("/api/banners"));
+      setError("");
+      setBanners(await clientApi.get<Banner[]>(`/api/banners?platform=${platform}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không tải được danh sách banner");
     }
-  }, []);
+  }, [platform]);
 
   useEffect(() => {
     load();
@@ -203,16 +285,11 @@ export default function BannersPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--foreground)]">Banner trang chủ</h1>
-          <p className="mt-0.5 text-xs text-[var(--muted)]">
-            Ảnh slide hiển thị đầu màn hình chính của app. Không có banner nào đang bật thì app tự dùng 4 ảnh mặc định đóng gói sẵn.
-          </p>
-        </div>
+    <div className="space-y-4 pt-4">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-xs text-[var(--muted)]">{hint}</p>
         {!creating && (
-          <Button onPress={() => setCreating(true)}>
+          <Button className="flex-none" onPress={() => setCreating(true)}>
             <PlusIcon className="h-4 w-4" />
             Thêm banner
           </Button>
@@ -223,12 +300,12 @@ export default function BannersPage() {
 
       {creating && (
         <SectionCard title="Banner mới">
-          <BannerForm onSaved={handleSaved} onCancel={() => setCreating(false)} />
+          <BannerForm platform={platform} ratio={ratio} onSaved={handleSaved} onCancel={() => setCreating(false)} />
         </SectionCard>
       )}
 
       {banners && banners.length === 0 && !creating && (
-        <p className="text-sm text-[var(--muted)]">Chưa có banner nào, app đang dùng 4 ảnh mặc định.</p>
+        <p className="text-sm text-[var(--muted)]">Chưa có banner nào cho phần này.</p>
       )}
 
       <div className="space-y-4">
@@ -236,7 +313,13 @@ export default function BannersPage() {
           banners.map((b) =>
             editingId === b.id ? (
               <SectionCard key={b.id} title={`Sửa banner #${b.id}`}>
-                <BannerForm initial={b} onSaved={handleSaved} onCancel={() => setEditingId(null)} />
+                <BannerForm
+                  platform={platform}
+                  ratio={ratio}
+                  initial={b}
+                  onSaved={handleSaved}
+                  onCancel={() => setEditingId(null)}
+                />
               </SectionCard>
             ) : (
               <Card key={b.id}>
@@ -262,6 +345,34 @@ export default function BannersPage() {
             )
           )}
       </div>
+    </div>
+  );
+}
+
+export default function BannersPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-lg font-semibold text-[var(--foreground)]">Banner trang chủ</h1>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">
+          App và website dùng hai danh sách riêng. Sửa ở tab nào chỉ ảnh hưởng đúng nơi đó.
+        </p>
+      </div>
+
+      <Tabs defaultSelectedKey="app">
+        <Tabs.List aria-label="Nền tảng hiển thị banner">
+          {SURFACES.map((s) => (
+            <Tabs.Tab key={s.id} id={s.id}>
+              {s.label}
+            </Tabs.Tab>
+          ))}
+        </Tabs.List>
+        {SURFACES.map((s) => (
+          <Tabs.Panel key={s.id} id={s.id}>
+            <BannerList platform={s.id} ratio={s.ratio} hint={s.hint} />
+          </Tabs.Panel>
+        ))}
+      </Tabs>
     </div>
   );
 }

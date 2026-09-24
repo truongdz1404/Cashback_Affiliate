@@ -4,3 +4,5 @@ storage/*
 !storage/.gitkeep
 public/bank-logos/*
 !public/bank-logos/.gitkeep
+public/banner-uploads/*
+!public/banner-uploads/.gitkeep

@@ -46,6 +46,7 @@ export default function BannerCarousel({ banners }: { banners: Banner[] }) {
         style={{ transform: `translateX(-${index * 100}%)` }}
       >
         {banners.map((banner, i) => {
+          const isExternal = banner.linkUrl != null && /^https?:\/\//i.test(banner.linkUrl);
           const image = (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -58,7 +59,7 @@ export default function BannerCarousel({ banners }: { banners: Banner[] }) {
           return (
             <div key={banner.id} className="w-full shrink-0">
               {banner.linkUrl ? (
-                <a href={banner.linkUrl} target="_blank" rel="noopener noreferrer" className="block">
+                <a href={banner.linkUrl} target={isExternal ? "_blank" : undefined} rel={isExternal ? "noopener noreferrer" : undefined} className="block">
                   {image}
                 </a>
               ) : (

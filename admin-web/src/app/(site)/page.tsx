@@ -18,17 +18,16 @@ export const dynamic = "force-dynamic";
 
 const RAIL_LIMIT = 12;
 
-const FALLBACK_BANNERS: Banner[] = [
-  { id: -1, imageUrl: "/banner-1.png", linkUrl: "/products", sortOrder: 0 },
-  { id: -2, imageUrl: "/banner-4.png", linkUrl: "/register", sortOrder: 1 },
-];
-
 export default async function HomePage() {
   const [user, features, banners, categories, topCashback, bestSellers, xtra, recommended, shops, campaigns, count] =
     await Promise.all([
       getSessionUser(),
       getAppFeatures(),
-      appFetchSafe<Banner[]>("/banners", []),
+      // ?platform=web: the app and the website keep separate banner lists and
+      // the backend answers with the app's one when no surface is named. The
+      // fallback here is [] - there used to be four hard-coded images that were
+      // never added to public/, so the carousel rendered four broken slides.
+      appFetchSafe<Banner[]>("/banners?platform=web", []),
       appFetchSafe<ShoppingCategory[]>("/shopping-categories?minCount=4", []),
       appFetchSafe<ShoppingProduct[]>(
         `/shopping-products${buildQuery({ limit: RAIL_LIMIT, sort: "commission_desc" })}`,
@@ -47,7 +46,6 @@ export default async function HomePage() {
     ]);
 
   const isAuthenticated = user != null;
-  const slides = banners.length > 0 ? banners : FALLBACK_BANNERS;
 
   if (!isAuthenticated) {
     return (
@@ -65,9 +63,13 @@ export default async function HomePage() {
 
   return (
     <main className="mx-auto max-w-6xl px-4 pb-14 sm:px-6">
-      <section className="pt-5">
-        <BannerCarousel banners={slides} />
-      </section>
+      {/* The carousel renders null on an empty list, so the section wrapper is
+          conditional too - otherwise it leaves a gap above the link tool. */}
+      {banners.length > 0 && (
+        <section className="pt-5">
+          <BannerCarousel banners={banners} />
+        </section>
+      )}
 
       {/* The paste-a-link tool is the main revenue action, so it sits right under the banner. */}
       <section className="mt-5 rounded-[26px] bg-[var(--accent-soft)] p-4 ring-1 ring-[var(--accent)]/25 sm:p-6">

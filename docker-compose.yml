@@ -27,6 +27,8 @@ services:
     volumes:
       - ./playwright-service/storage:/app/storage
       - ./playwright-service/public/bank-logos:/app/public/bank-logos
+      # Uploaded banner artwork - outside the image so a rebuild never wipes it.
+      - ./playwright-service/public/banner-uploads:/app/public/banner-uploads
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:

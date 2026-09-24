@@ -185,18 +185,27 @@ model CampaignReward {
   @@map("campaign_rewards")
 }
 
-// Home-screen slide banners, managed from the admin dashboard so the app
-// never needs a new store release to change/add/remove one. `linkUrl` is
+// Home-screen slide banners, managed from the admin dashboard so neither the
+// app nor the website needs a release to change/add/remove one. `linkUrl` is
 // optional - a plain deep link (e.g. rewally://campaigns) or https URL the
-// app opens on tap; sortOrder controls left-to-right slide order.
+// surface opens on tap; sortOrder controls left-to-right slide order.
 model Banner {
   id        Int      @id @default(autoincrement())
   imageUrl  String   @map("image_url")
   linkUrl   String?  @map("link_url")
   sortOrder Int      @default(0) @map("sort_order")
   isActive  Boolean  @default(true) @map("is_active")
+  // Which surface shows this slide: 'app' or 'web'. Two separate lists rather
+  // than one list with a 'both' option, because the two carousels are shaped
+  // differently - the app's is a phone-width card, the website's is a 2.4:1
+  // strip - so one image almost never suits both. Defaults to 'app' so rows
+  // created before this column existed keep the behaviour they were made for,
+  // and so an older app build (which asks without saying which surface it is)
+  // still gets exactly what it used to.
+  platform  String   @default("app")
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([platform, isActive, sortOrder])
   @@map("banners")
 }
 

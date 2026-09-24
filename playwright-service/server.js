@@ -24,6 +24,7 @@ const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
 const recommendationsRepo = require('./lib/repositories/recommendations');
 const searchHistoryRepo = require('./lib/repositories/searchHistory');
 const shoppingProductImport = require('./lib/shoppingProductImport');
+const bannerUploads = require('./lib/bannerUploads');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
 const shopsRepo = require('./lib/repositories/shops');
 const shopNameResolutionsRepo = require('./lib/repositories/shopNameResolutions');
@@ -119,6 +120,12 @@ function parseOffset(value) {
 // Bank logos crawled by scripts/syncBanks.js - served as plain static files,
 // same origin as the API so the app doesn't need a separate asset host.
 app.use('/app/bank-logos', express.static(path.join(__dirname, 'public', 'bank-logos')));
+
+// Banner artwork uploaded from the dashboard. Same deal as the logos above,
+// and registered here for the same reason: both the app and the public website
+// fetch these with a plain <img src>, i.e. no x-api-key header, so the mount
+// has to come before the auth middleware further down.
+app.use('/app/banner-uploads', express.static(bannerUploads.UPLOAD_DIR, { maxAge: '7d' }));
 
 // Zalo calls this directly (its own secret token, not our x-api-key), so it
 // must be registered before the x-api-key middleware below. Ack immediately
@@ -710,9 +717,11 @@ app.get('/app/banks', appAuth.requireAppUser, async (req, res) => {
 // logged-out visitors, otherwise its home page can only ever be a static
 // brochure. A token, when present, still unlocks the personalized behaviour
 // below.
-app.get('/app/banners', appAuth.optionalAppUser, async (_req, res) => {
+app.get('/app/banners', appAuth.optionalAppUser, async (req, res) => {
   try {
-    res.json(await bannersRepo.listActive());
+    // Defaults to the app's list when no surface is named, which is what every
+    // already-installed build sends. The website asks for ?platform=web.
+    res.json(await bannersRepo.listActive(req.query.platform));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2036,9 +2045,29 @@ app.post('/admin/shop-detail-enrich', adminAuth.requireAdmin, async (req, res) =
   }
 });
 
-app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
+// Raw file bytes rather than multipart, matching /admin/shopping-products/import:
+// the admin-web proxy reads the picked file and forwards it verbatim with the
+// name in a header, so this service never needs a multipart parser. Returns the
+// URL to put in the banner's image field - uploading is just a convenient way
+// of producing that URL, the row itself is saved by the normal POST/PUT below.
+app.post(
+  '/admin/banners/upload',
+  adminAuth.requireAdmin,
+  express.raw({ type: '*/*', limit: '10mb' }),
+  async (req, res) => {
+    try {
+      const saved = await bannerUploads.save(req.body, { baseUrl: PUBLIC_BASE_URL });
+      console.log(`[banners] uploaded ${decodeURIComponent(req.get('x-file-name') || 'unnamed')} -> ${saved.fileName} (${saved.bytes} bytes)`);
+      res.json(saved);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+app.get('/admin/banners', adminAuth.requireAdmin, async (req, res) => {
   try {
-    res.json(await bannersRepo.listAll());
+    res.json(await bannersRepo.listAll(req.query.platform));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2046,9 +2075,9 @@ app.get('/admin/banners', adminAuth.requireAdmin, async (_req, res) => {
 
 app.post('/admin/banners', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const { imageUrl, linkUrl, sortOrder, isActive } = req.body;
+    const { imageUrl, linkUrl, sortOrder, isActive, platform } = req.body;
     if (!imageUrl) return res.status(400).json({ error: 'body.imageUrl is required' });
-    res.json(await bannersRepo.create({ imageUrl, linkUrl, sortOrder, isActive }));
+    res.json(await bannersRepo.create({ imageUrl, linkUrl, sortOrder, isActive, platform }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2056,8 +2085,8 @@ app.post('/admin/banners', adminAuth.requireAdmin, async (req, res) => {
 
 app.put('/admin/banners/:id', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const { imageUrl, linkUrl, sortOrder, isActive } = req.body;
-    const updated = await bannersRepo.update(req.params.id, { imageUrl, linkUrl, sortOrder, isActive });
+    const { imageUrl, linkUrl, sortOrder, isActive, platform } = req.body;
+    const updated = await bannersRepo.update(req.params.id, { imageUrl, linkUrl, sortOrder, isActive, platform });
     if (!updated) return res.status(404).json({ error: 'banner not found' });
     res.json(updated);
   } catch (err) {

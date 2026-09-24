@@ -258,7 +258,15 @@ export type LinkHistoryItem = {
 
 export type Bank = { code: string; bin: string; name: string; shortName: string; logoUrl: string | null };
 
-export type Banner = { id: number; imageUrl: string; linkUrl: string | null; sortOrder: number };
+export type Banner = {
+  id: number;
+  imageUrl: string;
+  linkUrl: string | null;
+  sortOrder: number;
+  // Which carousel the slide belongs to. The app and the website keep separate
+  // lists; the backend defaults to "app" when a caller does not say.
+  platform?: "app" | "web";
+};
 
 export type OAuthConfig = {
   google: { enabled: true; clientId: string } | { enabled: false };
