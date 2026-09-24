@@ -392,7 +392,7 @@ export default function AppConfigPage() {
             onChange={(bannerAutoplayMs) => patch("home", { bannerAutoplayMs })}
           />
           <NumberField
-            label="Số sản phẩm gợi ý"
+            label="Số sản phẩm gợi ý mỗi lần tải (app)"
             value={config.home.recommendationsLimit}
             onChange={(recommendationsLimit) => patch("home", { recommendationsLimit })}
           />

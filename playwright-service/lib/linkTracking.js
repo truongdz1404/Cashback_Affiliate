@@ -1,5 +1,6 @@
 const users = require('./repositories/users');
 const linksRepo = require('./repositories/links');
+const recommendationsRepo = require('./repositories/recommendations');
 const prisma = require('./prisma');
 
 // Called before generating the Shopee custom link. If a zaloUserId is
@@ -58,6 +59,10 @@ async function recordLink(userId, subId, productLinks, result, fallbackItemId, e
     priceValue: meta ? meta.priceValue : null,
     imageUrl: meta ? meta.imageUrl : null,
   });
+  // This row is the newest and heaviest signal the recommendation scoring has,
+  // so any ordering cached before it is out of date. Suggestions are a feed the
+  // user scrolls now; they should reflect what was just tapped.
+  recommendationsRepo.invalidateFeedOrder(userId);
 }
 
 // Callers that already know the shop (the Shopping tab, where the product row

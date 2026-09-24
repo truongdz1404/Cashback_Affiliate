@@ -52,6 +52,80 @@ const COMMISSION_MAX_BONUS = 0.5;
 // number so it scales with `limit`.
 const MAX_SHOP_SHARE = 0.4;
 
+// How far the personalized part of the Home feed runs before it falls through
+// to the plain top-commission list. The feed is an endless vertical grid now,
+// but a user's link history can only justify so many products; past a few
+// hundred the scoring is noise, and stopping here also bounds the work below.
+const FEED_DEPTH = 300;
+
+// Scoring the candidate pool costs well over a second on the production box,
+// and it used to be paid once per request. That was fine for a fixed rail of
+// ten; it is not fine for a feed that asks for another page every time the
+// user's thumb moves. The ORDER cannot change between two scrolls anyway, so
+// it is computed once and remembered as a list of product ids - later pages
+// only fetch the rows they actually show.
+//
+// Short-lived on purpose: three minutes covers one continuous scroll, and is
+// short enough that a link the user creates right afterwards shows up in
+// their suggestions almost immediately. Bounded in size so a burst of users
+// cannot grow it without limit; a miss only costs the scoring pass again.
+const FEED_CACHE_TTL_MS = 3 * 60 * 1000;
+// The TTL slides on every page, so one continuous scroll keeps ONE ordering
+// however long it lasts - re-ranking halfway down would shuffle products the
+// user has already scrolled past back into their path. The ceiling stops that
+// from going on forever: a feed open for half an hour gets rebuilt.
+const FEED_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
+const FEED_CACHE_MAX_USERS = 500;
+
+const feedOrderCache = new Map();
+
+function readFeedOrder(userId) {
+  const hit = feedOrderCache.get(userId);
+  if (!hit) return null;
+  const now = Date.now();
+  if (now >= hit.expiresAt || now >= hit.builtAt + FEED_CACHE_MAX_AGE_MS) {
+    feedOrderCache.delete(userId);
+    return null;
+  }
+  hit.expiresAt = now + FEED_CACHE_TTL_MS;
+  return hit.ids;
+}
+
+function writeFeedOrder(userId, ids) {
+  // Insertion-ordered Map, and every write re-inserts, so the first key is
+  // always the least recently built ordering.
+  if (feedOrderCache.size >= FEED_CACHE_MAX_USERS && !feedOrderCache.has(userId)) {
+    const oldest = feedOrderCache.keys().next();
+    if (!oldest.done) feedOrderCache.delete(oldest.value);
+  }
+  const now = Date.now();
+  feedOrderCache.delete(userId);
+  feedOrderCache.set(userId, { ids, builtAt: now, expiresAt: now + FEED_CACHE_TTL_MS });
+}
+
+// Called when something happens that changes what a user should be shown -
+// creating a link is the whole input to the scoring, so an ordering built
+// before it is stale. Without this a user could tap a product and then scroll
+// a feed that still knows nothing about it for half an hour.
+function invalidateFeedOrder(userId) {
+  feedOrderCache.delete(userId);
+}
+
+// Loads products for a remembered slice of the ordering, keeping that order -
+// `IN (...)` comes back in whatever order Postgres likes. Asks for a few more
+// ids than the page needs so a product deleted since the ordering was built
+// shortens the window rather than the page: a short page is how the client
+// decides it has reached the end of the feed.
+async function productsInOrder(ids) {
+  if (!ids.length) return [];
+  const rows = await prisma.shoppingProduct.findMany({
+    where: { id: { in: ids } },
+    include: SHOP_INCLUDE,
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
 // Recency decay across the user's signal history.
 //
 // Was 1/(index+1) - a harmonic curve so steep that the 10th most recent
@@ -65,12 +139,19 @@ function weightAt(index) {
   return 1 / Math.sqrt(index + 1);
 }
 
-async function fallbackProducts(limit, excludeIds = new Set()) {
+// `skip` exists because the Home feed is paginated: once a user has scrolled
+// past everything their history can explain, the rest of the feed is this
+// list, and it has to keep advancing instead of handing back the same
+// top-commission products on every further page. `id desc` breaks ties for
+// the same reason it does in rankProductsForUser - most rows share a
+// scrapedAt, and an unstable tie order makes skip/take repeat or drop rows.
+async function fallbackProducts(limit, excludeIds = new Set(), skip = 0) {
   const products = await prisma.shoppingProduct.findMany({
     where: excludeIds.size ? { id: { notIn: [...excludeIds] } } : undefined,
     include: SHOP_INCLUDE,
-    orderBy: [{ commissionRateValue: 'desc' }, { scrapedAt: 'desc' }],
+    orderBy: [{ commissionRateValue: 'desc' }, { scrapedAt: 'desc' }, { id: 'desc' }],
     take: limit,
+    skip,
   });
   return products;
 }
@@ -292,7 +373,7 @@ function scoreProduct(product, affinity) {
  * page, for the case where several recent links point at the same store and
  * there is really only one bucket to deal from.
  */
-function interleaveByGroup(entries, limit, { capShare = MAX_SHOP_SHARE } = {}) {
+function interleaveByGroup(entries, limit, { capShare = MAX_SHOP_SHARE, capWindow = limit } = {}) {
   const buckets = new Map();
   const unmatched = [];
 
@@ -318,53 +399,71 @@ function interleaveByGroup(entries, limit, { capShare = MAX_SHOP_SHARE } = {}) {
   for (const bucket of ordered) bucket.items.sort((a, b) => b.score - a.score);
   unmatched.sort((a, b) => b.score - a.score);
 
-  const maxPerShop = Math.max(1, Math.ceil(limit * capShare));
-  const perShop = new Map();
+  // The shop quota is a PAGE budget, not a lifetime one: it counts only the
+  // last `capWindow` items placed. With the default window (the caller asks
+  // for one page) that is exactly the old behaviour. It matters when the
+  // caller blends a long list in one go for a paginated feed - a lifetime
+  // quota would spend a shop's whole allowance on page one and never show it
+  // again, where what we want is "no more than two in five, on every page".
+  const maxPerShop = Math.max(1, Math.ceil(capWindow * capShare));
+  // A quota as large as the window can never block, so skip the bookkeeping
+  // entirely - that is the full-catalog ordering, which passes capShare: 1.
+  const capDisabled = maxPerShop >= capWindow;
   const out = [];
-  const deferred = [];
+  const shopKeys = [];
 
-  const accept = (entry) => {
-    const shopKey = entry.product.shopId || normalizeName(entry.product.shopName) || null;
-    if (shopKey) {
-      const used = perShop.get(shopKey) || 0;
-      if (used >= maxPerShop) {
-        deferred.push(entry);
-        return false;
-      }
-      perShop.set(shopKey, used + 1);
+  const shopKeyOf = (entry) => entry.product.shopId || normalizeName(entry.product.shopName) || null;
+
+  const overQuota = (shopKey) => {
+    if (capDisabled || !shopKey) return false;
+    let used = 0;
+    for (let i = Math.max(0, out.length - capWindow); i < out.length; i += 1) {
+      if (shopKeys[i] === shopKey) used += 1;
     }
-    out.push(entry);
-    return true;
+    return used >= maxPerShop;
   };
 
-  // Round-robin across buckets until the page is full or everything is used.
+  const place = (entry) => {
+    out.push(entry);
+    shopKeys.push(shopKeyOf(entry));
+  };
+
+  // Round-robin across buckets until the list is full or everything is used.
   const cursors = ordered.map(() => 0);
   let progressed = true;
   while (out.length < limit && progressed) {
     progressed = false;
     for (let i = 0; i < ordered.length && out.length < limit; i += 1) {
-      const bucket = ordered[i];
-      // Keep walking this bucket until one entry is actually accepted - an
-      // entry the shop cap rejects must not cost the bucket its turn.
-      while (cursors[i] < bucket.items.length) {
-        const entry = bucket.items[cursors[i]];
+      if (cursors[i] >= ordered[i].items.length) continue;
+      const entry = ordered[i].items[cursors[i]];
+      // An entry the quota blocks keeps its place in its bucket and gets
+      // another turn once the window has slid past whatever blocked it. It is
+      // postponed, never discarded - which is why there is no deferred pile
+      // any more.
+      if (overQuota(shopKeyOf(entry))) continue;
+      cursors[i] += 1;
+      place(entry);
+      progressed = true;
+    }
+    if (!progressed) {
+      // Every bucket that still holds something is blocked by the quota: they
+      // all point at the same shop and there is genuinely nothing else to
+      // show. Place one anyway rather than cutting the list short.
+      for (let i = 0; i < ordered.length && out.length < limit; i += 1) {
+        if (cursors[i] >= ordered[i].items.length) continue;
+        place(ordered[i].items[cursors[i]]);
         cursors[i] += 1;
         progressed = true;
-        if (accept(entry)) break;
+        break;
       }
     }
   }
 
-  // Products that answer to nothing the user showed interest in, then the
-  // ones the shop cap pushed out. Both only ever pad a page that came up
-  // short.
+  // Products that answer to nothing the user showed interest in only ever pad
+  // a list that came up short.
   for (const entry of unmatched) {
     if (out.length >= limit) break;
-    accept(entry);
-  }
-  for (const entry of deferred) {
-    if (out.length >= limit) break;
-    out.push(entry);
+    place(entry);
   }
 
   return out;
@@ -387,11 +486,49 @@ function interleaveByGroup(entries, limit, { capShare = MAX_SHOP_SHARE } = {}) {
  * blended across interests by interleaveByGroup so the page is not one
  * interest repeated. Users with no usable history at all get the
  * top-commission catalog instead, so the section is never empty.
+ *
+ * Paginated, because the Home tab is an endless vertical grid rather than a
+ * rail of ten. The whole feed is ordered in one pass and then sliced: ordering
+ * page by page would let a product that ranked 11th on page one rank 3rd on
+ * page two and appear twice. The blend still spends its shop quota per page
+ * (capWindow) so no page is dominated by one shop, and the ordering is cached
+ * per user so scrolling does not re-score the catalogue on every page.
  */
-async function recommendForUser(userId, { limit = 10 } = {}) {
+async function recommendForUser(userId, { limit = 10, offset = 0 } = {}) {
+  // Past the personalized part there is nothing left to personalize with, so
+  // the feed continues down the top-commission catalogue instead of stopping.
+  // `order` is the personalized ordering this feed is paging through. It is
+  // excluded wholesale from the fallback, not just the current page: the two
+  // lists are drawn from the same catalogue, so without that, a product shown
+  // on page 3 comes back as filler on page 13. Excluding a fixed set also
+  // makes `skip` exact, because the fallback list is then the same list on
+  // every page.
+  const servePadded = async (items, reason, order) => {
+    if (items.length >= limit) return { items, reason };
+    const excludeIds = new Set(order);
+    for (const p of items) excludeIds.add(p.id);
+    const skip = Math.max(0, offset + items.length - order.length);
+    const filler = await fallbackProducts(limit - items.length, excludeIds, skip);
+    return { items: [...items, ...filler], reason };
+  };
+
+  const cachedOrder = readFeedOrder(userId);
+  if (cachedOrder) {
+    const page = offset < cachedOrder.length
+      ? await productsInOrder(cachedOrder.slice(offset, offset + limit))
+      : [];
+    // A page can only come back short because rows were deleted since the
+    // ordering was built, or because the ordering ran out here. The second is
+    // the real end of the personalized feed; the first would wrongly look like
+    // it, so re-blend rather than serve it.
+    if (page.length === limit || offset + limit >= cachedOrder.length) {
+      return servePadded(page, 'personalized', cachedOrder);
+    }
+  }
+
   const affinity = await buildAffinity(userId);
   if (!affinity.hasSignal) {
-    return { items: await fallbackProducts(limit), reason: 'no_history' };
+    return { items: await fallbackProducts(limit, new Set(), offset), reason: 'no_history' };
   }
 
   const { alreadyLinkedItemIds } = affinity;
@@ -406,15 +543,14 @@ async function recommendForUser(userId, { limit = 10 } = {}) {
     .map((product) => ({ product, ...scoreProduct(product, affinity) }))
     .filter((entry) => entry.score > 0);
 
-  const top = interleaveByGroup(scored, limit).map((entry) => entry.product);
+  const blended = interleaveByGroup(scored, FEED_DEPTH, { capWindow: limit }).map((entry) => entry.product);
+  const order = blended.map((p) => p.id);
+  writeFeedOrder(userId, order);
 
-  if (top.length < limit) {
-    const usedIds = new Set(top.map((p) => p.id));
-    const filler = await fallbackProducts(limit - top.length, usedIds);
-    top.push(...filler);
-  }
-
-  return { items: top, reason: top.length ? 'personalized' : 'no_match' };
+  const page = blended.slice(offset, offset + limit);
+  // 'no_match' describes the user's history, not this page: a later page
+  // running out of personalized results is just the end of the feed.
+  return servePadded(page, blended.length ? 'personalized' : 'no_match', order);
 }
 
 /**
@@ -470,6 +606,7 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
 
 module.exports = {
   recommendForUser,
+  invalidateFeedOrder,
   rankProductsForUser,
   buildAffinity,
   scoreProduct,

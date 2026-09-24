@@ -1009,6 +1009,9 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
         shopId: shop.shopId,
         imageUrl: shop.portraitUrl || shop.imageUrl,
       });
+      // Same reason as recordLink: a fresh shop signal outdates any cached
+      // suggestions ordering.
+      recommendationsRepo.invalidateFeedOrder(tracking.userId);
     }
 
     res.json({ affiliateUrl: url, tracked, reused: false });
@@ -1095,14 +1098,18 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRate
 // for how this is scored off the user's "Tạo link" history.
 app.get('/app/recommendations', appAuth.optionalAppUser, async (req, res) => {
   try {
-    const limit = parseLimit(req.query.limit, 10, 30);
+    // The Home tab scrolls this list instead of showing a fixed rail, so it
+    // pages like any other feed. Max 50 to match the bound on the remote-config
+    // page size the client asks with.
+    const limit = parseLimit(req.query.limit, 10, 50);
+    const offset = parseOffset(req.query.offset);
     const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
     const pct = await getEffectivePct(user);
     // Nothing to personalize against for a logged-out visitor - the website
     // shows the highest-cashback products instead, under a neutral heading.
     const items = req.appUserId
-      ? (await recommendationsRepo.recommendForUser(req.appUserId, { limit })).items
-      : await shoppingProductsRepo.list({ limit, sort: 'commission_desc' });
+      ? (await recommendationsRepo.recommendForUser(req.appUserId, { limit, offset })).items
+      : await shoppingProductsRepo.list({ limit, offset, sort: 'commission_desc' });
     res.json(items.map((p) => ({
       ...p,
       userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,

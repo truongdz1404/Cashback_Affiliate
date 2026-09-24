@@ -88,7 +88,9 @@ const DEFAULTS = {
   },
   home: {
     bannerAutoplayMs: 4000,
-    recommendationsLimit: 10,
+    // Now a PAGE size, not a total: the Home tab scrolls suggestions endlessly
+    // in a two-column grid, so this is how many arrive per fetch. Ten rows.
+    recommendationsLimit: 20,
     taskFallbackSubtitle: 'Hoàn thành nhiệm vụ để nhận thêm xu',
     platforms: [
       { name: 'Shopee', reward: 'Hoàn 10%', iconUrl: 'https://cdn.simpleicons.org/shopee/EE4D2D' },
