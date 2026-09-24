@@ -19,7 +19,11 @@ async function prepareSubId(zaloUserId, subIds, source = LINK_SOURCES.ZALO) {
   const user = await users.getOrCreateUserByZaloId(zaloUserId);
   const subId = linksRepo.generateSubId();
   return {
-    finalSubIds: { ...(subIds || {}), sub_id1: subId, sub_id2: source },
+    // Source is the DEFAULT for slot 2, not an override. /custom-link and
+    // /link-and-commission let their caller (n8n, the Zalo flows) pass its own
+    // subIds, and silently replacing a slot someone is already using would
+    // break their reporting to fix ours.
+    finalSubIds: { sub_id2: source, ...(subIds || {}), sub_id1: subId },
     userId: user.id,
     subId,
     source,
@@ -37,7 +41,7 @@ function prepareSubIdForUser(userId, subIds, source) {
 
   const subId = linksRepo.generateSubId();
   return {
-    finalSubIds: { ...(subIds || {}), sub_id1: subId, sub_id2: source },
+    finalSubIds: { sub_id2: source, ...(subIds || {}), sub_id1: subId },
     userId: Number(userId),
     subId,
     source,
