@@ -47,6 +47,14 @@ const POOL_PER_SHOP = 300;
 // beyond what the user's history already describes - and so a brand-new user
 // with one link does not get a four-product feed.
 const POOL_FRESH = 2000;
+// The Shopping tab is a catalogue listing, not a short suggestions feed: it
+// scrolls, and before this it could scroll CANDIDATE_POOL_SIZE products deep.
+// Its fresh slice keeps that depth so the interest-driven rows are added to
+// what browse already showed rather than replacing most of it.
+const POOL_FRESH_BROWSE = CANDIDATE_POOL_SIZE;
+// Spare ids fetched with each cached page, to absorb rows deleted since the
+// ordering was built.
+const PAGE_SLACK = 5;
 
 // Recent Shopping-tab search terms are a weaker, noisier signal than an
 // actual "Tạo link" action (a search doesn't mean a purchase), so they fold
@@ -98,32 +106,52 @@ const FEED_CACHE_TTL_MS = 3 * 60 * 1000;
 // user has already scrolled past back into their path. The ceiling stops that
 // from going on forever: a feed open for half an hour gets rebuilt.
 const FEED_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
-const FEED_CACHE_MAX_USERS = 500;
+// Two orderings per user now - the Home feed and the Shopping tab browse
+// list - so this counts entries, not people.
+const FEED_CACHE_MAX_ENTRIES = 1000;
 
 const feedOrderCache = new Map();
 
-function readFeedOrder(userId) {
-  const hit = feedOrderCache.get(userId);
+// The Home feed and the Shopping tab are ranked from the same affinity but
+// are not the same list (browse keeps products the user has already linked,
+// the feed drops them), so they cache separately and are dropped together.
+const feedKey = (userId) => `${userId}|feed`;
+const browseKey = (userId) => `${userId}|browse`;
+
+function readFeedOrder(key) {
+  const hit = feedOrderCache.get(key);
   if (!hit) return null;
   const now = Date.now();
   if (now >= hit.expiresAt || now >= hit.builtAt + FEED_CACHE_MAX_AGE_MS) {
-    feedOrderCache.delete(userId);
+    feedOrderCache.delete(key);
     return null;
   }
   hit.expiresAt = now + FEED_CACHE_TTL_MS;
   return hit.ids;
 }
 
-function writeFeedOrder(userId, ids) {
+// How much of an ordering is worth remembering. 3000 products is 150 pages of
+// a 20-item grid; nobody scrolls there, and the whole point of the cache is the
+// first few pages. Uncapped, a browse ordering is the entire pool, and this
+// service shares 3.9GB with Chromium - 1000 entries of ~5000 ids each is tens
+// of megabytes held for nothing. Past the cap the list simply ends, exactly as
+// it did when the pool itself ran out.
+const ORDER_MEMORY_LIMIT = 3000;
+
+function writeFeedOrder(key, ids) {
   // Insertion-ordered Map, and every write re-inserts, so the first key is
   // always the least recently built ordering.
-  if (feedOrderCache.size >= FEED_CACHE_MAX_USERS && !feedOrderCache.has(userId)) {
+  if (feedOrderCache.size >= FEED_CACHE_MAX_ENTRIES && !feedOrderCache.has(key)) {
     const oldest = feedOrderCache.keys().next();
     if (!oldest.done) feedOrderCache.delete(oldest.value);
   }
   const now = Date.now();
-  feedOrderCache.delete(userId);
-  feedOrderCache.set(userId, { ids, builtAt: now, expiresAt: now + FEED_CACHE_TTL_MS });
+  feedOrderCache.delete(key);
+  feedOrderCache.set(key, {
+    ids: ids.length > ORDER_MEMORY_LIMIT ? ids.slice(0, ORDER_MEMORY_LIMIT) : ids,
+    builtAt: now,
+    expiresAt: now + FEED_CACHE_TTL_MS,
+  });
 }
 
 // Called when something happens that changes what a user should be shown -
@@ -131,7 +159,8 @@ function writeFeedOrder(userId, ids) {
 // before it is stale. Without this a user could tap a product and then scroll
 // a feed that still knows nothing about it for half an hour.
 function invalidateFeedOrder(userId) {
-  feedOrderCache.delete(userId);
+  feedOrderCache.delete(feedKey(userId));
+  feedOrderCache.delete(browseKey(userId));
 }
 
 // Loads products for a remembered slice of the ordering, keeping that order -
@@ -541,9 +570,14 @@ function strongest(map, limit) {
  * Matching is by accented word (rawTokens) because this is a LIKE against
  * Shopee's own titles - see the note on rawTokens in lib/textMatch.js.
  */
-async function candidatePool(affinity) {
+async function candidatePool(affinity, { fresh: freshCount = POOL_FRESH, excludeLinked = true } = {}) {
   const { alreadyLinkedItemIds, hintWords, hintCategories, hintShopIds } = affinity;
-  const notLinked = alreadyLinkedItemIds.size ? { productId: { notIn: [...alreadyLinkedItemIds] } } : {};
+  // The Home feed hides what the user has already linked - suggesting it back
+  // is noise. The Shopping tab must not: it is the catalogue, and a product
+  // vanishing from browse because the user once made a link for it would look
+  // like the catalogue lost it.
+  const notLinked =
+    excludeLinked && alreadyLinkedItemIds.size ? { productId: { notIn: [...alreadyLinkedItemIds] } } : {};
 
   const words = strongest(hintWords, POOL_WORDS);
   const categories = strongest(hintCategories, 8);
@@ -583,7 +617,7 @@ async function candidatePool(affinity) {
       where: notLinked,
       include: SHOP_INCLUDE,
       orderBy: { id: 'desc' },
-      take: POOL_FRESH,
+      take: freshCount,
     }),
     ...idQueries,
   ]);
@@ -644,7 +678,7 @@ async function recommendForUser(userId, { limit = 10, offset = 0 } = {}) {
     return { items: [...items, ...filler], reason };
   };
 
-  const cachedOrder = readFeedOrder(userId);
+  const cachedOrder = readFeedOrder(feedKey(userId));
   if (cachedOrder) {
     const page = offset < cachedOrder.length
       ? await productsInOrder(cachedOrder.slice(offset, offset + limit))
@@ -671,7 +705,7 @@ async function recommendForUser(userId, { limit = 10, offset = 0 } = {}) {
 
   const blended = interleaveByGroup(scored, FEED_DEPTH, { capWindow: limit }).map((entry) => entry.product);
   const order = blended.map((p) => p.id);
-  writeFeedOrder(userId, order);
+  writeFeedOrder(feedKey(userId), order);
 
   const page = blended.slice(offset, offset + limit);
   // 'no_match' describes the user's history, not this page: a later page
@@ -710,12 +744,35 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
     });
   }
 
-  const candidates = await prisma.shoppingProduct.findMany({
-    where,
-    include: SHOP_INCLUDE,
-    orderBy: { id: 'desc' },
-    take: CANDIDATE_POOL_SIZE,
-  });
+  // A search already aims the pool at what the user asked for, so the newest
+  // matches are the right rows to rank. A plain browse aims at nothing, and
+  // taking the newest CANDIDATE_POOL_SIZE of a ~78k catalogue is how this
+  // screen ended up with no lipstick to show a user who had just linked three
+  // - see the note on CANDIDATE_POOL_SIZE.
+  const searching = Boolean(where.name);
+
+  // Only the unfiltered browse ordering is cached: a search pool is built for
+  // one term the user is still typing at, and would evict real orderings.
+  if (!searching) {
+    const cachedOrder = readFeedOrder(browseKey(userId));
+    if (cachedOrder) {
+      // A few ids more than the page needs, then trimmed: the client stops
+      // scrolling the moment a page comes back shorter than it asked for
+      // (getNextPageParam in the app's useShoppingProducts), so one product
+      // deleted since the ordering was built would end the list mid-scroll.
+      const window = cachedOrder.slice(offset, offset + limit + PAGE_SLACK);
+      return (await productsInOrder(window)).slice(0, limit);
+    }
+  }
+
+  const candidates = searching
+    ? await prisma.shoppingProduct.findMany({
+        where,
+        include: SHOP_INCLUDE,
+        orderBy: { id: 'desc' },
+        take: CANDIDATE_POOL_SIZE,
+      })
+    : await candidatePool(affinity, { fresh: POOL_FRESH_BROWSE, excludeLinked: false });
 
   const scored = candidates.map((product) => ({ product, ...scoreProduct(product, affinity) }));
 
@@ -723,9 +780,14 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
   // per page would deal a fresh round-robin at every offset and repeat the
   // same products across pages. The shop cap is off here for the same reason
   // - on a full-catalog ordering it would just push a shop's products down
-  // into the deferred tail rather than off the page. The cost is scoring the
-  // pool once per request, which this branch already paid.
+  // into the deferred tail rather than off the page.
   const blended = interleaveByGroup(scored, scored.length, { capShare: 1 }).map((entry) => entry.product);
+
+  // Remembering the order is what makes the bigger pool affordable. Scoring it
+  // used to be repaid on every page of every scroll; now page one pays and the
+  // rest of that scroll reads ids back, on the same sliding TTL as the feed -
+  // so a link created mid-scroll still re-ranks the list (invalidateFeedOrder).
+  if (!searching) writeFeedOrder(browseKey(userId), blended.map((product) => product.id));
 
   return blended.slice(offset, offset + limit);
 }
