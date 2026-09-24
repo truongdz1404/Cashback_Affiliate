@@ -203,6 +203,41 @@ model Banner {
   // and so an older app build (which asks without saying which surface it is)
   // still gets exactly what it used to.
   platform  String   @default("app")
+
+  // Everything below composes one web slide. The artwork in image_url is drawn
+  // with an empty left column and these pieces are rendered as real HTML on top
+  // of it, so the type stays crisp at every width, the links are crawlable, and
+  // the copy can change without redrawing a 1944px image.
+  //
+  // All optional: a row with no title is just a picture, which is what an app
+  // banner is and what a web banner falls back to when nobody fills these in.
+
+  /** Sampled from the artwork's own left edge so the stacked phone layout has
+   *  no seam where the image ends and the text block begins. */
+  bgColor            String? @map("bg_color")
+  /** Small pill above the headline. */
+  eyebrow            String?
+  title              String?
+  body               String?
+  /** Describes the artwork for screen readers and for a failed image load. */
+  imageAlt           String? @map("image_alt")
+  /** Where the copy block sits on wide screens: 'center' or 'top'. Artwork that
+   *  keeps something in its lower-left (a QR code) needs the copy pushed up. */
+  textAlign          String? @map("text_align")
+
+  primaryLabel       String? @map("primary_label")
+  primaryUrl         String? @map("primary_url")
+  secondaryLabel     String? @map("secondary_label")
+  secondaryUrl       String? @map("secondary_url")
+
+  // Shown instead of the two above once the visitor is signed in. The same
+  // slide runs on both home pages, and "Tao tai khoan" is wrong for someone who
+  // already has one. Left empty, a member simply sees the buttons above.
+  memberPrimaryLabel   String? @map("member_primary_label")
+  memberPrimaryUrl     String? @map("member_primary_url")
+  memberSecondaryLabel String? @map("member_secondary_label")
+  memberSecondaryUrl   String? @map("member_secondary_url")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([platform, isActive, sortOrder])

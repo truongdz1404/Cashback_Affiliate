@@ -2,7 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Chip } from "@heroui/react";
 import { appFetchSafe, buildQuery, getAppFeatures, getSessionUser } from "@/lib/appApi";
-import type { Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
+import type { Banner, Campaign, Shop, ShoppingCategory, ShoppingProduct } from "@/lib/appTypes";
 import { PLAY_STORE_URL } from "@/lib/site";
 import { displayName } from "@/lib/format";
 import HeroSlider from "@/components/public/HeroSlider";
@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 const RAIL_LIMIT = 12;
 
 export default async function HomePage() {
-  const [user, features, categories, topCashback, bestSellers, xtra, recommended, shops, campaigns, count] =
+  const [user, features, categories, topCashback, bestSellers, xtra, recommended, shops, campaigns, count, banners] =
     await Promise.all([
       getSessionUser(),
       getAppFeatures(),
@@ -38,6 +38,10 @@ export default async function HomePage() {
       appFetchSafe<Shop[]>(`/shops/featured${buildQuery({ limit: RAIL_LIMIT })}`, []),
       appFetchSafe<Campaign[]>(`/campaigns${buildQuery({ limit: 4 })}`, []),
       appFetchSafe<{ total: number }>("/shopping-products/count", { total: 0 }),
+      // The hero slides, editable at /admin/banners. An empty list only
+      // means nobody has added any (or the backend is unreachable), and the
+      // hero falls back to the slides bundled with the component.
+      appFetchSafe<Banner[]>("/banners?platform=web", []),
     ]);
 
   const isAuthenticated = user != null;
@@ -45,6 +49,7 @@ export default async function HomePage() {
   if (!isAuthenticated) {
     return (
       <MarketingHome
+        banners={banners}
         categories={categories}
         productCount={count.total}
         topCashback={topCashback}
@@ -61,7 +66,7 @@ export default async function HomePage() {
       {/* The same hero the signed-out home shows, so logging in does not change
           the shape of the page. Its buttons switch to member destinations. */}
       <section className="pt-5 sm:pt-7">
-        <HeroSlider isAuthenticated />
+        <HeroSlider banners={banners} isAuthenticated />
       </section>
 
       {/* The paste-a-link tool is the main revenue action, so it sits right under the banner. */}

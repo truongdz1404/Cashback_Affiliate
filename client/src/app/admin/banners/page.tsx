@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { AlertDialog, Button, Card, Checkbox, Chip, Input, Label, Tabs, TextField } from "@heroui/react";
+import { AlertDialog, Button, Card, Checkbox, Chip, Input, Label, ListBox, Select, Tabs, TextArea, TextField } from "@heroui/react";
+import HeroSlider from "@/components/public/HeroSlider";
 import { clientApi } from "@/lib/clientApi";
 import { PlusIcon, TrashIcon, UploadIcon } from "@/components/icons";
 
@@ -21,7 +22,7 @@ const SURFACES: { id: Platform; label: string; hint: string; ratio: string }[] =
   {
     id: "web",
     label: "Banner web",
-    hint: "Ảnh slide đầu trang chủ website, chỉ hiện với thành viên đã đăng nhập. Không bật banner nào thì phần này ẩn hẳn.",
+    hint: "Slide đầu trang chủ website, hiện với cả khách và thành viên. Ngoài ảnh nền, mỗi slide còn có chữ và nút bấm riêng bên dưới. Không bật banner nào thì web tự dùng 6 slide mặc định.",
     ratio: "aspect-[2.4/1]",
   },
 ];
@@ -57,16 +58,64 @@ type Banner = {
   sortOrder: number;
   isActive: boolean;
   platform?: Platform;
+
+  // Only the web list uses these: each one is a piece drawn as HTML on top of
+  // the artwork. A row that leaves them all empty is just a picture.
+  bgColor?: string | null;
+  eyebrow?: string | null;
+  title?: string | null;
+  body?: string | null;
+  imageAlt?: string | null;
+  textAlign?: string | null;
+  primaryLabel?: string | null;
+  primaryUrl?: string | null;
+  secondaryLabel?: string | null;
+  secondaryUrl?: string | null;
+  memberPrimaryLabel?: string | null;
+  memberPrimaryUrl?: string | null;
+  memberSecondaryLabel?: string | null;
+  memberSecondaryUrl?: string | null;
 };
+
+// Every content field is edited as a string and sent as a string; the API
+// turns an empty one back into NULL. Listing them once keeps the form state,
+// the reset value and the save payload from drifting apart.
+const CONTENT_FIELDS = [
+  "bgColor",
+  "eyebrow",
+  "title",
+  "body",
+  "imageAlt",
+  "textAlign",
+  "primaryLabel",
+  "primaryUrl",
+  "secondaryLabel",
+  "secondaryUrl",
+  "memberPrimaryLabel",
+  "memberPrimaryUrl",
+  "memberSecondaryLabel",
+  "memberSecondaryUrl",
+] as const;
+
+type ContentField = (typeof CONTENT_FIELDS)[number];
 
 type BannerFormState = {
   imageUrl: string;
   linkUrl: string;
   sortOrder: string;
   isActive: boolean;
-};
+} & Record<ContentField, string>;
 
-const EMPTY_FORM: BannerFormState = { imageUrl: "", linkUrl: "", sortOrder: "0", isActive: true };
+const EMPTY_CONTENT = Object.fromEntries(CONTENT_FIELDS.map((f) => [f, ""])) as Record<ContentField, string>;
+
+const EMPTY_FORM: BannerFormState = {
+  imageUrl: "",
+  linkUrl: "",
+  sortOrder: "0",
+  isActive: true,
+  ...EMPTY_CONTENT,
+  textAlign: "center",
+};
 
 function SectionCard({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -99,9 +148,14 @@ function BannerForm({
           linkUrl: initial.linkUrl || "",
           sortOrder: String(initial.sortOrder ?? 0),
           isActive: !!initial.isActive,
+          ...(Object.fromEntries(CONTENT_FIELDS.map((f) => [f, initial[f] || ""])) as Record<ContentField, string>),
+          textAlign: initial.textAlign || "center",
         }
       : EMPTY_FORM
   );
+  // Which audience the preview below is drawn for. The member buttons replace
+  // the guest ones for anyone already signed in, so both have to be checkable.
+  const [previewMember, setPreviewMember] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -148,13 +202,19 @@ function BannerForm({
 
     setSaving(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         imageUrl: form.imageUrl.trim(),
         linkUrl: form.linkUrl.trim() || null,
         sortOrder: Number(form.sortOrder) || 0,
         isActive: form.isActive,
         platform,
       };
+      // The app tab never shows the content fields, so it never sends them
+      // either: an omitted field keeps its stored value instead of being
+      // blanked by a form that could not edit it.
+      if (platform === "web") {
+        for (const field of CONTENT_FIELDS) payload[field] = form[field].trim();
+      }
       if (initial) {
         await clientApi.put(`/api/banners/${initial.id}`, payload);
       } else {
@@ -167,6 +227,18 @@ function BannerForm({
       setSaving(false);
     }
   }
+
+  const contentField = (name: ContentField, label: string, placeholder: string, className?: string) => (
+    <TextField
+      name={name}
+      value={form[name]}
+      onChange={(v) => setForm((f) => ({ ...f, [name]: v }))}
+      className={className}
+    >
+      <Label>{label}</Label>
+      <Input placeholder={placeholder} />
+    </TextField>
+  );
 
   return (
     <div className="space-y-4">
@@ -212,16 +284,135 @@ function BannerForm({
           <Input inputMode="numeric" />
         </TextField>
       </div>
-      {form.imageUrl.trim() && (
-        // Previewed at the surface's own ratio so a wrongly-shaped image is
-        // obvious here instead of on the live carousel.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={form.imageUrl.trim()}
-          alt="preview"
-          className={`w-full max-w-md rounded-lg border border-[var(--border)] object-cover ${ratio}`}
-        />
+      {platform === "web" && (
+        <div className="space-y-4 rounded-xl border border-[var(--border)] p-4">
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--foreground)]">Nội dung hiển thị trên banner</h3>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
+              Ảnh chỉ là phần nền. Chữ và nút bên dưới được vẽ đè lên khoảng trống bên trái của ảnh, nên đổi chữ
+              không cần vẽ lại ảnh. Bỏ trống hết thì slide chỉ còn là một tấm ảnh, bấm vào đi theo link ở trên.
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {contentField("eyebrow", "Chữ nhỏ phía trên", "Miễn phí tham gia")}
+            <div className="flex items-end gap-2">
+              {contentField("bgColor", "Màu nền", "#F7FEFB", "flex-1")}
+              {/* The artwork's own background is not a flat colour; this one
+                  fills the strip around it, so it has to be sampled from the
+                  image's left edge or the seam shows on phones. */}
+              <span
+                aria-hidden
+                className="mb-1 h-9 w-9 flex-none rounded-lg border border-[var(--border)]"
+                style={{ backgroundColor: form.bgColor.trim() || "#F7FEFB" }}
+              />
+            </div>
+            {contentField("title", "Tiêu đề chính", "Cứ mua sắm là được hoàn tiền", "sm:col-span-2")}
+            <TextField
+              name="body"
+              value={form.body}
+              onChange={(v) => setForm((f) => ({ ...f, body: v }))}
+              className="sm:col-span-2"
+            >
+              <Label>Mô tả</Label>
+              <TextArea rows={2} placeholder="Một hoặc hai câu giải thích ngắn gọn." />
+            </TextField>
+            {contentField(
+              "imageAlt",
+              "Mô tả ảnh",
+              "Dùng cho trình đọc màn hình và khi ảnh không tải được",
+              "sm:col-span-2"
+            )}
+            <Select
+              aria-label="Vị trí khối chữ"
+              selectedKey={form.textAlign || "center"}
+              onSelectionChange={(key) => setForm((f) => ({ ...f, textAlign: String(key ?? "center") }))}
+            >
+              <Label>Vị trí khối chữ trên màn hình rộng</Label>
+              <Select.Trigger>
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  <ListBox.Item id="center">Giữa</ListBox.Item>
+                  <ListBox.Item id="top">Trên (khi góc dưới ảnh đã có hình)</ListBox.Item>
+                </ListBox>
+              </Select.Popover>
+            </Select>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+              Nút bấm — khách chưa đăng nhập
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {contentField("primaryLabel", "Nút chính", "Tham gia nhận hoàn tiền")}
+              {contentField("primaryUrl", "Link nút chính", "/register hoặc https://...")}
+              {contentField("secondaryLabel", "Nút phụ", "Xem sản phẩm")}
+              {contentField("secondaryUrl", "Link nút phụ", "/products")}
+            </div>
+            <p className="text-xs text-[var(--muted)]">Thiếu chữ hoặc thiếu link thì nút đó không hiện.</p>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+              Nút bấm — thành viên đã đăng nhập
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {contentField("memberPrimaryLabel", "Nút chính", "Săn deal hoàn tiền")}
+              {contentField("memberPrimaryUrl", "Link nút chính", "/products")}
+              {contentField("memberSecondaryLabel", "Nút phụ", "Ví hoàn tiền của tôi")}
+              {contentField("memberSecondaryUrl", "Link nút phụ", "/account/wallet")}
+            </div>
+            <p className="text-xs text-[var(--muted)]">
+              Bỏ trống thì thành viên thấy đúng nút như khách. Chỉ cần điền khi lời mời dành cho khách không còn
+              hợp lý với người đã có tài khoản, ví dụ “Tạo tài khoản”.
+            </p>
+          </div>
+        </div>
       )}
+
+      {form.imageUrl.trim() &&
+        (platform === "web" ? (
+          // Drawn by the real hero component rather than a copy of it, so what
+          // is approved here is exactly what the home page renders - including
+          // the member buttons, which the toggle swaps in.
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-[var(--muted)]">Xem trước với:</span>
+              <Button size="sm" variant={previewMember ? "outline" : "primary"} onPress={() => setPreviewMember(false)}>
+                Khách
+              </Button>
+              <Button size="sm" variant={previewMember ? "primary" : "outline"} onPress={() => setPreviewMember(true)}>
+                Thành viên
+              </Button>
+            </div>
+            <HeroSlider
+              isAuthenticated={previewMember}
+              banners={[
+                {
+                  id: 0,
+                  sortOrder: 0,
+                  imageUrl: form.imageUrl.trim(),
+                  linkUrl: form.linkUrl.trim() || null,
+                  ...(Object.fromEntries(
+                    CONTENT_FIELDS.map((f) => [f, form[f].trim() || null])
+                  ) as Record<ContentField, string | null>),
+                },
+              ]}
+            />
+          </div>
+        ) : (
+          // Previewed at the surface's own ratio so a wrongly-shaped image is
+          // obvious here instead of on the live carousel.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={form.imageUrl.trim()}
+            alt="preview"
+            className={`w-full max-w-md rounded-lg border border-[var(--border)] object-cover ${ratio}`}
+          />
+        ))}
       <Checkbox isSelected={form.isActive} onChange={(isActive) => setForm((f) => ({ ...f, isActive }))}>
         <Checkbox.Control>
           <Checkbox.Indicator />
@@ -362,6 +553,9 @@ function BannerList({ platform, ratio, hint }: { platform: Platform; ratio: stri
                       <span className="text-sm font-semibold text-[var(--foreground)]">Thứ tự {b.sortOrder}</span>
                       <Chip color={b.isActive ? "success" : "danger"}>{b.isActive ? "Đang hiển thị" : "Tắt"}</Chip>
                     </div>
+                    {b.title && (
+                      <p className="mt-0.5 truncate text-sm font-semibold text-[var(--foreground)]">{b.title}</p>
+                    )}
                     <p className="mt-1 truncate text-xs text-[var(--muted)]">{b.imageUrl}</p>
                     {b.linkUrl && <p className="mt-0.5 truncate text-xs text-[var(--muted)]">→ {b.linkUrl}</p>}
                   </div>

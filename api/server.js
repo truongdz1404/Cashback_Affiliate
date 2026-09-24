@@ -2073,11 +2073,26 @@ app.get('/admin/banners', adminAuth.requireAdmin, async (req, res) => {
   }
 });
 
+// Picked field by field rather than passing req.body straight through, so a
+// stray key from a future dashboard build cannot reach Prisma.
+function bannerInput(body) {
+  const input = {
+    imageUrl: body.imageUrl,
+    linkUrl: body.linkUrl,
+    sortOrder: body.sortOrder,
+    isActive: body.isActive,
+    platform: body.platform,
+  };
+  for (const field of bannersRepo.CONTENT_FIELDS) {
+    if (body[field] !== undefined) input[field] = body[field];
+  }
+  return input;
+}
+
 app.post('/admin/banners', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const { imageUrl, linkUrl, sortOrder, isActive, platform } = req.body;
-    if (!imageUrl) return res.status(400).json({ error: 'body.imageUrl is required' });
-    res.json(await bannersRepo.create({ imageUrl, linkUrl, sortOrder, isActive, platform }));
+    if (!req.body.imageUrl) return res.status(400).json({ error: 'body.imageUrl is required' });
+    res.json(await bannersRepo.create(bannerInput(req.body)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2085,8 +2100,7 @@ app.post('/admin/banners', adminAuth.requireAdmin, async (req, res) => {
 
 app.put('/admin/banners/:id', adminAuth.requireAdmin, async (req, res) => {
   try {
-    const { imageUrl, linkUrl, sortOrder, isActive, platform } = req.body;
-    const updated = await bannersRepo.update(req.params.id, { imageUrl, linkUrl, sortOrder, isActive, platform });
+    const updated = await bannersRepo.update(req.params.id, bannerInput(req.body));
     if (!updated) return res.status(404).json({ error: 'banner not found' });
     res.json(updated);
   } catch (err) {

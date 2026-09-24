@@ -266,6 +266,27 @@ export type Banner = {
   // Which carousel the slide belongs to. The app and the website keep separate
   // lists; the backend defaults to "app" when a caller does not say.
   platform?: "app" | "web";
+
+  // The pieces a web slide is built from. The artwork leaves an empty left
+  // column and these are drawn as HTML on top of it. All optional - a row with
+  // no title is just a picture, which is what an app banner is.
+  bgColor?: string | null;
+  eyebrow?: string | null;
+  title?: string | null;
+  body?: string | null;
+  imageAlt?: string | null;
+  /** Where the copy sits on wide screens: "center" or "top". */
+  textAlign?: string | null;
+  primaryLabel?: string | null;
+  primaryUrl?: string | null;
+  secondaryLabel?: string | null;
+  secondaryUrl?: string | null;
+  // Used instead of the two above for a signed-in member, whom it makes no
+  // sense to invite to register.
+  memberPrimaryLabel?: string | null;
+  memberPrimaryUrl?: string | null;
+  memberSecondaryLabel?: string | null;
+  memberSecondaryUrl?: string | null;
 };
 
 export type OAuthConfig = {

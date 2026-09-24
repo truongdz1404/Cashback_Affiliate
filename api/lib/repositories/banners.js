@@ -35,7 +35,52 @@ async function getById(id) {
   return prisma.banner.findUnique({ where: { id: Number(id) } });
 }
 
-async function create({ imageUrl, linkUrl, sortOrder, isActive, platform }) {
+// The pieces a web slide is composed of. The artwork is drawn with an empty
+// left column and these are rendered as HTML on top of it, so each one is
+// edited on its own instead of being baked into the image. All optional: a row
+// with none of them filled in is simply a picture, which is what an app banner
+// is and what a web banner falls back to.
+const CONTENT_FIELDS = [
+  'bgColor',
+  'eyebrow',
+  'title',
+  'body',
+  'imageAlt',
+  'textAlign',
+  'primaryLabel',
+  'primaryUrl',
+  'secondaryLabel',
+  'secondaryUrl',
+  'memberPrimaryLabel',
+  'memberPrimaryUrl',
+  'memberSecondaryLabel',
+  'memberSecondaryUrl',
+];
+
+const TEXT_ALIGNS = ['center', 'top'];
+
+// A cleared field arrives from the dashboard as '', which has to become NULL -
+// an empty string would render an empty button rather than no button.
+function cleanText(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text === '' ? null : text;
+}
+
+function contentFrom(input, current = null) {
+  const data = {};
+  for (const field of CONTENT_FIELDS) {
+    if (input[field] !== undefined) data[field] = cleanText(input[field]);
+    else if (current) data[field] = current[field];
+    else data[field] = null;
+  }
+  // Anything unrecognised means 'center', the layout that suits artwork with
+  // nothing important in its lower-left corner.
+  if (data.textAlign && !TEXT_ALIGNS.includes(data.textAlign)) data.textAlign = 'center';
+  return data;
+}
+
+async function create({ imageUrl, linkUrl, sortOrder, isActive, platform, ...content }) {
   return prisma.banner.create({
     data: {
       imageUrl,
@@ -43,11 +88,12 @@ async function create({ imageUrl, linkUrl, sortOrder, isActive, platform }) {
       sortOrder: sortOrder ?? 0,
       isActive: isActive !== false,
       platform: normalizePlatform(platform),
+      ...contentFrom(content),
     },
   });
 }
 
-async function update(id, { imageUrl, linkUrl, sortOrder, isActive, platform }) {
+async function update(id, { imageUrl, linkUrl, sortOrder, isActive, platform, ...content }) {
   const current = await getById(id);
   if (!current) return null;
   return prisma.banner.update({
@@ -61,6 +107,9 @@ async function update(id, { imageUrl, linkUrl, sortOrder, isActive, platform }) 
       // than to 'app', so a PUT that forgets the field can never silently move
       // a web banner into the app list.
       platform: normalizePlatform(platform, current.platform),
+      // A field the caller left out keeps its stored value, so a partial PUT
+      // cannot silently wipe the copy off a slide.
+      ...contentFrom(content, current),
     },
   });
 }
@@ -72,4 +121,4 @@ async function remove(id) {
   return current;
 }
 
-module.exports = { PLATFORMS, normalizePlatform, listActive, listAll, getById, create, update, remove };
+module.exports = { PLATFORMS, CONTENT_FIELDS, normalizePlatform, listActive, listAll, getById, create, update, remove };
