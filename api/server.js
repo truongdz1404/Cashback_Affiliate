@@ -9,6 +9,7 @@ const { getCustomLinks } = require('./lib/customLink');
 const { getCommission } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
 const linkTracking = require('./lib/linkTracking');
+const { LINK_SOURCES, productTapSource } = require('./lib/linkSources');
 const usersRepo = require('./lib/repositories/users');
 const linksRepo = require('./lib/repositories/links');
 const ordersRepo = require('./lib/repositories/orders');
@@ -570,12 +571,12 @@ app.post('/app/link', appAuth.requireAppUser, linkMintRateLimit, async (req, res
       return res.status(501).json({ error: 'coming_soon' });
     }
     const user = await usersRepo.getById(req.appUserId);
-    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, LINK_SOURCES.PASTE);
     const result = await getLinkAndCommission([productUrl], tracking.finalSubIds);
     const estimate = estimateFromResult(result, await getEffectivePct(user));
 
     if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid, estimate, result.meta);
+      await linkTracking.recordLink(tracking, [productUrl], result, result.pid, estimate, result.meta);
     }
 
     // Fire-and-forget: the commission lookup above already paid for this
@@ -1093,7 +1094,7 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
     // anyone, but the operator's commission still rides on the affiliate id in
     // the link, so this is strictly better than the bare storefront URL.
     if (!req.appUserId) {
-      const guest = await buildShopLink(shop, { subIds: [] });
+      const guest = await buildShopLink(shop, { subIds: ['', LINK_SOURCES.SHOPFRONT] });
       return res.json({ affiliateUrl: guest.url, tracked: false, reused: false });
     }
 
@@ -1103,8 +1104,8 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
       return res.json({ affiliateUrl: reused.affiliateUrl, tracked: true, reused: true });
     }
 
-    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
-    const { url, tracked } = await buildShopLink(shop, { subIds: [tracking.subId] });
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, LINK_SOURCES.SHOPFRONT);
+    const { url, tracked } = await buildShopLink(shop, { subIds: [tracking.subId, tracking.source] });
 
     if (tracked) {
       await linksRepo.saveLink({
@@ -1120,6 +1121,7 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
         shopName: shop.name,
         shopId: shop.shopId,
         imageUrl: shop.portraitUrl || shop.imageUrl,
+        source: tracking.source,
       });
       // Same reason as recordLink: a fresh shop signal outdates any cached
       // suggestions ordering.
@@ -1182,13 +1184,15 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRate
       return res.json({ affiliateUrl: reused.affiliateUrl, estimate, reused: true });
     }
 
-    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
+    // The screen the card was tapped on, as the app reports it. Validated
+    // rather than trusted - it goes into a URL Shopee will see.
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, productTapSource(req.body && req.body.source));
     const result = await getCustomLinks([product.productUrl], tracking.finalSubIds);
     const first = (result.results || [])[0] || null;
     const affiliateUrl = first ? first.shortLink || first.longLink : null;
 
     if (tracking.userId && affiliateUrl) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, [product.productUrl], result, product.productId, estimate, {
+      await linkTracking.recordLink(tracking, [product.productUrl], result, product.productId, estimate, {
         itemName: product.name,
         catId: null,
         catName: product.category,
@@ -1339,7 +1343,7 @@ app.post('/custom-link', async (req, res) => {
     const tracking = await linkTracking.prepareSubId(zaloUserId, subIds);
     const result = await getCustomLinks(links, tracking.finalSubIds);
     if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, links, result, itemId);
+      await linkTracking.recordLink(tracking, links, result, itemId);
     }
     res.json(result);
   } catch (err) {
@@ -1366,7 +1370,7 @@ app.post('/link-and-commission', async (req, res) => {
     const tracking = await linkTracking.prepareSubId(zaloUserId, subIds);
     const result = await getLinkAndCommission(links, tracking.finalSubIds);
     if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, links, result, result.pid);
+      await linkTracking.recordLink(tracking, links, result, result.pid);
     }
     res.json(result);
   } catch (err) {

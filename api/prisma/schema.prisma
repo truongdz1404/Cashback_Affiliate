@@ -97,6 +97,16 @@ model Link {
   // this is the real key, and it is what lets the recommendation engine and
   // any future per-shop reporting join links to shops exactly.
   shopId           String?  @map("shop_id")
+  // Which surface minted this link - see lib/linkSources.js for the vocabulary
+  // and why it is also the second sub id. Null on every row written before
+  // this column existed, and on anything an old app build still sends.
+  //
+  // Not indexed on purpose: the only reader is an occasional "GROUP BY source"
+  // over a table with one row per link created, which is orders of magnitude
+  // smaller than shopping_products and entirely in shared_buffers. An index
+  // here would cost a write on the hot path to speed up a query nobody runs in
+  // a request.
+  source           String?
   createdAt        DateTime @default(now()) @map("created_at")
 
   user          User     @relation(fields: [userId], references: [id])

@@ -1,3 +1,4 @@
+const { LINK_SOURCES } = require('./linkSources');
 const users = require('./repositories/users');
 const linksRepo = require('./repositories/links');
 const recommendationsRepo = require('./repositories/recommendations');
@@ -7,15 +8,21 @@ const prisma = require('./prisma');
 // supplied, mints a fresh sub_id and injects it as subId1 (the mechanism
 // customLink.js already supports) so the order can later be matched back to
 // this user via utm_content in the conversion report.
-async function prepareSubId(zaloUserId, subIds) {
-  if (!zaloUserId) return { finalSubIds: subIds, userId: null, subId: null };
+//
+// subId2 carries WHERE the link was made - see lib/linkSources.js. Slot 2
+// rather than any other because slot 1 is the identity and must not move: the
+// reconciliation reader has been splitting utm_content and taking [0] since
+// before this existed, and it keeps working untouched.
+async function prepareSubId(zaloUserId, subIds, source = LINK_SOURCES.ZALO) {
+  if (!zaloUserId) return { finalSubIds: subIds, userId: null, subId: null, source };
 
   const user = await users.getOrCreateUserByZaloId(zaloUserId);
   const subId = linksRepo.generateSubId();
   return {
-    finalSubIds: { ...(subIds || {}), sub_id1: subId },
+    finalSubIds: { ...(subIds || {}), sub_id1: subId, sub_id2: source },
     userId: user.id,
     subId,
+    source,
   };
 }
 
@@ -25,14 +32,15 @@ async function prepareSubId(zaloUserId, subIds) {
 // has none - so the minted link carried NO sub id at all and a resulting order
 // could never be matched back to the buyer in reconciliation.js. Everything
 // still worked and looked fine; the cashback just silently never arrived.
-function prepareSubIdForUser(userId, subIds) {
-  if (!userId) return { finalSubIds: subIds, userId: null, subId: null };
+function prepareSubIdForUser(userId, subIds, source) {
+  if (!userId) return { finalSubIds: subIds, userId: null, subId: null, source };
 
   const subId = linksRepo.generateSubId();
   return {
-    finalSubIds: { ...(subIds || {}), sub_id1: subId },
+    finalSubIds: { ...(subIds || {}), sub_id1: subId, sub_id2: source },
     userId: Number(userId),
     subId,
+    source,
   };
 }
 
@@ -40,12 +48,18 @@ function prepareSubIdForUser(userId, subIds) {
 // be looked up by sub_id during order reconciliation. `estimate` (userAmount/
 // userPct) is stored alongside so the app's link history can show the same
 // figure the user saw right after creating the link.
-async function recordLink(userId, subId, productLinks, result, fallbackItemId, estimate, meta) {
+// Takes the whole `tracking` object rather than its pieces so the source
+// stored on the row cannot drift from the source minted into subId2 - they are
+// the same field read twice, and a report that disagrees with the link it
+// describes is worse than no report.
+async function recordLink(tracking, productLinks, result, fallbackItemId, estimate, meta) {
+  const { userId, subId, source = null } = tracking;
   const first = (result && result.results && result.results[0]) || null;
   const itemId = (first && first.itemId) || fallbackItemId || null;
   await linksRepo.saveLink({
     userId,
     subId,
+    source,
     itemId,
     shopeeUrl: Array.isArray(productLinks) ? productLinks[0] : null,
     affiliateUrl: first ? first.shortLink || first.longLink : null,

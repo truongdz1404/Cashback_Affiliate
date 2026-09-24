@@ -20,6 +20,7 @@ async function saveLink({
   shopId,
   priceValue,
   imageUrl,
+  source,
 }) {
   return prisma.link.create({
     data: {
@@ -37,6 +38,7 @@ async function saveLink({
       shopId: shopId || null,
       priceValue: priceValue ?? null,
       imageUrl: imageUrl || null,
+      source: source || null,
     },
   });
 }

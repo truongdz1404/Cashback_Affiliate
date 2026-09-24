@@ -39,9 +39,13 @@ function retagLongLink(longLink, subIds) {
  * affiliate link at all and fell back to the public storefront. The caller must
  * not record a Link row in that case: reconciliation.js matches orders by
  * sub id, so a row without one can never be paid out.
+ *
+ * Specifically slot 0, not "any slot set". Slot 1 now carries the source
+ * (lib/linkSources.js), which a guest's link has as well - and a guest link is
+ * exactly the one that must NOT be recorded, since there is no user to pay.
  */
 async function buildShopLink(shop, { subIds = [] } = {}) {
-  const tracked = subIds.some((value) => !!value);
+  const tracked = !!subIds[0];
 
   const retagged = retagLongLink(shop.longLink, subIds);
   if (retagged) return { url: retagged, tracked, source: 'long_link' };

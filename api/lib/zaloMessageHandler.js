@@ -97,7 +97,7 @@ async function handleProductLink(text, zaloUserId) {
   const estimate = estimateFromResult(result, await getEffectivePct(user));
 
   if (tracking.userId) {
-    await linkTracking.recordLink(tracking.userId, tracking.subId, [foundLink], result, result.pid, estimate);
+    await linkTracking.recordLink(tracking, [foundLink], result, result.pid, estimate);
   }
   return formatProductReply(result, estimate);
 }
