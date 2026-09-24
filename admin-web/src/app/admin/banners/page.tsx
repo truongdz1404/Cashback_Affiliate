@@ -26,6 +26,30 @@ const SURFACES: { id: Platform; label: string; hint: string; ratio: string }[] =
   },
 ];
 
+// Kept in step with lib/bannerUploads.js on the API service, and with the
+// reverse proxy body limit in front of both.
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
+const formatMb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+
+// An upload can be rejected by something between the browser and this app -
+// a reverse proxy answering 413 with its own HTML page, or a gateway timeout -
+// and that body is not JSON. Parsing it blindly surfaced the parser complaint
+// ("Unexpected token <") to the operator instead of what went wrong.
+async function readJson(res: Response) {
+  const text = await res.text();
+  let data: { error?: string; url?: string } | null = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    if (res.status === 413) throw new Error(`Ảnh vượt quá dung lượng máy chủ cho phép (${res.status}).`);
+    throw new Error(`Máy chủ trả về phản hồi không hợp lệ (${res.status}).`);
+  }
+  if (!res.ok) throw new Error(data?.error || `Tải ảnh thất bại: ${res.status}`);
+  if (!data?.url) throw new Error("Máy chủ không trả về đường dẫn ảnh.");
+  return data as { url: string };
+}
+
 type Banner = {
   id: number | string;
   imageUrl: string;
@@ -92,15 +116,22 @@ function BannerForm({
     if (!file) return;
 
     setMsg("");
+    // Checked here as well as on the server: the reverse proxy in front of this
+    // app rejects an oversized body itself, with an HTML error page that never
+    // reaches our code, so the friendly message has to be produced before the
+    // request leaves the browser.
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setMsg(`Ảnh nặng ${formatMb(file.size)}, vượt quá giới hạn ${formatMb(MAX_UPLOAD_BYTES)}.`);
+      return;
+    }
+
     setUploading(true);
     try {
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch("/api/banners/upload", { method: "POST", body: formData });
-      const text = await res.text();
-      const data = text ? JSON.parse(text) : null;
-      if (!res.ok) throw new Error((data && data.error) || `Tải ảnh thất bại: ${res.status}`);
-      setForm((f) => ({ ...f, imageUrl: data.url }));
+      const { url } = await readJson(res);
+      setForm((f) => ({ ...f, imageUrl: url }));
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Tải ảnh thất bại");
     } finally {
