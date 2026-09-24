@@ -500,6 +500,16 @@ model ShoppingProduct {
   // Same shape for lib/shopLinkBackfill.js: the null-shop rows least recently
   // asked about.
   @@index([shopId, shopCheckedAt])
+  // The recommendation pool searches this column with `contains` - which
+  // Prisma compiles to `name ILIKE '%word%'`, and a leading wildcard is
+  // something a btree cannot answer, so each word used to cost a full
+  // sequential scan (649ms over 81k rows, measured). A trigram GIN index
+  // indexes the three-character sequences of the text, which is exactly what
+  // a substring match needs. `raw` because gin_trgm_ops comes from the
+  // pg_trgm extension, which the migration installs; Prisma has no name for
+  // it. Keep this in step with
+  // migrations/20260925000000_add_product_name_trgm_index.
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "shopping_products_name_trgm_idx")
   @@map("shopping_products")
 }
 

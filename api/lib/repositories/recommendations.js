@@ -52,6 +52,22 @@ const POOL_FRESH = 2000;
 // Its fresh slice keeps that depth so the interest-driven rows are added to
 // what browse already showed rather than replacing most of it.
 const POOL_FRESH_BROWSE = CANDIDATE_POOL_SIZE;
+
+// Exactly the columns scoreProduct and interleaveByGroup read, and nothing
+// else. The pool is thousands of rows but only the ~20 that end up on the
+// page are ever sent to the client, and those are re-read in full by
+// productsInOrder - so pulling every column plus the Shop join through the
+// scoring pass was work thrown away for 99% of the rows.
+const POOL_SELECT = {
+  id: true,
+  name: true,
+  category: true,
+  shopId: true,
+  shopName: true,
+  priceValue: true,
+  commissionRateValue: true,
+  scrapedAt: true,
+};
 // Spare ids fetched with each cached page, to absorb rows deleted since the
 // ordering was built.
 const PAGE_SLACK = 5;
@@ -569,6 +585,9 @@ function strongest(map, limit) {
  *
  * Matching is by accented word (rawTokens) because this is a LIKE against
  * Shopee's own titles - see the note on rawTokens in lib/textMatch.js.
+ *
+ * Returns POOL_SELECT-shaped rows, NOT full products: callers rank these and
+ * then hydrate the page they actually serve through productsInOrder.
  */
 async function candidatePool(affinity, { fresh: freshCount = POOL_FRESH, excludeLinked = true } = {}) {
   const { alreadyLinkedItemIds, hintWords, hintCategories, hintShopIds } = affinity;
@@ -615,22 +634,22 @@ async function candidatePool(affinity, { fresh: freshCount = POOL_FRESH, exclude
   const [fresh, ...idRows] = await Promise.all([
     prisma.shoppingProduct.findMany({
       where: notLinked,
-      include: SHOP_INCLUDE,
+      select: POOL_SELECT,
       orderBy: { id: 'desc' },
       take: freshCount,
     }),
     ...idQueries,
   ]);
 
-  // The fresh slice is already loaded in full, so only fetch the interest hits
-  // it does not already cover.
+  // The fresh slice is already loaded, so only fetch the interest hits it does
+  // not already cover.
   const ids = new Set(idRows.flat().map((row) => row.id));
   for (const product of fresh) ids.delete(product.id);
   if (!ids.size) return fresh;
 
   const targeted = await prisma.shoppingProduct.findMany({
     where: { id: { in: [...ids] } },
-    include: SHOP_INCLUDE,
+    select: POOL_SELECT,
   });
   return [...fresh, ...targeted];
 }
@@ -707,7 +726,9 @@ async function recommendForUser(userId, { limit = 10, offset = 0 } = {}) {
   const order = blended.map((p) => p.id);
   writeFeedOrder(feedKey(userId), order);
 
-  const page = blended.slice(offset, offset + limit);
+  // Hydrate only this page - `blended` holds POOL_SELECT rows, which carry
+  // neither the product fields the client renders nor the shop relation.
+  const page = await productsInOrder(order.slice(offset, offset + limit));
   // 'no_match' describes the user's history, not this page: a later page
   // running out of personalized results is just the end of the feed.
   return servePadded(page, blended.length ? 'personalized' : 'no_match', order);
@@ -768,7 +789,7 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
   const candidates = searching
     ? await prisma.shoppingProduct.findMany({
         where,
-        include: SHOP_INCLUDE,
+        select: POOL_SELECT,
         orderBy: { id: 'desc' },
         take: CANDIDATE_POOL_SIZE,
       })
@@ -782,14 +803,16 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
   // - on a full-catalog ordering it would just push a shop's products down
   // into the deferred tail rather than off the page.
   const blended = interleaveByGroup(scored, scored.length, { capShare: 1 }).map((entry) => entry.product);
+  const order = blended.map((product) => product.id);
 
   // Remembering the order is what makes the bigger pool affordable. Scoring it
   // used to be repaid on every page of every scroll; now page one pays and the
   // rest of that scroll reads ids back, on the same sliding TTL as the feed -
   // so a link created mid-scroll still re-ranks the list (invalidateFeedOrder).
-  if (!searching) writeFeedOrder(browseKey(userId), blended.map((product) => product.id));
+  if (!searching) writeFeedOrder(browseKey(userId), order);
 
-  return blended.slice(offset, offset + limit);
+  // Same as the feed: rank on POOL_SELECT rows, hydrate only what is served.
+  return productsInOrder(order.slice(offset, offset + limit));
 }
 
 module.exports = {
