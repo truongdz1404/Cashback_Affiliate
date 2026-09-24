@@ -24,11 +24,17 @@ services:
       SMTP_PASS: ${SMTP_PASS}
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
       ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM}
+    # Named volumes, not bind mounts into the checkout. These three
+    # directories are gitignored, which means anything that cleans the working
+    # tree deletes them - and on 2026-09-24 something did, taking the logged-in
+    # Shopee session with it: every crawl then failed with "tabs seen: none"
+    # while /status still reported a healthy login. A named volume lives
+    # outside the checkout, so only an explicit `docker volume rm` can empty it.
     volumes:
-      - ./api/storage:/app/storage
-      - ./api/public/bank-logos:/app/public/bank-logos
+      - shopee-affiliate-session:/app/storage
+      - shopee-affiliate-bank-logos:/app/public/bank-logos
       # Uploaded banner artwork - outside the image so a rebuild never wipes it.
-      - ./api/public/banner-uploads:/app/public/banner-uploads
+      - shopee-affiliate-banner-uploads:/app/public/banner-uploads
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
@@ -108,3 +114,6 @@ networks:
 volumes:
   shopee-affiliate-db-data:
   shopee-affiliate-rabbitmq-data:
+  shopee-affiliate-session:
+  shopee-affiliate-bank-logos:
+  shopee-affiliate-banner-uploads:

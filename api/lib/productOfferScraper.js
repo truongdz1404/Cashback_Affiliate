@@ -144,9 +144,7 @@ async function runProductOfferSync({
 
   try {
     await page.goto(PRODUCT_OFFER_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    if (/passport|login/i.test(page.url())) {
-      throw new Error('Not logged in - call POST /login with valid cookies first.');
-    }
+    await browserManager.assertLoggedIn(page);
 
     const selectedTabName = (tabName && tabName.trim()) || DEFAULT_TAB_NAME;
     await selectTab(page, selectedTabName);

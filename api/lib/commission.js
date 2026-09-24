@@ -1,4 +1,5 @@
-const { getContext } = require('./browserManager');
+const browserManager = require('./browserManager');
+const { getContext } = browserManager;
 
 const ADDLIVETAG_API_URL = 'https://data.addlivetag.com/product-data/product-data.php';
 const ADDLIVETAG_BATCH_API_URL = 'https://data.addlivetag.com/product-data/product-data-batch.php';
@@ -252,11 +253,13 @@ async function getCommissionViaBrowser(pid) {
       timeout: 30000,
     });
 
-    if (/passport|login/i.test(page.url())) {
-      throw new Error('Not logged in - call POST /login with valid cookies first.');
-    }
-
     const apiResponse = await apiResponsePromise;
+    // Only asked once the XHR failed to show up, so a healthy lookup pays
+    // nothing for it. A dead session is the common reason it never fires, and
+    // without this the call quietly returns an empty commission table instead
+    // of saying the login expired. By now the redirect has long since
+    // happened, so the wait returns immediately.
+    if (!apiResponse) await browserManager.assertLoggedIn(page, 5000);
     const productData = apiResponse ? await apiResponse.json().catch(() => null) : null;
 
     // No addlivetag-shaped `meta` here - Shopee's own API uses a different

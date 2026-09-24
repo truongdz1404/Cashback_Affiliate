@@ -178,6 +178,39 @@ function normalizeCookies(input) {
   }));
 }
 
+// Shopee answers every affiliate URL with 200 and an app shell, then bounces a
+// logged-out session to the buyer login from client-side script. So the URL
+// right after `domcontentloaded` still reads as authenticated even when the
+// cookie is dead, and every caller that judged the session on that URL got a
+// false "logged in".
+const LOGGED_OUT_URL = /passport|\/buyer\/login|\/login/i;
+
+/**
+ * Settles the question the first URL cannot answer: waits for the bounce to
+ * the login page and reports the URL we actually ended up on. No bounce within
+ * the window is the signal that the session is real - there is nothing else to
+ * wait for, since a healthy page simply stays where it is.
+ */
+async function resolveLoginRedirect(page, timeout = 10000) {
+  await page.waitForURL(LOGGED_OUT_URL, { timeout }).catch(() => {});
+  const url = page.url();
+  return { loggedIn: !LOGGED_OUT_URL.test(url), url };
+}
+
+/**
+ * Throws with the page we were redirected to instead of letting the caller
+ * carry on and fail later on a missing element - "tabs seen: none" reads like
+ * Shopee changed its markup, which sent a real outage down the wrong path.
+ */
+async function assertLoggedIn(page, timeout = 10000) {
+  const { loggedIn, url } = await resolveLoginRedirect(page, timeout);
+  if (!loggedIn) {
+    throw new Error(
+      `Not logged in - Shopee redirected to ${url}. Paste a fresh cookie in the admin session panel.`
+    );
+  }
+}
+
 async function getBrowser() {
   if (!browser) {
     browser = await chromium.launch({ headless: HEADLESS });
@@ -228,9 +261,12 @@ async function loginWithCookies(cookies) {
     timeout: 30000,
   });
 
-  // Logged-out sessions get redirected to a login/passport page.
-  const url = page.url();
-  const loggedIn = !/passport|login/i.test(url);
+  // Logged-out sessions get redirected to a login/passport page - but only
+  // once the page's own script runs, so the redirect has to be waited for
+  // rather than read off the URL the navigation returned. Without the wait a
+  // stale cookie verified as good, got persisted, and every crawl after it
+  // failed somewhere else entirely.
+  const { loggedIn, url } = await resolveLoginRedirect(page);
 
   if (!loggedIn) {
     await page.close();
@@ -251,8 +287,7 @@ async function checkStatus() {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
-    const loggedIn = !/passport|login/i.test(page.url());
-    return { loggedIn, url: page.url() };
+    return resolveLoginRedirect(page);
   } finally {
     await page.close();
   }
@@ -276,4 +311,6 @@ module.exports = {
   releaseCustomLinkPage,
   refillCustomLinkPool,
   dismissBlockingModals,
+  resolveLoginRedirect,
+  assertLoggedIn,
 };

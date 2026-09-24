@@ -46,9 +46,6 @@ async function runShopProductSync({ shopId, maxPages = MAX_PAGES } = {}) {
 
   try {
     await page.goto(BRAND_OFFER_URL(id), { waitUntil: 'domcontentloaded', timeout: 30000 });
-    if (/passport|login/i.test(page.url())) {
-      throw new Error('Not logged in - call POST /login with valid cookies first.');
-    }
 
     // The grid renders client-side, so it is not there yet when goto resolves.
     // A timeout here is the "no offers" case far more often than it is a broken
@@ -61,6 +58,14 @@ async function runShopProductSync({ shopId, maxPages = MAX_PAGES } = {}) {
       await browserManager.dismissBlockingModals(page);
       const cards = await page.locator('.ItemCard__container').count();
       if (cards === 0) {
+        // Asked here rather than before the wait: this runs once per shop in a
+        // sweep of hundreds, and a healthy shop should not pay for a check its
+        // rendered grid already answers. The login bounce has had the whole
+        // grid timeout to happen by now, so the wait returns at once.
+        // It has to come before the URL test below, because the login page
+        // carries the shop's own URL in its `next` parameter - so a logged-out
+        // sweep passed that test and recorded every shop as simply empty.
+        await browserManager.assertLoggedIn(page, 5000);
         if (!page.url().includes(id)) {
           throw new Error(`brand_offer for shop ${id} redirected to ${page.url()}`);
         }
