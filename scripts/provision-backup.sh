@@ -23,6 +23,8 @@ CRON_MARKER='scripts/backup.sh'
 # Must stay in step with the default in backup.sh: this is the exact path we
 # prove we can write to, so that what gets verified is what gets used.
 BACKUP_REMOTE="${BACKUP_REMOTE:-r2:rewally/shopee-affiliate}"
+# Ubuntu 24.04 ships 1.60, from 2022, which is too old to talk to R2 cleanly.
+RCLONE_MIN="${RCLONE_MIN:-1.65}"
 
 log() { printf '[provision %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 
@@ -32,20 +34,46 @@ if [ -z "${R2_ACCESS_KEY_ID:-}" ] || [ -z "${R2_SECRET_ACCESS_KEY:-}" ]; then
   exit 0
 fi
 
-if ! command -v rclone >/dev/null; then
-  log "cai rclone..."
-  apt-get update -qq && apt-get install -y -qq rclone
+# The distro package answers 501 NotImplemented to R2 on the first attempt of
+# every upload and only lands on the retry. It does eventually work, which is
+# the dangerous part: a backup failing half its requests looks fine until the
+# night it doesn't. So we take rclone's own build, after checking its checksum.
+have="$(rclone version 2>/dev/null | head -1 | awk '{print $2}' | tr -d v)"
+if [ -z "$have" ] || [ "$(printf '%s\n%s\n' "$RCLONE_MIN" "$have" | sort -V | head -1)" != "$RCLONE_MIN" ]; then
+  log "cai rclone (dang co: ${have:-khong co}, can >= $RCLONE_MIN)..."
+  V="$(curl -fsSL https://downloads.rclone.org/version.txt)"; V="${V#rclone }"
+  PKG="rclone-${V}-linux-amd64.deb"
+  TMP="$(mktemp -d)"
+  (
+    cd "$TMP" &&
+    curl -fsSLO "https://downloads.rclone.org/$V/$PKG" &&
+    curl -fsSLO "https://downloads.rclone.org/$V/SHA256SUMS" &&
+    grep "$PKG" SHA256SUMS | sha256sum -c - &&
+    dpkg -i "$PKG" >/dev/null
+  ) || { rm -rf "$TMP"; log "LOI: khong cai duoc rclone"; exit 1; }
+  rm -rf "$TMP"
+  hash -r
+  log "rclone $(rclone version | head -1 | awk '{print $2}')"
 fi
 
 # `config create` replaces a remote of the same name, so re-running is a no-op
-# in effect. rclone obscures the secret on the way into its config file, which
-# is why the key never appears here in plaintext at rest.
+# in effect. The secret does land in rclone.conf in the clear - rclone only
+# obscures when asked, and its obscuring is reversible with `rclone reveal`
+# anyway, so it would buy nothing. What protects it is the file mode: 0600,
+# root only, on a box where root is already the deploy user.
+#
+# no_check_bucket is not optional here. Without it rclone confirms the bucket
+# exists before its first upload, which a token scoped to object permissions is
+# not allowed to ask - so every write comes back 403 AccessDenied and the token
+# looks broken when it is perfectly good. Cloudflare's own rclone guide calls
+# this out for exactly this kind of token.
 log "cau hinh remote '$REMOTE_NAME'..."
 rclone config create "$REMOTE_NAME" s3 \
   provider=Cloudflare region=auto acl=private \
   access_key_id="$R2_ACCESS_KEY_ID" \
   secret_access_key="$R2_SECRET_ACCESS_KEY" \
-  endpoint="$R2_ENDPOINT" >/dev/null
+  endpoint="$R2_ENDPOINT" \
+  no_check_bucket=true >/dev/null
 
 # Proves the credentials work now, rather than at 3am in a cron job nobody reads.
 #
@@ -55,19 +83,23 @@ rclone config create "$REMOTE_NAME" s3 \
 # token and sends you looking for a key that was right all along. A list also
 # says nothing about write access, which is the whole point. This asks the one
 # question that matters: can tonight's backup land where it is meant to.
+#
+# It uploads a real file the way the backup does, rather than streaming with
+# `rcat`: R2 answers 501 to the streaming path, so a probe built on it would
+# fail for a reason the nightly run never meets.
 PROBE="$BACKUP_REMOTE/.provision-check"
 ERR="$(mktemp)"
-# rcat refuses an empty stdin outright, so the probe carries a byte of content
-# - otherwise it fails before it ever reaches R2 and reports the wrong cause.
-if ! printf 'ok
-' | rclone rcat "$PROBE" 2>"$ERR"; then
+TMPF="$(mktemp)"
+printf 'ok\n' >"$TMPF"
+if ! rclone copyto "$TMPF" "$PROBE" 2>"$ERR"; then
   log "LOI: khong ghi duoc vao $BACKUP_REMOTE"
   sed -n '1,4p' "$ERR" | sed 's/^/[provision]     /'
   log "      token R2 phai la 'Object Read & Write' va tro dung bucket"
-  rm -f "$ERR"
+  rm -f "$ERR" "$TMPF"
   exit 1
 fi
-rm -f "$ERR"
+rm -f "$ERR" "$TMPF"
+
 # Deleting the probe is also a test. The nightly upload is `rclone sync`, which
 # has to remove what rotation dropped locally; a token that can write but not
 # delete would pass the check above and then fail every night. Not fatal - the
