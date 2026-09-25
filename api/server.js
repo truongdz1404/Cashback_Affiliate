@@ -593,6 +593,13 @@ app.post('/app/link', appAuth.requireAppUser, linkMintRateLimit, async (req, res
 
     res.json({ ...result, estimate });
   } catch (err) {
+    // The only record this failure leaves. Minting walks through a commission
+    // lookup, a resolver, a link builder and an INSERT, any of which can fail
+    // for a reason the message alone does not place - and the client only ever
+    // shows the user "thử lại". Without this line a 502 here is invisible:
+    // nothing else on this path logs, so diagnosing one means replaying the
+    // route by hand against production.
+    console.error('[app/link] mint failed:', err.stack || err.message);
     res.status(502).json({ error: err.message });
   }
 });
