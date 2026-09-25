@@ -996,7 +996,11 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
   const affinity = await buildAffinity(userId);
   const where = {};
   if (search && search.trim()) {
-    where.name = { contains: search.trim(), mode: 'insensitive' };
+    // Same folded predicate as shoppingProducts.js#buildWhere - the two are
+    // the two halves of one search box and must agree on what matches, or the
+    // ranked branch and the filtered branch answer the same word differently.
+    const folded = foldForSearch(search);
+    if (folded) where.nameFolded = { contains: folded };
   }
 
   if (!affinity.hasSignal) {

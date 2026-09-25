@@ -419,6 +419,17 @@ model ShoppingProduct {
   id                 Int      @id @default(autoincrement())
   productId          String   @unique @map("product_id")
   name               String
+  // Bản đã gấp dấu của `name`, do POSTGRES tự sinh - xem
+  // migrations/20260925180000_add_folded_name_search. Đây là cột mọi ô tìm
+  // kiếm do người dùng gõ sẽ so vào, để "dien thoai" tìm được "Điện Thoại".
+  //
+  // CẢNH BÁO: KHÔNG BAO GIỜ ghi vào cột này. Nó là GENERATED ALWAYS AS (...)
+  // STORED; Postgres sẽ từ chối mọi INSERT/UPDATE có nhắc tới nó. Prisma không
+  // có khái niệm cột generated, nên nó được khai báo optional chỉ để không lọt
+  // vào input bắt buộc của create() - chứ không phải vì nó có thể null.
+  // Giá trị luôn bằng lib/textMatch.js#foldForSearch(name); giữ hai bên khớp
+  // nhau bằng `node scripts/gen-fold-table.js --check`.
+  nameFolded         String?  @map("name_folded")
   priceText          String?  @map("price_text")
   // VND, parsed from priceText (e.g. "108,0k" -> 108000, "2,8tr" -> 2800000)
   // so the app can filter/sort by price range without re-parsing client-side.
@@ -520,6 +531,10 @@ model ShoppingProduct {
   // it. Keep this in step with
   // migrations/20260925000000_add_product_name_trgm_index.
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "shopping_products_name_trgm_idx")
+  // Cùng lý do, cho cột đã gấp dấu: buildWhere() so ô tìm kiếm vào `name_folded`
+  // chứ không vào `name`. Giữ khớp với
+  // migrations/20260925180000_add_folded_name_search.
+  @@index([nameFolded(ops: raw("gin_trgm_ops"))], type: Gin, map: "shopping_products_name_folded_trgm_idx")
   @@map("shopping_products")
 }
 
@@ -540,6 +555,17 @@ model Shop {
   // suffix-trimmed - the resolution job compares this to ShoppingProduct.shopName
   // with plain `===`, and any normalisation here would break that contract.
   name                String
+  // Bản đã gấp dấu của `name`, do POSTGRES tự sinh - xem
+  // migrations/20260925180000_add_folded_name_search. Đây là cột mọi ô tìm
+  // kiếm do người dùng gõ sẽ so vào, để "dien thoai" tìm được "Điện Thoại".
+  //
+  // CẢNH BÁO: KHÔNG BAO GIỜ ghi vào cột này. Nó là GENERATED ALWAYS AS (...)
+  // STORED; Postgres sẽ từ chối mọi INSERT/UPDATE có nhắc tới nó. Prisma không
+  // có khái niệm cột generated, nên nó được khai báo optional chỉ để không lọt
+  // vào input bắt buộc của create() - chứ không phải vì nó có thể null.
+  // Giá trị luôn bằng lib/textMatch.js#foldForSearch(name); giữ hai bên khớp
+  // nhau bằng `node scripts/gen-fold-table.js --check`.
+  nameFolded          String?  @map("name_folded")
   // discovered = only ever seen in a fuzzy search result, has no products in
   //              this DB yet -> NOT shown to app users.
   // linked     = matched a real product's shop name exactly, or a crawl of this
@@ -594,6 +620,8 @@ model Shop {
   @@index([isFeatured, sortOrder])
   @@index([lastCrawledAt])
   @@index([detailFetchedAt, detailCheckedAt])
+  // Bộ lọc SQL của shops.searchRanked chạy trên cột đã gấp dấu.
+  @@index([nameFolded(ops: raw("gin_trgm_ops"))], type: Gin, map: "shops_name_folded_trgm_idx")
   @@map("shops")
 }
 

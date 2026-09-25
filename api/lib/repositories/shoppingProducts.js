@@ -1,5 +1,6 @@
 const prisma = require('../prisma');
 const { mapMetaToProductFields } = require('../shoppingProductMapper');
+const { foldForSearch } = require('../textMatch');
 // One-way: shops.js must never require this file back, or the cycle leaves one
 // of the two exporting an empty object depending on which loaded first.
 const shopsRepo = require('./shops');
@@ -80,7 +81,17 @@ const SORTS = {
 function buildWhere({ search, minPrice, maxPrice, minCommissionRateValue, maxCommissionRateValue, minCommissionValue, maxCommissionValue, category, isBestSeller, isXtraCommission, shopId }) {
   const where = {};
   if (search && search.trim()) {
-    where.name = { contains: search.trim(), mode: 'insensitive' };
+    // Matched against the folded column, not `name`: people type "dien thoai"
+    // and mean "Điện Thoại". `name_folded` is GENERATED ALWAYS AS
+    // (fold_for_search(name)) in Postgres and carries its own GIN trgm index,
+    // so this stays one index scan - see
+    // prisma/migrations/20260925180000_add_folded_name_search.
+    //
+    // No `mode: 'insensitive'`: the column is already lowercased, so a plain
+    // LIKE is both correct and the only form the trgm index can serve. Adding
+    // it back would turn this into ILIKE and cost the index.
+    const folded = foldForSearch(search);
+    if (folded) where.nameFolded = { contains: folded };
   }
   if (category) where.category = category;
   // Shopee's own shop id (not shops.id) - see the FK note in schema.prisma.
