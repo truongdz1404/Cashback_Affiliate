@@ -16,13 +16,13 @@ import {
   BagIcon,
   BoltIcon,
   DownloadIcon,
-  FireIcon,
   GiftIcon,
   GridIcon,
   ImageIcon,
   ReceiptIcon,
   ShieldIcon,
   StarIcon,
+  TrendUpIcon,
   WalletIcon,
 } from "@/components/icons";
 
@@ -208,7 +208,7 @@ export default function MarketingHome({
           href="/products?bestSeller=1"
           products={bestSellers}
           isAuthenticated={false}
-          accent={<FireIcon className="h-4 w-4 text-[var(--danger)]" />}
+          accent={<TrendUpIcon className="h-4 w-4 text-[var(--danger)]" />}
         />
 
         <ProductRail

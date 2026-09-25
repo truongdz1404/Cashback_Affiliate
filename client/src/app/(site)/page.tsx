@@ -12,7 +12,7 @@ import CampaignCard from "@/components/public/CampaignCard";
 import HowItWorks from "@/components/public/HowItWorks";
 import MarketingHome from "@/components/public/MarketingHome";
 import LinkTool from "@/components/public/LinkTool";
-import { ArrowRightIcon, BoltIcon, FireIcon, GiftIcon, StarIcon } from "@/components/icons";
+import { ArrowRightIcon, BoltIcon, GiftIcon, StarIcon, TrendUpIcon } from "@/components/icons";
 
 export const dynamic = "force-dynamic";
 
@@ -143,7 +143,7 @@ export default async function HomePage() {
         href="/products?bestSeller=1"
         products={bestSellers}
         isAuthenticated={isAuthenticated}
-        accent={<FireIcon className="h-4 w-4 text-[var(--danger)]" />}
+        accent={<TrendUpIcon className="h-4 w-4 text-[var(--danger)]" />}
       />
 
       <ProductRail
