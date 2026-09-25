@@ -43,9 +43,53 @@ export default function AccountSidebar({
     window.location.href = "/";
   }
 
+  const chipNav = (
+    <nav aria-label="Khu vực tài khoản" className="-mx-4 mt-3 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {items.map((item) => {
+        const active = isMenuActive(pathname, item.href);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-current={active ? "page" : undefined}
+            className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-sm font-bold transition ${
+              active
+                ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
+                : "bg-[var(--surface)] text-[var(--foreground)] ring-1 ring-[var(--border)]"
+            }`}
+          >
+            {item.short ?? item.label}
+            {item.badge && !active && (
+              <span className={`h-2 w-2 rounded-full ${item.badge.tone === "danger" ? "bg-[var(--danger)]" : item.badge.tone === "warning" ? "bg-[var(--warning)]" : "bg-[var(--accent)]"}`} />
+            )}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+
   return (
     <>
-      {/* Phone header for sub-pages. */}
+      {/* Mobile: compact header for overview page — avatar + balance + chip nav. */}
+      {onOverview && (
+        <div className="lg:hidden">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-sm font-extrabold text-[var(--accent-dark)]">
+              {name.trim().charAt(0).toUpperCase()}
+            </span>
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-base font-extrabold text-[var(--foreground)]">{name}</h1>
+              <p className="truncate text-xs text-[var(--muted)]">{contact}</p>
+            </div>
+          </div>
+          <div className="mt-3">
+            <BalanceCard totals={totals} updatedAt={updatedAt} />
+          </div>
+          {chipNav}
+        </div>
+      )}
+
+      {/* Mobile: compact header for sub-pages — back button + page title + chip nav. */}
       {!onOverview && (
         <div className="lg:hidden">
           <div className="flex items-center gap-2">
@@ -61,33 +105,12 @@ export default function AccountSidebar({
               <h1 className="truncate text-lg font-extrabold text-[var(--foreground)]">{current?.label ?? name}</h1>
             </div>
           </div>
-          <nav aria-label="Khu vực tài khoản" className="-mx-4 mt-3 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {items.map((item) => {
-              const active = isMenuActive(pathname, item.href);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-sm font-bold transition ${
-                    active
-                      ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
-                      : "bg-[var(--surface)] text-[var(--foreground)] ring-1 ring-[var(--border)]"
-                  }`}
-                >
-                  {item.short ?? item.label}
-                  {item.badge && !active && (
-                    <span className={`h-2 w-2 rounded-full ${item.badge.tone === "danger" ? "bg-[var(--danger)]" : item.badge.tone === "warning" ? "bg-[var(--warning)]" : "bg-[var(--accent)]"}`} />
-                  )}
-                </Link>
-              );
-            })}
-          </nav>
+          {chipNav}
         </div>
       )}
 
-      {/* Full column: always on desktop, on phones only for /account. */}
-      <aside className={`${onOverview ? "" : "hidden lg:block"} rounded-[26px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5`}>
+      {/* Desktop full sidebar — always hidden on mobile. */}
+      <aside className="hidden lg:block rounded-[26px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
         <div className="flex items-center gap-3">
           <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-lg font-extrabold text-[var(--accent-dark)]">
             {name.trim().charAt(0).toUpperCase()}

@@ -46,7 +46,7 @@ export default async function AccountOverviewPage() {
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="Số dư khả dụng" value={formatVnd(wallet.availableAmount)} tone="accent" hint="Có thể rút ngay" />
         <StatTile label="Chờ đối soát" value={formatVnd(wallet.pendingAmount)} hint={`${wallet.pendingOrders} đơn`} />
         <StatTile label="Đã nhận" value={formatVnd(wallet.paidAmount)} hint={`${wallet.paidOrders} đơn đã thanh toán`} />
