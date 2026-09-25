@@ -97,6 +97,16 @@ model Link {
   // this is the real key, and it is what lets the recommendation engine and
   // any future per-shop reporting join links to shops exactly.
   shopId           String?  @map("shop_id")
+  // Which surface minted this link - see lib/linkSources.js for the vocabulary
+  // and why it is also the second sub id. Null on every row written before
+  // this column existed, and on anything an old app build still sends.
+  //
+  // Not indexed on purpose: the only reader is an occasional "GROUP BY source"
+  // over a table with one row per link created, which is orders of magnitude
+  // smaller than shopping_products and entirely in shared_buffers. An index
+  // here would cost a write on the hot path to speed up a query nobody runs in
+  // a request.
+  source           String?
   createdAt        DateTime @default(now()) @map("created_at")
 
   user          User     @relation(fields: [userId], references: [id])
@@ -409,6 +419,17 @@ model ShoppingProduct {
   id                 Int      @id @default(autoincrement())
   productId          String   @unique @map("product_id")
   name               String
+  // Bản đã gấp dấu của `name`, do POSTGRES tự sinh - xem
+  // migrations/20260925180000_add_folded_name_search. Đây là cột mọi ô tìm
+  // kiếm do người dùng gõ sẽ so vào, để "dien thoai" tìm được "Điện Thoại".
+  //
+  // CẢNH BÁO: KHÔNG BAO GIỜ ghi vào cột này. Nó là GENERATED ALWAYS AS (...)
+  // STORED; Postgres sẽ từ chối mọi INSERT/UPDATE có nhắc tới nó. Prisma không
+  // có khái niệm cột generated, nên nó được khai báo optional chỉ để không lọt
+  // vào input bắt buộc của create() - chứ không phải vì nó có thể null.
+  // Giá trị luôn bằng lib/textMatch.js#foldForSearch(name); giữ hai bên khớp
+  // nhau bằng `node scripts/gen-fold-table.js --check`.
+  nameFolded         String?  @map("name_folded")
   priceText          String?  @map("price_text")
   // VND, parsed from priceText (e.g. "108,0k" -> 108000, "2,8tr" -> 2800000)
   // so the app can filter/sort by price range without re-parsing client-side.
@@ -500,6 +521,20 @@ model ShoppingProduct {
   // Same shape for lib/shopLinkBackfill.js: the null-shop rows least recently
   // asked about.
   @@index([shopId, shopCheckedAt])
+  // The recommendation pool searches this column with `contains` - which
+  // Prisma compiles to `name ILIKE '%word%'`, and a leading wildcard is
+  // something a btree cannot answer, so each word used to cost a full
+  // sequential scan (649ms over 81k rows, measured). A trigram GIN index
+  // indexes the three-character sequences of the text, which is exactly what
+  // a substring match needs. `raw` because gin_trgm_ops comes from the
+  // pg_trgm extension, which the migration installs; Prisma has no name for
+  // it. Keep this in step with
+  // migrations/20260925000000_add_product_name_trgm_index.
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "shopping_products_name_trgm_idx")
+  // Cùng lý do, cho cột đã gấp dấu: buildWhere() so ô tìm kiếm vào `name_folded`
+  // chứ không vào `name`. Giữ khớp với
+  // migrations/20260925180000_add_folded_name_search.
+  @@index([nameFolded(ops: raw("gin_trgm_ops"))], type: Gin, map: "shopping_products_name_folded_trgm_idx")
   @@map("shopping_products")
 }
 
@@ -520,6 +555,17 @@ model Shop {
   // suffix-trimmed - the resolution job compares this to ShoppingProduct.shopName
   // with plain `===`, and any normalisation here would break that contract.
   name                String
+  // Bản đã gấp dấu của `name`, do POSTGRES tự sinh - xem
+  // migrations/20260925180000_add_folded_name_search. Đây là cột mọi ô tìm
+  // kiếm do người dùng gõ sẽ so vào, để "dien thoai" tìm được "Điện Thoại".
+  //
+  // CẢNH BÁO: KHÔNG BAO GIỜ ghi vào cột này. Nó là GENERATED ALWAYS AS (...)
+  // STORED; Postgres sẽ từ chối mọi INSERT/UPDATE có nhắc tới nó. Prisma không
+  // có khái niệm cột generated, nên nó được khai báo optional chỉ để không lọt
+  // vào input bắt buộc của create() - chứ không phải vì nó có thể null.
+  // Giá trị luôn bằng lib/textMatch.js#foldForSearch(name); giữ hai bên khớp
+  // nhau bằng `node scripts/gen-fold-table.js --check`.
+  nameFolded          String?  @map("name_folded")
   // discovered = only ever seen in a fuzzy search result, has no products in
   //              this DB yet -> NOT shown to app users.
   // linked     = matched a real product's shop name exactly, or a crawl of this
@@ -574,6 +620,8 @@ model Shop {
   @@index([isFeatured, sortOrder])
   @@index([lastCrawledAt])
   @@index([detailFetchedAt, detailCheckedAt])
+  // Bộ lọc SQL của shops.searchRanked chạy trên cột đã gấp dấu.
+  @@index([nameFolded(ops: raw("gin_trgm_ops"))], type: Gin, map: "shops_name_folded_trgm_idx")
   @@map("shops")
 }
 

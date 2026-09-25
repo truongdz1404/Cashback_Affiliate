@@ -151,6 +151,12 @@ async function backfillMissingCategories({ batchSize = DEFAULT_BATCH_SIZE } = {}
     shopsLinked,
     sourceRateLimited: batchInfo.limits?.sourceRateLimited ?? false,
     sourceCooldownSeconds: batchInfo.limits?.sourceCooldownSeconds ?? 0,
+    // What addlivetag says it has left to answer with this window. Carried
+    // through only so a stalled sweep says WHY in job_runs: a batch that comes
+    // back all-retryable looks identical whether the source is down, the live
+    // budget is spent, or the rows are genuinely unanswerable.
+    apiRemaining: batchInfo.limits?.apiRemaining ?? null,
+    dbRemaining: batchInfo.limits?.dbRemaining ?? null,
   };
 }
 

@@ -8,6 +8,7 @@ services:
     environment:
       PORT: 4000
       HEADLESS: "false"
+      SHOPEE_AN_REDIR_PERCENT: ${SHOPEE_AN_REDIR_PERCENT:-0}
       SERVICE_API_KEY: ${SERVICE_API_KEY}
       STORAGE_STATE_PATH: ./storage/storageState.json
       ZALO_BOT_TOKEN: ${ZALO_BOT_TOKEN}

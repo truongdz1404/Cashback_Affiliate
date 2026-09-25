@@ -38,6 +38,16 @@ function parseShopeeUrl(raw) {
   const product = path.match(/^\/(?:universal-link\/)?product\/(\d+)\/(\d+)/);
   if (product) return { kind: 'product', shopId: product[1], itemId: product[2] };
 
+  // /opaanlp/<shopId>/<itemId> is where an affiliate short link lands when it
+  // is followed by something Shopee reads as a phone - the "open in the app"
+  // interstitial, carrying the same two ids in the same order as /product/.
+  // Nobody types this shape, but we get handed it: all 11 of the short links
+  // in the links table that lib/shopeeTarget.js failed to resolve on the
+  // first pass redirected here, and reading it takes that resolver from 71.8%
+  // of real pasted short links to all of them.
+  const interstitial = path.match(/^\/opaanlp\/(\d+)\/(\d+)/);
+  if (interstitial) return { kind: 'product', shopId: interstitial[1], itemId: interstitial[2] };
+
   const permalink = path.match(/-i\.(\d+)\.(\d+)/);
   if (permalink) return { kind: 'product', shopId: permalink[1], itemId: permalink[2] };
 

@@ -9,6 +9,7 @@ const { getCustomLinks } = require('./lib/customLink');
 const { getCommission } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
 const linkTracking = require('./lib/linkTracking');
+const { LINK_SOURCES, productTapSource } = require('./lib/linkSources');
 const usersRepo = require('./lib/repositories/users');
 const linksRepo = require('./lib/repositories/links');
 const ordersRepo = require('./lib/repositories/orders');
@@ -24,6 +25,7 @@ const banksRepo = require('./lib/repositories/banks');
 const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
 const recommendationsRepo = require('./lib/repositories/recommendations');
 const searchHistoryRepo = require('./lib/repositories/searchHistory');
+const searchSuggestionsRepo = require('./lib/repositories/searchSuggestions');
 const shoppingProductImport = require('./lib/shoppingProductImport');
 const bannerUploads = require('./lib/bannerUploads');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
@@ -38,6 +40,7 @@ const continuousJobs = require('./lib/continuousJobs');
 const jobRunsRepo = require('./lib/repositories/jobRuns');
 const { withJobRun } = require('./lib/jobRunner');
 const { buildAffiliateLink } = require('./lib/affiliateLink');
+const { buildAnRedirLink, useAnRedir } = require('./lib/anRedirLink');
 const { buildShopLink } = require('./lib/shopLink');
 const { backfillMissingCategories } = require('./lib/categoryEnrichment');
 const { backfillMissingShopIds } = require('./lib/shopLinkBackfill');
@@ -547,15 +550,22 @@ app.put('/app/password', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
-// Minting one link occupies a tab from a pool of two (CUSTOM_LINK_POOL_SIZE in
-// lib/browserManager.js) for several seconds on a two-core box, so the two
-// routes that do it get a per-user budget. Twenty in five minutes is far more
-// than anyone creates by hand and still stops one account - or one retry loop
-// in a client - from starving everybody else's "Tạo link". Placed AFTER
+// A per-user budget on the two routes that mint links. Placed AFTER
 // requireAppUser so req.appUserId exists to key on.
+//
+// Twenty was sized for when minting always meant holding one of two Playwright
+// tabs (CUSTOM_LINK_POOL_SIZE in lib/browserManager.js) for several seconds on
+// a two-core box - there, one user's retry loop really could starve everyone
+// else's "Tạo link". lib/linkAndCommission.js now builds a pasted link from two
+// HTTP calls and no browser, so the scarce resource this was rationing is off
+// the hot path; the browser is only reached on the fallback.
+//
+// So this no longer protects the pool, it catches a client stuck in a retry
+// loop. Sixty in five minutes is still far more than anyone creates by hand,
+// and leaves the fallback bounded at a rate the pool absorbs.
 const linkMintRateLimit = rateLimit({
   windowMs: 5 * 60 * 1000,
-  max: 20,
+  max: 60,
   by: (req) => (req.appUserId != null ? `user:${req.appUserId}` : null),
 });
 
@@ -570,12 +580,12 @@ app.post('/app/link', appAuth.requireAppUser, linkMintRateLimit, async (req, res
       return res.status(501).json({ error: 'coming_soon' });
     }
     const user = await usersRepo.getById(req.appUserId);
-    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, LINK_SOURCES.PASTE);
     const result = await getLinkAndCommission([productUrl], tracking.finalSubIds);
     const estimate = estimateFromResult(result, await getEffectivePct(user));
 
     if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, [productUrl], result, result.pid, estimate, result.meta);
+      await linkTracking.recordLink(tracking, [productUrl], result, result.pid, estimate, result.meta);
     }
 
     // Fire-and-forget: the commission lookup above already paid for this
@@ -590,6 +600,13 @@ app.post('/app/link', appAuth.requireAppUser, linkMintRateLimit, async (req, res
 
     res.json({ ...result, estimate });
   } catch (err) {
+    // The only record this failure leaves. Minting walks through a commission
+    // lookup, a resolver, a link builder and an INSERT, any of which can fail
+    // for a reason the message alone does not place - and the client only ever
+    // shows the user "thử lại". Without this line a 502 here is invisible:
+    // nothing else on this path logs, so diagnosing one means replaying the
+    // route by hand against production.
+    console.error('[app/link] mint failed:', err.stack || err.message);
     res.status(502).json({ error: err.message });
   }
 });
@@ -1093,7 +1110,7 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
     // anyone, but the operator's commission still rides on the affiliate id in
     // the link, so this is strictly better than the bare storefront URL.
     if (!req.appUserId) {
-      const guest = await buildShopLink(shop, { subIds: [] });
+      const guest = await buildShopLink(shop, { subIds: ['', LINK_SOURCES.SHOPFRONT] });
       return res.json({ affiliateUrl: guest.url, tracked: false, reused: false });
     }
 
@@ -1103,8 +1120,8 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
       return res.json({ affiliateUrl: reused.affiliateUrl, tracked: true, reused: true });
     }
 
-    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
-    const { url, tracked } = await buildShopLink(shop, { subIds: [tracking.subId] });
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, LINK_SOURCES.SHOPFRONT);
+    const { url, tracked } = await buildShopLink(shop, { subIds: [tracking.subId, tracking.source] });
 
     if (tracked) {
       await linksRepo.saveLink({
@@ -1120,6 +1137,7 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
         shopName: shop.name,
         shopId: shop.shopId,
         imageUrl: shop.portraitUrl || shop.imageUrl,
+        source: tracking.source,
       });
       // Same reason as recordLink: a fresh shop signal outdates any cached
       // suggestions ordering.
@@ -1145,6 +1163,58 @@ app.get('/app/shopping-categories', appAuth.optionalAppUser, async (req, res) =>
   }
 });
 
+// The search screen the Shopping tab opens when its box is tapped: the row of
+// recent terms, the keyword cards under them, and the typeahead list.
+//
+// All three are Postgres queries (lib/repositories/searchSuggestions.js has
+// the note on why there is no search engine behind them). Suggestions are
+// optionalAppUser because they still work signed out - they just stop being
+// ordered around the person reading them.
+app.get('/app/search-history', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit, 10, 20);
+    res.json(await searchHistoryRepo.recentSearches(req.appUserId, limit));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/app/search-history', appAuth.requireAppUser, async (req, res) => {
+  try {
+    await searchHistoryRepo.clearAll(req.appUserId);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Shops ride along with the terms so the client makes one request per
+// keystroke instead of two. Most queries name a product and come back with an
+// empty `shops`, which is the right answer - see /app/shops/search.
+app.get('/app/search-suggestions', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const limit = parseLimit(req.query.limit, 10, 20);
+    if (!q.trim()) return res.json({ terms: [], shops: [] });
+    const [terms, shops] = await Promise.all([
+      searchSuggestionsRepo.suggestTerms(req.appUserId, q, limit),
+      shopsRepo.searchRanked({ search: q.trim(), limit: 2 }),
+    ]);
+    res.json({ terms, shops: shopsRepo.toAppShops(shops) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/search-discovery', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit, 8, 20);
+    res.json(await searchSuggestionsRepo.discovery(req.appUserId, limit));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // A ShoppingProduct's own offerUrl/productUrl is scraped ONCE per day and is
 // identical for every app user (see lib/productOfferScraper.js) - unlike the
 // "Tạo link" flow, it carries no per-user subId, so a resulting Shopee order
@@ -1161,6 +1231,56 @@ app.get('/app/shopping-categories', appAuth.optionalAppUser, async (req, res) =>
 // anti-fraud flagging cares about automated-looking call volume, not just
 // correctness.
 const SHOPPING_LINK_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Mints the affiliate link for a catalogue product, in the shape
+ * lib/linkTracking.js already expects from getCustomLinks() so the caller
+ * and the stored row cannot tell the two routes apart.
+ *
+ * an_redir is Shopee's own documented redirector: we hand it the plain
+ * product URL and it issues the tracked landing page itself, which is why
+ * its result carries a credential_token and mmp_pid that a link we assemble
+ * ourselves never has. It also needs no browser, so a tap that used to wait
+ * 2-6s on Playwright answers immediately.
+ *
+ * Only the catalogue can take this route: building the link needs the shop
+ * and item ids, which a row scraped by us has and a link the user pasted
+ * does not. POST /app/link still resolves those the long way.
+ *
+ * Rolled out by SHOPEE_AN_REDIR_PERCENT rather than a straight switch: until
+ * a real order confirms a sub id came back through an an_redir link, the old
+ * path stays the one most links take. Which route a row took is readable
+ * afterwards without a schema change - an an_redir row's affiliate_url
+ * starts with s.shopee.vn/an_redir.
+ */
+async function buildProductLink(product, tracking) {
+  const key = tracking.subId || String(product.productId || '');
+  const percent = await settingsRepo.getAnRedirPercent();
+  if (product.shopId && product.productId && useAnRedir(key, percent)) {
+    try {
+      const affiliateId = await shopeeAffiliateApi.getAffiliateId();
+      const url = buildAnRedirLink({
+        target: { kind: 'product', shopId: String(product.shopId), itemId: String(product.productId) },
+        affiliateId,
+        subIds: tracking.finalSubIds,
+      });
+      if (url) {
+        return {
+          results: [{
+            shortLink: url,
+            longLink: url,
+            itemId: String(product.productId),
+            shopId: String(product.shopId),
+            failCode: null,
+          }],
+        };
+      }
+    } catch (err) {
+      console.error(`[open] an_redir không dựng được (${err.message}), quay lại đường Playwright.`);
+    }
+  }
+  return getCustomLinks([product.productUrl], tracking.finalSubIds);
+}
 
 app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRateLimit, async (req, res) => {
   try {
@@ -1182,13 +1302,15 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRate
       return res.json({ affiliateUrl: reused.affiliateUrl, estimate, reused: true });
     }
 
-    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined);
-    const result = await getCustomLinks([product.productUrl], tracking.finalSubIds);
+    // The screen the card was tapped on, as the app reports it. Validated
+    // rather than trusted - it goes into a URL Shopee will see.
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, productTapSource(req.body && req.body.source));
+    const result = await buildProductLink(product, tracking);
     const first = (result.results || [])[0] || null;
     const affiliateUrl = first ? first.shortLink || first.longLink : null;
 
     if (tracking.userId && affiliateUrl) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, [product.productUrl], result, product.productId, estimate, {
+      await linkTracking.recordLink(tracking, [product.productUrl], result, product.productId, estimate, {
         itemName: product.name,
         catId: null,
         catName: product.category,
@@ -1339,7 +1461,7 @@ app.post('/custom-link', async (req, res) => {
     const tracking = await linkTracking.prepareSubId(zaloUserId, subIds);
     const result = await getCustomLinks(links, tracking.finalSubIds);
     if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, links, result, itemId);
+      await linkTracking.recordLink(tracking, links, result, itemId);
     }
     res.json(result);
   } catch (err) {
@@ -1366,7 +1488,7 @@ app.post('/link-and-commission', async (req, res) => {
     const tracking = await linkTracking.prepareSubId(zaloUserId, subIds);
     const result = await getLinkAndCommission(links, tracking.finalSubIds);
     if (tracking.userId) {
-      await linkTracking.recordLink(tracking.userId, tracking.subId, links, result, result.pid);
+      await linkTracking.recordLink(tracking, links, result, result.pid);
     }
     res.json(result);
   } catch (err) {
@@ -1583,6 +1705,7 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
       shopDetailBatchSize: await settingsRepo.getShopDetailBatchSize(),
       jobMode: await settingsRepo.getJobMode(),
       continuousGaps: await settingsRepo.getContinuousGaps(),
+      anRedirPercent: await settingsRepo.getAnRedirPercent(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1686,6 +1809,16 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
         return res.status(400).json({ error: `body.jobMode must be one of ${settingsRepo.JOB_MODES.join(', ')}` });
       }
       response.jobMode = await settingsRepo.setJobMode(mode);
+    }
+    // Share of new links minted through an_redir. Takes effect on the very
+    // next link - it is read per mint, not cached - so this is also the
+    // rollback: set it to 0 and nothing else has to happen.
+    if (req.body.anRedirPercent !== undefined) {
+      const percent = Number(req.body.anRedirPercent);
+      if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+        return res.status(400).json({ error: 'body.anRedirPercent must be an integer between 0 and 100' });
+      }
+      response.anRedirPercent = await settingsRepo.setAnRedirPercent(percent);
     }
     if (req.body.continuousGaps !== undefined) {
       const gaps = req.body.continuousGaps || {};

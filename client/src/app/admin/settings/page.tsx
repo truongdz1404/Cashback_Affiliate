@@ -11,6 +11,7 @@ type Settings = {
   referralCommissionMonths?: number | null;
   productOfferMaxPages?: number | null;
   minWithdrawAmount?: number | null;
+  anRedirPercent?: number | null;
 };
 
 type SyncResult = { pagesVisited: number; scraped: number; saved: number; stoppedEarly: string | null };
@@ -287,6 +288,90 @@ function MinWithdrawSection() {
           Lưu
         </Button>
       </div>
+      {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
+    </SectionCard>
+  );
+}
+
+// The rollout dial for an_redir links (api/lib/anRedirLink.js). Shopee only
+// documents one shape of affiliate link - s.shopee.vn/an_redir - and a click
+// through it comes back carrying a credential_token and mmp_pid that a link
+// we assemble ourselves cannot produce. It also needs no browser, so those
+// taps answer instantly instead of waiting 2-6s on Playwright.
+//
+// It lives here, next to the money settings, because it IS a money setting:
+// no real order has yet confirmed that a sub id survives an an_redir click
+// into the conversion report, so every percent moved across is a bet. The
+// point of the dial is that the bet can be called off in one save.
+function AnRedirSection() {
+  const [percent, setPercent] = useState("");
+  const [saved, setSaved] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await clientApi.get<Settings>("/api/settings");
+      setPercent(String(data.anRedirPercent ?? 0));
+      setSaved(Number(data.anRedirPercent ?? 0));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Không tải được");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save(next?: number) {
+    const value = next ?? Number(percent);
+    setSaving(true);
+    setMsg("");
+    try {
+      const res = await clientApi.put<Settings>("/api/settings", { anRedirPercent: value });
+      const stored = Number(res.anRedirPercent ?? value);
+      setPercent(String(stored));
+      setSaved(stored);
+      setMsg(stored === 0 ? "Đã tắt. Mọi link mới quay lại đường cũ." : `Đã lưu: ${stored}% link mới đi qua an_redir.`);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Lưu thất bại");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Link qua an_redir"
+      description="Bao nhiêu phần trăm link MỚI được tạo bằng đường chuyển hướng chính thức của Shopee, thay cho cách tự dựng link. Link đã tạo rồi không đổi."
+    >
+      <div className="flex items-center gap-2">
+        <TextField
+          name="anRedirPercent"
+          value={percent}
+          onChange={(next) => setPercent(next.replace(/[^\d]/g, ""))}
+          className="w-24"
+          aria-label="Phần trăm link qua an_redir"
+        >
+          <Input placeholder="0" inputMode="numeric" />
+        </TextField>
+        <span className="text-sm text-[var(--muted)]">%</span>
+        <Button onPress={() => save()} isPending={saving} isDisabled={percent === ""}>
+          Lưu
+        </Button>
+        {saved !== null && saved > 0 && (
+          <Button variant="ghost" size="sm" onPress={() => save(0)} isDisabled={saving}>
+            Tắt ngay
+          </Button>
+        )}
+        <Chip color={saved ? "warning" : undefined}>{saved ? `Đang bật ${saved}%` : "Đang tắt"}</Chip>
+      </div>
+      <p className="mt-2 text-xs text-[var(--muted)]">
+        Chưa có đơn thật nào xác nhận sub_id về đúng qua đường này, nên hãy tăng dần và đối chiếu báo cáo
+        hoa hồng. Link đi đường mới nhận ra được ngay trong bảng Link: địa chỉ bắt đầu bằng
+        {" "}<code className="font-mono">s.shopee.vn/an_redir</code>. Đổi về 0 là quay lại hoàn toàn, có hiệu lực
+        ngay từ link kế tiếp.
+      </p>
       {msg && <p className="mt-2 text-xs text-[var(--muted)]">{msg}</p>}
     </SectionCard>
   );
@@ -623,6 +708,7 @@ export default function SettingsPage() {
       <CommissionSection />
       <ReferralProgramSection />
       <MinWithdrawSection />
+      <AnRedirSection />
       <ProductOfferMaxPagesSection />
       <SecretsSection />
       <SessionSection />

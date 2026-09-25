@@ -54,11 +54,36 @@ const SESSION_COOLDOWN_MS = 15 * 60 * 1000;
 
 const alwaysEnabled = async () => true;
 
-// addlivetag answering "slow down" is the only pacing signal that loop has.
+// How long the source loop waits after a batch that moved nothing.
+const SOURCE_EXHAUSTED_MS = 60 * 1000;
+
+/**
+ * addlivetag answering "slow down" is the only pacing signal that loop has -
+ * so when it stays silent, the batch itself has to be read as one.
+ *
+ * It meters what it will answer per window (`apiRemaining` for live lookups,
+ * `dbRemaining` for cached ones) and a spent budget is NOT reported as a rate
+ * limit: it simply stops answering, and every unanswered row comes back
+ * `retryable` - unstamped, so the next pass selects the very same rows.
+ *
+ * `madeProgress` already refuses to call that work, but `didWork` is decided
+ * for the loop, not the task: whenever shop-link-backfill has something to do,
+ * the loop returns to its two-second gap and drags category-backfill back with
+ * it, re-asking the identical batch thirty times a minute and spending the
+ * cache budget that is the only thing still answering. A per-task cooldown is
+ * the one signal that survives that, because the driver takes the max.
+ */
 function sourceCooldown(result) {
-  if (!result || !result.sourceRateLimited) return 0;
-  const seconds = Number(result.sourceCooldownSeconds) || 60;
-  return Math.min(Math.max(seconds, 1), 900) * 1000;
+  if (!result) return 0;
+  if (result.sourceRateLimited) {
+    const seconds = Number(result.sourceCooldownSeconds) || 60;
+    return Math.min(Math.max(seconds, 1), 900) * 1000;
+  }
+  // An empty queue is the opposite of exhaustion - it is this job being
+  // finished. Backing off on it would clamp the loop, and the loop is shared:
+  // the other task would end up paced by a queue that is not its own.
+  if (!Number(result.scanned)) return 0;
+  return madeProgress(result) ? 0 : SOURCE_EXHAUSTED_MS;
 }
 
 // Shopee pushing back is a hard stop, not a hint: retrying is what deepens a

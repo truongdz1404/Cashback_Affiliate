@@ -91,6 +91,17 @@ const DEFAULT_CONTINUOUS_CRAWL_GAP_SEC = parseInt(process.env.CONTINUOUS_CRAWL_G
 const CONTINUOUS_CRAWL_GAP_SEC_KEY = 'continuous_crawl_gap_sec';
 const DEFAULT_CONTINUOUS_IDLE_GAP_SEC = parseInt(process.env.CONTINUOUS_IDLE_GAP_SEC || '300', 10);
 const CONTINUOUS_IDLE_GAP_SEC_KEY = 'continuous_idle_gap_sec';
+// Share of newly minted affiliate links that go through Shopee's documented
+// an_redir redirector (lib/anRedirLink.js) instead of the Playwright "Lấy
+// link" page. 0 = every link on the old path, 100 = all of them.
+//
+// A setting rather than an env var because this is the dial you want to
+// reach for at the worst moment: if an_redir links turn out not to be
+// attributed, every minute at the old number is money lost, and an env var
+// costs a redeploy to change. Ships at whatever SHOPEE_AN_REDIR_PERCENT
+// says (0 unless set), so an untouched dashboard changes nothing.
+const DEFAULT_AN_REDIR_PERCENT = parseInt(process.env.SHOPEE_AN_REDIR_PERCENT || '0', 10);
+const AN_REDIR_PERCENT_KEY = 'an_redir_percent';
 
 async function getNumber(key, fallback) {
   const row = await prisma.setting.findUnique({ where: { key } });
@@ -275,6 +286,17 @@ function clampGap(value, fallback, { min = 0, max = 3600 } = {}) {
   return Math.min(value, max);
 }
 
+async function getAnRedirPercent() {
+  const value = await getNumber(AN_REDIR_PERCENT_KEY, DEFAULT_AN_REDIR_PERCENT);
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.trunc(value)));
+}
+
+async function setAnRedirPercent(percent) {
+  await setNumber(AN_REDIR_PERCENT_KEY, percent);
+  return getAnRedirPercent();
+}
+
 async function getContinuousGaps() {
   const [source, shopee, crawl, idle] = await Promise.all([
     getNumber(CONTINUOUS_SOURCE_GAP_SEC_KEY, DEFAULT_CONTINUOUS_SOURCE_GAP_SEC),
@@ -355,6 +377,10 @@ module.exports = {
   JOB_MODE_KEY,
   getContinuousGaps,
   setContinuousGaps,
+  getAnRedirPercent,
+  setAnRedirPercent,
+  DEFAULT_AN_REDIR_PERCENT,
+  AN_REDIR_PERCENT_KEY,
   DEFAULT_SHOP_CRAWL_MAX_PAGES,
   SHOP_CRAWL_MAX_PAGES_KEY,
   COMMISSION_PCT_KEY,

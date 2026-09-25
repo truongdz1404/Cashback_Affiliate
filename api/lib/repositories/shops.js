@@ -2,9 +2,11 @@ const prisma = require('../prisma');
 const { parseCommissionRatePct } = require('../shoppingProductMapper');
 const { foldForSearch } = require('../textMatch');
 
-// Safety cap for the unaccented fallback in searchRanked(). Shops number in
-// the low thousands at most (one row per affiliate storefront), so scoring the
-// visible ones in memory stays far cheaper than maintaining an unaccent index.
+// Safety cap for searchRanked()'s fallback sweep, which runs only when the
+// folded substring pre-filter finds nothing. Shops number in the low thousands
+// (3,528 as of Sep 2026, one row per affiliate storefront), so scoring the
+// biggest visible ones in memory stays cheap; the cap is what stops that from
+// becoming a full table scan if the catalogue ever grows an order of magnitude.
 const CANDIDATE_POOL_SIZE = 2000;
 
 // Shops in Shopee's affiliate programme. Rows are created by
@@ -241,7 +243,11 @@ const SORTS = {
 function buildWhere({ search, status, featuredOnly, visibleOnly } = {}) {
   const where = visibleOnly ? { ...VISIBLE_WHERE } : {};
   if (search && search.trim()) {
-    where.name = { contains: search.trim(), mode: 'insensitive' };
+    // Folded, like searchRanked below and the product list: this is the same
+    // box to the user, and "dong ho" finding nothing while "Đồng Hồ" finds
+    // forty would read as the shop list being broken, not as a tone rule.
+    const folded = foldForSearch(search);
+    if (folded) where.nameFolded = { contains: folded };
   }
   // An explicit status filter is the admin dashboard's; it wins over the
   // visibility default so admins can inspect `discovered` rows.
@@ -313,14 +319,18 @@ async function searchRanked({ search, limit = 1 } = {}) {
   const folded = foldForSearch(search);
   if (folded.length < 2) return [];
 
-  // The SQL pre-filter is diacritic-SENSITIVE (Postgres `ILIKE`), so it is a
-  // cheap net, not the matcher: "cocoon" finds "Cocoon Vietnam", while a query
-  // typed without tones ("thuoc nhuom") won't pre-match "THUỐC NHUỘM". Widening
-  // that would mean an unaccent index; until shops number in the thousands the
-  // fallback below - score the visible shops directly - is cheaper than the
-  // index and strictly more accurate.
+  // The SQL pre-filter now runs on `name_folded`, the same fold this function
+  // scores with - so "thuoc nhuom" pre-matches "THUỐC NHUỘM" instead of
+  // falling through. The column is GENERATED ALWAYS in Postgres with its own
+  // GIN trgm index (prisma/migrations/20260925180000_add_folded_name_search);
+  // already lowercase, hence a plain `contains` and no `mode: 'insensitive'`,
+  // which would cost the index.
+  //
+  // The whole-catalogue fallback below stays: this is still a substring net,
+  // and a query that only overlaps a shop name in pieces ("cocoon ca phe dak
+  // lak" vs "Cocoon Vietnam") reaches the scorer only that way.
   let candidates = await prisma.shop.findMany({
-    where: { ...VISIBLE_WHERE, name: { contains: search.trim(), mode: 'insensitive' } },
+    where: { ...VISIBLE_WHERE, nameFolded: { contains: folded } },
     take: SEARCH_CANDIDATE_POOL,
   });
   if (!candidates.length) {

@@ -1,0 +1,5 @@
+# Shell scripts run on Linux. A Windows checkout that commits them back with
+# CRLF turns the shebang into `/usr/bin/env bash`, which the kernel reports as
+# "bad interpreter: no such file or directory" - a failure that says nothing
+# about line endings.
+*.sh text eol=lf

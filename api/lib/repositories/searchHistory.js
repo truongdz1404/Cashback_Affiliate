@@ -57,7 +57,12 @@ function isTypingSameTerm(previous, next) {
 // Most recent first, one entry per distinct term. Without the de-duplication
 // a user who searches "sua rua mat" every morning would spend their whole
 // affinity window on that one term.
-async function recentTerms(userId, limit = RECENT_TERMS_LIMIT) {
+//
+// Returns rows, not bare strings: buildAffinity() now orders a search and a
+// link against each other by when they actually happened, so it needs the
+// timestamp. Keeping the FIRST row of each duplicated term (the most recent
+// one, since the scan is newest-first) is what dates the term.
+async function recentSearches(userId, limit = RECENT_TERMS_LIMIT) {
   const rows = await prisma.searchHistory.findMany({
     where: { userId: Number(userId) },
     orderBy: { createdAt: 'desc' },
@@ -65,15 +70,23 @@ async function recentTerms(userId, limit = RECENT_TERMS_LIMIT) {
   });
 
   const seen = new Set();
-  const terms = [];
+  const searches = [];
   for (const row of rows) {
     const key = String(row.term || '').toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    terms.push(row.term);
-    if (terms.length >= limit) break;
+    searches.push({ term: row.term, createdAt: row.createdAt });
+    if (searches.length >= limit) break;
   }
-  return terms;
+  return searches;
 }
 
-module.exports = { record, recentTerms, RECENT_TERMS_LIMIT };
+// Emptying the recent-terms row on the search screen. Deliberately a real
+// delete rather than a "hidden" flag: the same rows feed buildAffinity(), so
+// a user who clears their history expects the recommendations built on it to
+// stop following them around too.
+async function clearAll(userId) {
+  await prisma.searchHistory.deleteMany({ where: { userId: Number(userId) } });
+}
+
+module.exports = { record, recentSearches, clearAll, RECENT_TERMS_LIMIT };
