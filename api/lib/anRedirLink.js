@@ -59,6 +59,28 @@ function buildAnRedirLink({ target, affiliateId, subIds = [] }) {
     ? subIds
     : Array.from({ length: 5 }, (_, i) => (subIds || {})[`sub_id${i + 1}`] || '');
 
+  // Rebuilt from the two ids rather than passed through, and always in the
+  // /product/<shopId>/<itemId> form.
+  //
+  // Shopee's guide does not say origin_link has to take that shape - it
+  // shows both it and the SEO permalink in its examples and describes the
+  // parameter only as "your desired landing page". The difference is not in
+  // the guide, it is in the response. Same product, same slug, three runs
+  // each (Sep 2026):
+  //
+  //   origin_link=/product/84565579/43067923924      -> credential_token present
+  //   origin_link=/<real-slug>-i.84565579.43067923924 -> credential_token ABSENT
+  //
+  // Both return 200, both carry mmp_pid, both round-trip the sub_id into
+  // utm_content. Only credential_token differs - and that is the single thing
+  // an_redir has that the self-built link in affiliateLink.js does not, i.e.
+  // the entire reason this module exists. So the parse-and-rebuild is not
+  // bookkeeping; it is what buys the token.
+  //
+  // It also strips the query string, which matters for a pasted link: see
+  // lib/shopeeTarget.js, a share link arrives carrying the sharer's own
+  // utm_content.
+  //
   // The plain public URL, not our /universal-link/ form: origin_link is where
   // Shopee sends the buyer after it has recorded the click, and it re-attaches
   // the tracking itself.
