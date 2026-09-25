@@ -243,7 +243,11 @@ const SORTS = {
 function buildWhere({ search, status, featuredOnly, visibleOnly } = {}) {
   const where = visibleOnly ? { ...VISIBLE_WHERE } : {};
   if (search && search.trim()) {
-    where.name = { contains: search.trim(), mode: 'insensitive' };
+    // Folded, like searchRanked below and the product list: this is the same
+    // box to the user, and "dong ho" finding nothing while "Đồng Hồ" finds
+    // forty would read as the shop list being broken, not as a tone rule.
+    const folded = foldForSearch(search);
+    if (folded) where.nameFolded = { contains: folded };
   }
   // An explicit status filter is the admin dashboard's; it wins over the
   // visibility default so admins can inspect `discovered` rows.

@@ -799,9 +799,12 @@ async function freshSlice(where, count) {
  * price of the whole thing is a handful of small scans. Products the user
  * already made a link for are excluded here rather than after scoring.
  *
- * Matching is by accented phrase and accented word because this is a LIKE
- * against Shopee's own titles - see the note on rawTokens in
- * lib/textMatch.js.
+ * Matching is on name_folded, the same column the search box filters on.
+ * The hints are largely the user's own words - their search terms go in
+ * verbatim - so a pool matching accented titles bought nothing at all for
+ * anyone who types without tones: "dien thoai" scanned 92k rows for a
+ * literal that appears in one of them, and the feed fell back to catalogue
+ * filler while the phones they had just searched for sat there unmatched.
  *
  * Returns POOL_SELECT-shaped rows, NOT full products: callers rank these and
  * then hydrate the page they actually serve through productsInOrder.
@@ -845,11 +848,13 @@ async function candidatePool(affinity, { excludeLinked = true } = {}) {
   const addNeedle = (value) => {
     if (needles.length >= POOL_WORDS) return;
     const key = foldForSearch(value);
-    // A two-character needle is an ILIKE over most of the catalogue; leave
+    // A two-character needle is a scan over most of the catalogue; leave
     // those to the phrases that contain them.
     if (!key || key.length < 3 || seen.has(key)) return;
     seen.add(key);
-    needles.push(value);
+    // The folded form is both the dedupe key and the needle: the query runs
+    // against name_folded, so anything else here would simply not match.
+    needles.push(key);
   };
   for (const phrase of strongest(hintPhrases, 4)) addNeedle(phrase);
   for (const term of strongest(hintTerms, 3)) addNeedle(term);
@@ -860,7 +865,7 @@ async function candidatePool(affinity, { excludeLinked = true } = {}) {
 
   const idQueries = needles.map((needle) =>
     prisma.shoppingProduct.findMany({
-      where: { ...notLinked, name: { contains: needle, mode: 'insensitive' } },
+      where: { ...notLinked, nameFolded: { contains: needle } },
       select: { id: true },
       orderBy: { id: 'desc' },
       take: mix(POOL_PER_WORD, POOL_PER_WORD_RICH, strength),
@@ -1017,12 +1022,17 @@ async function rankProductsForUser(userId, { search, limit = 20, offset = 0 } = 
     });
   }
 
+  // Read the folded predicate, not `name`: this branch decides whether the
+  // term is honoured at all, and when it silently said "no search" a user
+  // with any history got their cached browse feed back for every word they
+  // typed - the search ran, matched, and was then thrown away.
+  //
   // A search already aims the pool at what the user asked for, so the newest
   // matches are the right rows to rank. A plain browse aims at nothing, and
   // taking the newest CANDIDATE_POOL_SIZE of a ~78k catalogue is how this
   // screen ended up with no lipstick to show a user who had just linked three
   // - see the note on CANDIDATE_POOL_SIZE.
-  const searching = Boolean(where.name);
+  const searching = Boolean(where.nameFolded);
 
   // Only the unfiltered browse ordering is cached: a search pool is built for
   // one term the user is still typing at, and would evict real orderings.
