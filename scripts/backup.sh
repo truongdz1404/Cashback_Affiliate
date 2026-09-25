@@ -17,8 +17,12 @@
 #
 # Usage:
 #   scripts/backup.sh                      # dump, verify, rotate, upload
-#   BACKUP_REMOTE=r2:shopee-backup ...     # off-site destination (rclone)
+#   scripts/backup.sh --local              # skip the upload without failing
 #   KEEP_DAYS=14 scripts/backup.sh         # override retention
+#
+# BACKUP_REMOTE belongs in the compose .env next to the database password: that
+# file is already the one place credentials live, and it is read both by cron
+# and by the deploy over SSH, neither of which inherits a shell profile.
 #
 # Restore (the reason any of this exists):
 #   gunzip -c db_2026-09-25.dump.gz > /tmp/db.dump
@@ -33,6 +37,19 @@ DEST="${BACKUP_DIR:-/var/backups/shopee-affiliate}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 DB_CONTAINER="${DB_CONTAINER:-shopee-affiliate-db}"
 STAMP="$(date -u +%F_%H%M)"
+
+# The snapshot taken right before a migration is worth having even when the
+# off-site copy is not configured yet - it is there to undo the migration, which
+# is a local concern. The nightly run is the one that must leave the building,
+# so only this flag downgrades a missing destination to a warning.
+# Spelled out rather than `[ ... ] && LOCAL_ONLY=1`, because that form returns
+# non-zero when the test fails and `set -e` would end the run right there -
+# without a backup, and without saying why.
+LOCAL_ONLY=0
+if [ "${1:-}" = "--local" ]; then LOCAL_ONLY=1; fi
+# Distinguishes a pre-deploy snapshot from the nightly one in a directory
+# listing, which is the listing you read while deciding what to restore.
+LABEL="${BACKUP_LABEL:+${BACKUP_LABEL}_}"
 
 # The volumes worth keeping, named as docker sees them (compose prefixes the
 # project directory). rabbitmq-data is absent by design - see the header.
@@ -68,7 +85,7 @@ docker inspect "$DB_CONTAINER" >/dev/null 2>&1 || die "container $DB_CONTAINER k
 
 # -Fc (custom format) over plain SQL: it compresses, and pg_restore can pull a
 # single table out of it. A gzipped .sql is all-or-nothing at restore time.
-DUMP="$DEST/db_$STAMP.dump"
+DUMP="$DEST/db_${LABEL}$STAMP.dump"
 log "dump database..."
 docker exec "$DB_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$DUMP"
 
@@ -85,8 +102,8 @@ for v in $VOLUMES; do
   full="${VOL_PREFIX}${v}"
   docker volume inspect "$full" >/dev/null 2>&1 || { log "bo qua volume $full (khong ton tai)"; continue; }
   docker run --rm -v "$full":/src:ro -v "$DEST":/dst alpine \
-    tar czf "/dst/${v}_$STAMP.tgz" -C /src . 2>/dev/null
-  log "volume $v OK ($(du -h "$DEST/${v}_$STAMP.tgz" | cut -f1))"
+    tar czf "/dst/${v}_${LABEL}$STAMP.tgz" -C /src . 2>/dev/null
+  log "volume $v OK ($(du -h "$DEST/${v}_${LABEL}$STAMP.tgz" | cut -f1))"
 done
 
 # Rotate before uploading, so the remote mirror ends up with the same retention
@@ -99,6 +116,8 @@ if [ -n "$BACKUP_REMOTE" ]; then
   log "day len $BACKUP_REMOTE ..."
   rclone sync "$DEST" "$BACKUP_REMOTE" --stats-one-line --stats=0
   log "da dong bo off-site"
+elif [ "$LOCAL_ONLY" = 1 ]; then
+  log "CHU Y: chua dat BACKUP_REMOTE, ban sao chi nam tren chinh con VPS nay"
 else
   log "tong: $(du -sh "$DEST" | cut -f1) tai $DEST"
   die "CHUA DAT BACKUP_REMOTE - ban sao chi nam tren chinh con VPS nay, VPS chet la mat theo"

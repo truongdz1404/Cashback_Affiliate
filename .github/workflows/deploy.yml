@@ -20,6 +20,12 @@ jobs:
             set -euo pipefail
             cd ${{ secrets.VPS_DEPLOY_PATH }}
             git pull --ff-only
+            # A migration that goes wrong takes the database with it, and this is
+            # the only moment we know one is about to run. --local because this
+            # snapshot exists to undo the deploy, so it is useful sitting right
+            # here; the nightly run is the one that has to leave the building.
+            # KEEP_DAYS=3 because these accumulate per push, not per day.
+            BACKUP_LABEL=predeploy KEEP_DAYS=3 bash scripts/backup.sh --local
             # --remove-orphans: the web service used to be called admin-web. Without it
             # the old container keeps port 4100 and the renamed one cannot start.
             docker compose up -d --build --remove-orphans
