@@ -136,6 +136,20 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
+  const pillClass =
+    "relative inline-flex h-10 items-center gap-2 rounded-full border pl-1 pr-2.5 text-sm font-extrabold text-[var(--foreground)] transition";
+  const pillFace = user && (
+    <>
+      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-extrabold text-white">
+        {initialOf(user)}
+      </span>
+      <span className="tabular-nums">{formatVnd(user.totals.available)}</span>
+      {attention > 0 && (
+        <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[var(--danger)] ring-2 ring-white" />
+      )}
+    </>
+  );
+
   return (
     <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-white/95 backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-2.5 sm:px-6 lg:gap-6 lg:py-3 xl:gap-8">
@@ -197,28 +211,34 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
 
         {user ? (
           <div ref={accountRef} className="relative shrink-0">
+            {/* Phones get the pill as a plain link to the overview: the drawer
+                behind the hamburger already carries this menu item for item,
+                down to the same balance card and sign-out. */}
+            <span className="lg:hidden">
+              <Link href="/account" aria-label="Tài khoản và số dư" className={`${pillClass} border-[var(--border)] bg-white`}>
+                {pillFace}
+                <ChevronRightIcon className="h-4 w-4 text-[var(--muted)]" />
+              </Link>
+            </span>
+
             {/* Trigger: avatar + available balance, like ShopBack's "0đ ▾" pill. */}
-            <button
-              type="button"
-              onClick={() => setAccountOpen((v) => !v)}
-              aria-expanded={accountOpen}
-              aria-haspopup="menu"
-              aria-label="Tài khoản và số dư"
-              className={`relative inline-flex h-10 items-center gap-2 rounded-full border pl-1 pr-2.5 text-sm font-extrabold text-[var(--foreground)] transition ${
-                accountOpen
-                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                  : "border-[var(--border)] bg-white hover:border-[var(--accent)]"
-              }`}
-            >
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-extrabold text-white">
-                {initialOf(user)}
-              </span>
-              <span className="tabular-nums">{formatVnd(user.totals.available)}</span>
-              <ChevronDownIcon className={`h-4 w-4 text-[var(--muted)] transition ${accountOpen ? "rotate-180" : ""}`} />
-              {attention > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[var(--danger)] ring-2 ring-white" />
-              )}
-            </button>
+            <span className="hidden lg:inline">
+              <button
+                type="button"
+                onClick={() => setAccountOpen((v) => !v)}
+                aria-expanded={accountOpen}
+                aria-haspopup="menu"
+                aria-label="Tài khoản và số dư"
+                className={`${pillClass} ${
+                  accountOpen
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                    : "border-[var(--border)] bg-white hover:border-[var(--accent)]"
+                }`}
+              >
+                {pillFace}
+                <ChevronDownIcon className={`h-4 w-4 text-[var(--muted)] transition ${accountOpen ? "rotate-180" : ""}`} />
+              </button>
+            </span>
 
             {accountOpen && (
               <div
