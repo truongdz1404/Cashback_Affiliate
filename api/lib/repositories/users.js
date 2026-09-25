@@ -120,14 +120,17 @@ async function countAdmins() {
 // handing the attacker control of any bank details the victim then entered.
 // A provider id (Google/Facebook sub) is unforgeable proof of ownership;
 // a bare email string on our own row is not - so only the former may merge.
+// Returns { user, created }. `created` is what the referral code hangs off:
+// a social sign-in is a sign-up only the first time, and an existing account
+// signing back in must never be credited to an inviter again.
 async function findOrCreateOAuthUser({ provider, providerId, email, name }) {
   const existingByProvider = provider === 'google' ? await findByGoogleId(providerId) : await findByFacebookId(providerId);
-  if (existingByProvider) return existingByProvider;
+  if (existingByProvider) return { user: existingByProvider, created: false };
 
   const providerColumn = provider === 'google' ? { googleId: providerId } : { facebookId: providerId };
   const zaloUserId = `app:${crypto.randomBytes(8).toString('hex')}`;
   try {
-    return await prisma.user.create({
+    const user = await prisma.user.create({
       data: {
         zaloUserId,
         email: email || null,
@@ -135,15 +138,17 @@ async function findOrCreateOAuthUser({ provider, providerId, email, name }) {
         ...providerColumn,
       },
     });
+    return { user, created: true };
   } catch (err) {
     // email is @unique - if some other row already holds this address (most
     // likely someone squatted it via the free-text PUT /app/me email field,
     // see the comment above), don't block this real, verified sign-in over
     // it: create the account without the email rather than 500ing.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      return prisma.user.create({
+      const user = await prisma.user.create({
         data: { zaloUserId, email: null, fullName: name || null, ...providerColumn },
       });
+      return { user, created: true };
     }
     throw err;
   }

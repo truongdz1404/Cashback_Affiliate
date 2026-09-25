@@ -20,9 +20,12 @@ const GRAPH_VERSION = "v21.0";
 
 export default function FacebookSignInButton({
   loginEndpoint,
+  referralCode,
   onSuccess,
 }: {
   loginEndpoint: string;
+  /** Sent along so a first-ever Facebook sign-in can be credited to whoever invited them. */
+  referralCode?: string;
   onSuccess: (data: unknown) => void;
 }) {
   const oauth = useOAuthConfig();
@@ -66,7 +69,7 @@ export default function FacebookSignInButton({
           const res = await fetch(loginEndpoint, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ accessToken }),
+            body: JSON.stringify({ accessToken, referralCode }),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data?.error || "Đăng nhập thất bại");

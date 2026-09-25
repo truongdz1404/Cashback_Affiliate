@@ -19,9 +19,12 @@ const GSI_WIDTH = 320;
 
 export default function GoogleSignInButton({
   loginEndpoint,
+  referralCode,
   onSuccess,
 }: {
   loginEndpoint: string;
+  /** Sent along so a first-ever Google sign-in can be credited to whoever invited them. */
+  referralCode?: string;
   onSuccess: (data: unknown) => void;
 }) {
   const oauth = useOAuthConfig();
@@ -42,7 +45,7 @@ export default function GoogleSignInButton({
         const res = await fetch(loginEndpoint, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ idToken: response.credential }),
+          body: JSON.stringify({ idToken: response.credential, referralCode }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error || "Đăng nhập thất bại");
@@ -52,7 +55,7 @@ export default function GoogleSignInButton({
         setLoading(false);
       }
     },
-    [loginEndpoint, onSuccess],
+    [loginEndpoint, referralCode, onSuccess],
   );
 
   const initGsi = useCallback(() => {

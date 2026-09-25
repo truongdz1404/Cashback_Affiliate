@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import TextField from "@/components/public/TextField";
 import GoogleSignInButton from "@/components/GoogleSignInButton";
 import FacebookSignInButton from "@/components/FacebookSignInButton";
 import { hasSocialLogin, useOAuthConfig } from "@/lib/useOAuthConfig";
+import { clearReferralCode, readReferralCode } from "@/lib/referralCode";
 import { LockIcon, PhoneIcon, UserPlusIcon } from "@/components/icons";
 
 // `next` comes from the URL (?next=/account/wallet, set by proxy.js when it
@@ -43,11 +44,36 @@ export default function AuthForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // An invite link may have been opened days ago, on a completely different
+  // page - see lib/referralCode.ts. Read after mount, never during render: on
+  // the server there is no localStorage to read.
+  const [savedReferral, setSavedReferral] = useState<string | null>(null);
+  useEffect(() => setSavedReferral(readReferralCode()), []);
+
+  // Only fills an empty box, so a code in today's URL and anything typed by
+  // hand both still win.
+  useEffect(() => {
+    if (!savedReferral) return;
+    setReferral((current) => current || savedReferral);
+  }, [savedReferral]);
+
+  // Google and Facebook create the account server-side, with no form to carry
+  // the code - so it is sent alongside the token. Also from the login screen:
+  // signing in with a provider for the first time IS the sign-up, and that is
+  // exactly the moment the referral has to be counted. The backend ignores it
+  // for anyone who already has an account.
+  const socialReferralCode = (isRegister ? referral.trim() : "") || referralCode || savedReferral || undefined;
+
   // Don't draw a "Hoặc" divider over an empty space when the operator has
   // switched every social provider off.
   const showSocial = hasSocialLogin(useOAuthConfig());
 
   function done() {
+    // Signed in, one way or another: the saved code has either been spent or
+    // was never going to be. Either way it must not sit there waiting to
+    // attach itself to the next account created in this browser.
+    clearReferralCode();
+
     // The dialog refreshes the router itself and keeps the visitor on the page.
     if (onSuccess) {
       onSuccess();
@@ -155,7 +181,7 @@ export default function AuthForm({
               onChange={setReferral}
               placeholder="Không bắt buộc"
               icon={UserPlusIcon}
-              hint="Nếu được bạn bè mời, nhập mã của họ để cả hai cùng nhận thưởng."
+              hint="Nếu bạn mở link mời của bạn bè, mã đã được điền sẵn. Cả hai bên cùng có lợi."
               disabled={submitting}
             />
           </>
@@ -185,8 +211,8 @@ export default function AuthForm({
           </div>
 
           <div className="flex flex-col items-center gap-3">
-            <GoogleSignInButton loginEndpoint="/api/user/login/google" onSuccess={done} />
-            <FacebookSignInButton loginEndpoint="/api/user/login/facebook" onSuccess={done} />
+            <GoogleSignInButton loginEndpoint="/api/user/login/google" referralCode={socialReferralCode} onSuccess={done} />
+            <FacebookSignInButton loginEndpoint="/api/user/login/facebook" referralCode={socialReferralCode} onSuccess={done} />
           </div>
         </>
       )}

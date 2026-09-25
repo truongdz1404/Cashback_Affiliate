@@ -61,8 +61,11 @@ export default async function ReferralPage() {
           <ol className="grid gap-3 sm:grid-cols-3">
             <li className="rounded-2xl bg-[var(--surface-secondary)] p-4">
               <p className="text-xs font-bold uppercase tracking-wide text-[var(--muted)]">Bước 1</p>
-              <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">Bạn bè đăng ký bằng mã của bạn</p>
-              <p className="mt-1 text-xs text-[var(--muted)]">Nhập mã khi tạo tài khoản, hoặc mở link mời để mã được điền sẵn.</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">Bạn bè bấm vào link mời của bạn</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Bấm xong là mã của bạn được nhớ sẵn trong 7 ngày. Bạn ấy cứ xem hàng thoải mái, hôm sau quay lại đăng ký
+                vẫn được tính cho bạn.
+              </p>
             </li>
             <li className="rounded-2xl bg-[var(--surface-secondary)] p-4">
               <p className="text-xs font-bold uppercase tracking-wide text-[var(--muted)]">Bước 2</p>
@@ -83,6 +86,12 @@ export default async function ReferralPage() {
               </p>
             </li>
           </ol>
+
+          <p className="mt-3 text-xs leading-relaxed text-[var(--muted)]">
+            Mã được nhớ ngay trên máy của bạn bè, nên đăng ký bằng số điện thoại hay bằng Google, Facebook đều tính như
+            nhau. Chỉ có hai trường hợp mã bị quên: quá 7 ngày chưa đăng ký, hoặc bạn ấy mở link ở máy này rồi lại đăng
+            ký ở máy khác. Khi đó chỉ cần gõ tay mã của bạn vào ô “Mã giới thiệu” lúc tạo tài khoản là xong.
+          </p>
         </SectionCard>
       )}
 

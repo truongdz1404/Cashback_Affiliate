@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import { Toast } from "@heroui/react";
 import { Be_Vietnam_Pro } from "next/font/google";
 import FirebaseAnalytics from "@/components/FirebaseAnalytics";
+import ReferralCapture from "@/components/ReferralCapture";
 import "./globals.css";
 
 const beVietnamPro = Be_Vietnam_Pro({
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {children}
         <Toast.Provider />
         <FirebaseAnalytics />
+        <ReferralCapture />
       </body>
     </html>
   );

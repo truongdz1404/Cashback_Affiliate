@@ -84,6 +84,11 @@ export default function ReferralShare({ code, program }: { code: string; program
           )}
         </button>
       )}
+
+      <p className="max-w-sm text-center text-xs leading-relaxed text-[var(--muted)]">
+        Bạn bè chỉ cần bấm vào link là mã của bạn được nhớ sẵn trong 7 ngày. Đăng ký bất cứ lúc nào trong 7 ngày đó đều
+        được tính cho bạn.
+      </p>
     </div>
   );
 }

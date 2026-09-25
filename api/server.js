@@ -423,6 +423,33 @@ app.get('/app/legal/data-deletion', (req, res) => {
 </html>`);
 });
 
+// A brand-new account created through Google or Facebook has no registration
+// form to carry the invite code, so the website sends it alongside the token
+// (see client/src/lib/referralCode.ts, which keeps it for seven days after the
+// invite link is opened). Only a row that was just created gets attached - an
+// existing account signing back in is not a referral. An invalid code is not
+// worth failing a valid sign-in over: the visitor has already authenticated
+// with the provider, so it is logged and dropped.
+async function attachReferralToNewUser(user, referralCode) {
+  const code = typeof referralCode === 'string' ? referralCode.trim() : '';
+  if (!code) return false;
+  try {
+    const referrer = await usersRepo.findByReferralCode(code);
+    if (!referrer || referrer.id === user.id) {
+      console.warn(`[referral] bo qua ma gioi thieu khong hop le khi dang ky bang OAuth: ${code}`);
+      return false;
+    }
+    await usersRepo.setReferredBy(user.id, referrer.id);
+    if (!(await referralsRepo.findByReferredUser(user.id))) {
+      await referralsRepo.create(referrer.id, user.id);
+    }
+    return true;
+  } catch (err) {
+    console.error(`[referral] khong gan duoc nguoi gioi thieu (${err.message}).`);
+    return false;
+  }
+}
+
 async function handleOAuthLogin(req, res, provider, verify, tokenField) {
   try {
     const token = req.body[tokenField];
@@ -436,12 +463,16 @@ async function handleOAuthLogin(req, res, provider, verify, tokenField) {
       return res.status(401).json({ error: err.message });
     }
 
-    let user = await usersRepo.findOrCreateOAuthUser({
+    const { user: oauthUser, created } = await usersRepo.findOrCreateOAuthUser({
       provider,
       providerId: profile.providerId,
       email: profile.email,
       name: profile.name,
     });
+    let user = oauthUser;
+    if (created && (await attachReferralToNewUser(user, req.body.referralCode))) {
+      user = (await usersRepo.getById(user.id)) || user;
+    }
     user = await adminAuth.syncRoleFromAllowlist(user);
     res.json({ token: await appAuth.issueAppToken(user.id), user: usersRepo.toPublicAppUser(user) });
   } catch (err) {
