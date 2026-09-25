@@ -25,6 +25,7 @@ const banksRepo = require('./lib/repositories/banks');
 const shoppingProductsRepo = require('./lib/repositories/shoppingProducts');
 const recommendationsRepo = require('./lib/repositories/recommendations');
 const searchHistoryRepo = require('./lib/repositories/searchHistory');
+const searchSuggestionsRepo = require('./lib/repositories/searchSuggestions');
 const shoppingProductImport = require('./lib/shoppingProductImport');
 const bannerUploads = require('./lib/bannerUploads');
 const productOfferSyncJob = require('./lib/productOfferSyncJob');
@@ -1142,6 +1143,58 @@ app.get('/app/shopping-categories', appAuth.optionalAppUser, async (req, res) =>
   try {
     const minCount = Math.max(Number(req.query.minCount) || 1, 1);
     res.json(await shoppingProductsRepo.listCategories({ minCount }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The search screen the Shopping tab opens when its box is tapped: the row of
+// recent terms, the keyword cards under them, and the typeahead list.
+//
+// All three are Postgres queries (lib/repositories/searchSuggestions.js has
+// the note on why there is no search engine behind them). Suggestions are
+// optionalAppUser because they still work signed out - they just stop being
+// ordered around the person reading them.
+app.get('/app/search-history', appAuth.requireAppUser, async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit, 10, 20);
+    res.json(await searchHistoryRepo.recentSearches(req.appUserId, limit));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/app/search-history', appAuth.requireAppUser, async (req, res) => {
+  try {
+    await searchHistoryRepo.clearAll(req.appUserId);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Shops ride along with the terms so the client makes one request per
+// keystroke instead of two. Most queries name a product and come back with an
+// empty `shops`, which is the right answer - see /app/shops/search.
+app.get('/app/search-suggestions', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const limit = parseLimit(req.query.limit, 10, 20);
+    if (!q.trim()) return res.json({ terms: [], shops: [] });
+    const [terms, shops] = await Promise.all([
+      searchSuggestionsRepo.suggestTerms(req.appUserId, q, limit),
+      shopsRepo.searchRanked({ search: q.trim(), limit: 2 }),
+    ]);
+    res.json({ terms, shops: shopsRepo.toAppShops(shops) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/app/search-discovery', appAuth.optionalAppUser, async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit, 8, 20);
+    res.json(await searchSuggestionsRepo.discovery(req.appUserId, limit));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

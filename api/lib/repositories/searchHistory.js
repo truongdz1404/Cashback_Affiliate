@@ -81,4 +81,12 @@ async function recentSearches(userId, limit = RECENT_TERMS_LIMIT) {
   return searches;
 }
 
-module.exports = { record, recentSearches, RECENT_TERMS_LIMIT };
+// Emptying the recent-terms row on the search screen. Deliberately a real
+// delete rather than a "hidden" flag: the same rows feed buildAffinity(), so
+// a user who clears their history expects the recommendations built on it to
+// stop following them around too.
+async function clearAll(userId) {
+  await prisma.searchHistory.deleteMany({ where: { userId: Number(userId) } });
+}
+
+module.exports = { record, recentSearches, clearAll, RECENT_TERMS_LIMIT };
