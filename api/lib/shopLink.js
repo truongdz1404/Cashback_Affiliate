@@ -14,6 +14,7 @@
 // sure (the affiliate id is in the link either way) and the buyer's cashback if
 // attribution works as the redirect test suggests.
 const { buildAffiliateLink, encodeSubIds } = require('./affiliateLink');
+const { buildAnRedirLink, useAnRedir } = require('./anRedirLink');
 const shopeeAffiliateApi = require('./shopeeAffiliateApi');
 
 /**
@@ -32,7 +33,7 @@ function retagLongLink(longLink, subIds) {
 }
 
 /**
- * @returns {Promise<{url: string, tracked: boolean, source: 'long_link'|'built'|'plain'}>}
+ * @returns {Promise<{url: string, tracked: boolean, source: 'an_redir'|'long_link'|'built'|'plain'}>}
  *
  * `tracked` is false when the link carries no sub id - either because the
  * caller passed none (a logged-out visitor) or because we could not produce an
@@ -46,6 +47,20 @@ function retagLongLink(longLink, subIds) {
  */
 async function buildShopLink(shop, { subIds = [] } = {}) {
   const tracked = !!subIds[0];
+
+  // The documented form, when this link falls in the rollout slice. Tried
+  // first because it is the branch under test and the two below are the
+  // ones already believed to work - if an_redir cannot be built we simply
+  // get the old behaviour, which is the point of trying it here first.
+  if (useAnRedir(subIds[0])) {
+    try {
+      const affiliateId = await shopeeAffiliateApi.getAffiliateId();
+      const url = buildAnRedirLink({ target: { kind: 'shop', shopId: String(shop.shopId) }, affiliateId, subIds });
+      if (url) return { url, tracked, source: 'an_redir' };
+    } catch (err) {
+      console.error(`[shop-link] an_redir không dựng được (${err.message}), dùng đường cũ.`);
+    }
+  }
 
   const retagged = retagLongLink(shop.longLink, subIds);
   if (retagged) return { url: retagged, tracked, source: 'long_link' };

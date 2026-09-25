@@ -40,6 +40,7 @@ const continuousJobs = require('./lib/continuousJobs');
 const jobRunsRepo = require('./lib/repositories/jobRuns');
 const { withJobRun } = require('./lib/jobRunner');
 const { buildAffiliateLink } = require('./lib/affiliateLink');
+const { buildAnRedirLink, useAnRedir } = require('./lib/anRedirLink');
 const { buildShopLink } = require('./lib/shopLink');
 const { backfillMissingCategories } = require('./lib/categoryEnrichment');
 const { backfillMissingShopIds } = require('./lib/shopLinkBackfill');
@@ -1217,6 +1218,55 @@ app.get('/app/search-discovery', appAuth.optionalAppUser, async (req, res) => {
 // correctness.
 const SHOPPING_LINK_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Mints the affiliate link for a catalogue product, in the shape
+ * lib/linkTracking.js already expects from getCustomLinks() so the caller
+ * and the stored row cannot tell the two routes apart.
+ *
+ * an_redir is Shopee's own documented redirector: we hand it the plain
+ * product URL and it issues the tracked landing page itself, which is why
+ * its result carries a credential_token and mmp_pid that a link we assemble
+ * ourselves never has. It also needs no browser, so a tap that used to wait
+ * 2-6s on Playwright answers immediately.
+ *
+ * Only the catalogue can take this route: building the link needs the shop
+ * and item ids, which a row scraped by us has and a link the user pasted
+ * does not. POST /app/link still resolves those the long way.
+ *
+ * Rolled out by SHOPEE_AN_REDIR_PERCENT rather than a straight switch: until
+ * a real order confirms a sub id came back through an an_redir link, the old
+ * path stays the one most links take. Which route a row took is readable
+ * afterwards without a schema change - an an_redir row's affiliate_url
+ * starts with s.shopee.vn/an_redir.
+ */
+async function buildProductLink(product, tracking) {
+  const key = tracking.subId || String(product.productId || '');
+  if (product.shopId && product.productId && useAnRedir(key)) {
+    try {
+      const affiliateId = await shopeeAffiliateApi.getAffiliateId();
+      const url = buildAnRedirLink({
+        target: { kind: 'product', shopId: String(product.shopId), itemId: String(product.productId) },
+        affiliateId,
+        subIds: tracking.finalSubIds,
+      });
+      if (url) {
+        return {
+          results: [{
+            shortLink: url,
+            longLink: url,
+            itemId: String(product.productId),
+            shopId: String(product.shopId),
+            failCode: null,
+          }],
+        };
+      }
+    } catch (err) {
+      console.error(`[open] an_redir không dựng được (${err.message}), quay lại đường Playwright.`);
+    }
+  }
+  return getCustomLinks([product.productUrl], tracking.finalSubIds);
+}
+
 app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRateLimit, async (req, res) => {
   try {
     const product = await shoppingProductsRepo.getById(req.params.id);
@@ -1240,7 +1290,7 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRate
     // The screen the card was tapped on, as the app reports it. Validated
     // rather than trusted - it goes into a URL Shopee will see.
     const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, productTapSource(req.body && req.body.source));
-    const result = await getCustomLinks([product.productUrl], tracking.finalSubIds);
+    const result = await buildProductLink(product, tracking);
     const first = (result.results || [])[0] || null;
     const affiliateUrl = first ? first.shortLink || first.longLink : null;
 
