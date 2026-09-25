@@ -1062,8 +1062,6 @@ app.get('/app/shops', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 20, 100);
     const offset = parseOffset(req.query.offset);
-    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
-    const pct = await getEffectivePct(user);
     res.json(shopsRepo.toAppShops(await shopsRepo.list({
       limit,
       offset,
@@ -1071,7 +1069,7 @@ app.get('/app/shops', appAuth.optionalAppUser, async (req, res) => {
       search: typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined,
       featuredOnly: req.query.featured === '1' || req.query.featured === 'true' ? true : undefined,
       visibleOnly: true,
-    }), pct));
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1099,9 +1097,7 @@ app.get('/app/shops/count', appAuth.optionalAppUser, async (req, res) => {
 app.get('/app/shops/featured', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 10, 50);
-    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
-    const pct = await getEffectivePct(user);
-    res.json(shopsRepo.toAppShops(await shopsRepo.listFeatured({ limit }), pct));
+    res.json(shopsRepo.toAppShops(await shopsRepo.listFeatured({ limit })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1115,9 +1111,7 @@ app.get('/app/shops/search', appAuth.optionalAppUser, async (req, res) => {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search : '';
     const limit = parseLimit(req.query.limit, 1, 5);
-    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
-    const pct = await getEffectivePct(user);
-    res.json(shopsRepo.toAppShops(await shopsRepo.searchRanked({ search, limit }), pct));
+    res.json(shopsRepo.toAppShops(await shopsRepo.searchRanked({ search, limit })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1127,9 +1121,7 @@ app.get('/app/shops/:shopId', appAuth.optionalAppUser, async (req, res) => {
   try {
     const shop = await shopsRepo.getByShopId(req.params.shopId, { visibleOnly: true });
     if (!shop) return res.status(404).json({ error: 'not_found' });
-    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
-    const pct = await getEffectivePct(user);
-    res.json(shopsRepo.toAppShop(shop, pct));
+    res.json(shopsRepo.toAppShop(shop));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1243,13 +1235,11 @@ app.get('/app/search-suggestions', appAuth.optionalAppUser, async (req, res) => 
     const q = typeof req.query.q === 'string' ? req.query.q : '';
     const limit = parseLimit(req.query.limit, 10, 20);
     if (!q.trim()) return res.json({ terms: [], shops: [] });
-    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
-    const [pct, terms, shops] = await Promise.all([
-      getEffectivePct(user),
+    const [terms, shops] = await Promise.all([
       searchSuggestionsRepo.suggestTerms(req.appUserId, q, limit),
       shopsRepo.searchRanked({ search: q.trim(), limit: 2 }),
     ]);
-    res.json({ terms, shops: shopsRepo.toAppShops(shops, pct) });
+    res.json({ terms, shops: shopsRepo.toAppShops(shops) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -43,9 +43,9 @@ export function ShopRailCard({ shop, className = "" }: { shop: Shop; className?:
     >
       <ShopAvatar shop={shop} size={64} />
       <span className="line-clamp-2 text-[13px] font-extrabold leading-4 text-[var(--foreground)]">{shop.name}</span>
-      {shop.userCommissionRateText && (
+      {shop.commissionRateText && (
         <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-extrabold text-[var(--accent-dark)]">
-          Hoàn đến {shop.userCommissionRateText}
+          Hoàn đến {shop.commissionRateText}
         </span>
       )}
       <span className="flex items-center gap-1.5 text-[11px] text-[var(--muted)]">
@@ -74,9 +74,9 @@ export function ShopSearchCard({ shop }: { shop: Shop }) {
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="truncate text-[15px] font-extrabold text-[var(--foreground)]">{shop.name}</span>
-          {shop.userCommissionRateText && (
+          {shop.commissionRateText && (
             <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11px] font-extrabold text-[var(--accent-dark)]">
-              Hoàn đến {shop.userCommissionRateText}
+              Hoàn đến {shop.commissionRateText}
             </span>
           )}
         </span>

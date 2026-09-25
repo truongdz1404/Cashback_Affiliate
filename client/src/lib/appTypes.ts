@@ -98,8 +98,11 @@ export type Shop = {
   imageUrl: string | null;
   portraitUrl: string | null;
   coverUrl: string | null;
-  userCommissionRateText: string | null;
-  userCommissionRateValue: number | null;
+  // Shopee's headline rate, not this shopper's share - the storefront badge is
+  // a "Hoàn đến" teaser and deliberately quotes the bigger number. Product
+  // cards are the exact ones; they carry userCommission* instead.
+  commissionRateText: string | null;
+  commissionRateValue: number | null;
   rating: number | null;
   soldTotal: number | null;
   followerCount: number | null;

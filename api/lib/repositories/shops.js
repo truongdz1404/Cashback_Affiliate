@@ -1,7 +1,6 @@
 const prisma = require('../prisma');
 const { parseCommissionRatePct } = require('../shoppingProductMapper');
 const { foldForSearch } = require('../textMatch');
-const { formatUserPct } = require('../commissionSplit');
 
 // Safety cap for searchRanked()'s fallback sweep, which runs only when the
 // folded substring pre-filter finds nothing. Shops number in the low thousands
@@ -182,13 +181,8 @@ async function markDetailChecked(shopIds) {
  * curation order, `status` - that a user has no use for and that would leak
  * how the catalog is assembled.
  */
-function toAppShop(shop, pct) {
+function toAppShop(shop) {
   if (!shop) return null;
-  // The card used to print Shopee's own rate under "Hoàn đến", which both
-  // leaked what we are paid and promised more cashback than anyone receives.
-  // `pct` is the caller's effective split, so what goes out is the figure the
-  // shopper actually gets - and the raw column does not go out at all.
-  const userRate = shop.commissionRateValue != null ? (shop.commissionRateValue * pct) / 100 : null;
   return {
     // `id` stays because the app's infinite-query helpers dedupe on it.
     id: shop.id,
@@ -197,8 +191,12 @@ function toAppShop(shop, pct) {
     imageUrl: shop.imageUrl,
     portraitUrl: shop.portraitUrl,
     coverUrl: shop.coverUrl,
-    userCommissionRateValue: userRate,
-    userCommissionRateText: formatUserPct(userRate),
+    // Shopee's own headline rate, on purpose: the storefront badge is a
+    // "Hoàn đến" teaser and the operator wants the bigger number on it. The
+    // product cards inside the shop are the ones that must be exact, and they
+    // carry userCommission* instead - see toPublicProduct in ../commissionSplit.js.
+    commissionRateText: shop.commissionRateText,
+    commissionRateValue: shop.commissionRateValue,
     rating: shop.rating,
     soldTotal: shop.soldTotal,
     followerCount: shop.followerCount,
@@ -208,8 +206,8 @@ function toAppShop(shop, pct) {
   };
 }
 
-function toAppShops(shops, pct) {
-  return (shops || []).map((shop) => toAppShop(shop, pct));
+function toAppShops(shops) {
+  return (shops || []).map(toAppShop);
 }
 
 async function getByShopId(shopId, { visibleOnly = false } = {}) {

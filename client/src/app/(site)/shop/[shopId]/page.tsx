@@ -31,7 +31,7 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   return {
     title: `${shop.name} | Rewally`,
     description: `Mua sắm tại ${shop.name} qua Rewally và nhận hoàn tiền${
-      shop.userCommissionRateText ? ` lên tới ${shop.userCommissionRateText}` : ""
+      shop.commissionRateText ? ` lên tới ${shop.commissionRateText}` : ""
     }.`,
   };
 }
@@ -119,11 +119,11 @@ export default async function ShopPage({
           </div>
 
           <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
-            {shop.userCommissionRateText && (
+            {shop.commissionRateText && (
               <div className="rounded-2xl bg-[var(--accent-soft)] px-4 py-2.5 text-center ring-1 ring-[var(--accent)]/25">
                 <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--accent-dark)]">Hoàn tiền đến</p>
                 <p className="text-xl font-extrabold leading-tight text-[var(--accent-dark)]">
-                  {shop.userCommissionRateText}
+                  {shop.commissionRateText}
                 </p>
               </div>
             )}

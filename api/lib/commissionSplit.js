@@ -68,16 +68,6 @@ function toPublicEmbeddedShop(shop) {
   return rest;
 }
 
-// "15,1%" the way the rest of the UI writes a percentage - comma decimal,
-// one place, no trailing ",0". Built here rather than on the client because
-// the client must never see the number this is derived from.
-function formatUserPct(value) {
-  if (value == null) return null;
-  const rounded = Math.round(value * 10) / 10;
-  return `${String(rounded).replace('.', ',')}%`;
-}
-
 module.exports.toPublicProduct = toPublicProduct;
 module.exports.toPublicProducts = toPublicProducts;
 module.exports.toPublicEmbeddedShop = toPublicEmbeddedShop;
-module.exports.formatUserPct = formatUserPct;
