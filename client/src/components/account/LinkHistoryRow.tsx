@@ -34,7 +34,9 @@ export default function LinkHistoryRow({
     <li className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
       <div className="min-w-0 flex-1">
         <p className="truncate font-mono text-xs text-[var(--foreground)]">{link ?? "Link chưa sẵn sàng"}</p>
-        {source && <p className="mt-0.5 truncate text-xs text-[var(--muted)]">{source}</p>}
+        {/* The original Shopee URL is noise on a phone: it truncates to the
+            same handful of characters on every row. */}
+        {source && <p className="mt-0.5 hidden truncate text-xs text-[var(--muted)] sm:block">{source}</p>}
         <p className="mt-0.5 text-xs text-[var(--muted)]">
           {createdAt}
           {estimate && <span className="ml-2 font-bold text-[var(--accent)]">Hoàn dự kiến {estimate}</span>}

@@ -100,8 +100,9 @@ export default function AccountSidebar({
             >
               <ChevronLeftIcon className="h-4.5 w-4.5" />
             </Link>
+            {/* No "Tài khoản" eyebrow here - the back arrow beside it already
+                says where this page sits. */}
             <div className="min-w-0">
-              <p className="text-xs font-bold uppercase tracking-wide text-[var(--muted)]">Tài khoản</p>
               <h1 className="truncate text-lg font-extrabold text-[var(--foreground)]">{current?.label ?? name}</h1>
             </div>
           </div>

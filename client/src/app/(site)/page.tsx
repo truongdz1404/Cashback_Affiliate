@@ -69,6 +69,26 @@ export default async function HomePage() {
         <HeroSlider banners={banners} isAuthenticated />
       </section>
 
+      <section className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-white px-5 py-4">
+        <p className="text-sm text-[var(--muted)]">
+          Chào mừng trở lại, <span className="font-extrabold text-[var(--foreground)]">{displayName(user)}</span>
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/account/wallet"
+            className="rounded-full bg-[var(--accent-soft)] px-4 py-2 text-sm font-extrabold text-[var(--accent)] transition hover:bg-[var(--accent)] hover:text-white"
+          >
+            Ví hoàn tiền
+          </Link>
+          <Link
+            href="/account/orders"
+            className="rounded-full border border-[var(--border)] bg-white px-4 py-2 text-sm font-extrabold text-[var(--foreground)] transition hover:border-[var(--accent)]"
+          >
+            Đơn hàng của tôi
+          </Link>
+        </div>
+      </section>
+
       {/* The paste-a-link tool is the main revenue action, so it sits right under the banner. */}
       <section className="mt-5 rounded-[26px] bg-[var(--accent-soft)] p-4 ring-1 ring-[var(--accent)]/25 sm:p-6">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -90,13 +110,13 @@ export default async function HomePage() {
         <section className="pt-5">
           <div className="flex gap-2 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <Link href="/products">
-              <Chip color="success" variant="primary" size="sm" className="text-white">
+              <Chip color="success" variant="primary" size="sm" className="shrink-0 whitespace-nowrap text-white">
                 Tất cả
               </Chip>
             </Link>
             {categories.slice(0, 14).map((c) => (
               <Link key={c.category} href={`/products?category=${encodeURIComponent(c.category)}`}>
-                <Chip variant="soft" size="sm" className="bg-white text-[var(--foreground)]">
+                <Chip variant="soft" size="sm" className="shrink-0 whitespace-nowrap bg-white text-[var(--foreground)]">
                   {c.category}
                 </Chip>
               </Link>
@@ -105,25 +125,6 @@ export default async function HomePage() {
         </section>
       )}
 
-      <section className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-white px-5 py-4">
-        <p className="text-sm text-[var(--muted)]">
-          Chào mừng trở lại, <span className="font-extrabold text-[var(--foreground)]">{displayName(user)}</span>
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            href="/account/wallet"
-            className="rounded-full bg-[var(--accent-soft)] px-4 py-2 text-sm font-extrabold text-[var(--accent)] transition hover:bg-[var(--accent)] hover:text-white"
-          >
-            Ví hoàn tiền
-          </Link>
-          <Link
-            href="/account/orders"
-            className="rounded-full border border-[var(--border)] bg-white px-4 py-2 text-sm font-extrabold text-[var(--foreground)] transition hover:border-[var(--accent)]"
-          >
-            Đơn hàng của tôi
-          </Link>
-        </div>
-      </section>
 
       <ProductRail
         title="Ưu đãi hoàn tiền tốt nhất"
@@ -184,27 +185,27 @@ export default async function HomePage() {
         </section>
       )}
 
-      <HowItWorks />
+      <HowItWorks className="hidden lg:block" />
 
       <section className="mt-8 overflow-hidden rounded-[28px] bg-[#ffd8d1]">
-        <div className="flex flex-col items-center gap-7 p-7 text-center sm:flex-row sm:p-9 sm:text-left">
+        <div className="flex flex-col items-center gap-5 p-6 text-center sm:flex-row sm:gap-7 sm:p-9 sm:text-left">
           <Image
             src="/play-store-qr.png"
             alt="Mã QR tải ứng dụng Rewally"
             width={136}
             height={136}
-            className="shrink-0 rounded-2xl border border-black/10 bg-white p-1"
+            className="hidden shrink-0 rounded-2xl border border-black/10 bg-white p-1 sm:block"
           />
           <div>
-            <h2 className="text-2xl font-extrabold text-[var(--foreground)]">Tải app Rewally</h2>
+            <h2 className="text-xl font-extrabold text-[var(--foreground)] sm:text-2xl">Tải app Rewally</h2>
             <p className="mt-2 max-w-md text-sm leading-6 text-[var(--muted)]">
-              Quét mã QR hoặc tải trên Google Play để theo dõi đơn hàng, ví hoàn tiền và tạo link ngay trên điện thoại.
+              Theo dõi đơn hàng, ví hoàn tiền và tạo link ngay trên điện thoại.
             </p>
             <Link
               href={PLAY_STORE_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-5 inline-flex rounded-full bg-[var(--foreground)] px-5 py-2.5 text-sm font-extrabold text-white transition hover:opacity-90"
+              className="mt-4 inline-flex rounded-full bg-[var(--foreground)] px-5 py-2.5 text-sm font-extrabold text-white transition hover:opacity-90"
             >
               Tải trên Google Play
             </Link>

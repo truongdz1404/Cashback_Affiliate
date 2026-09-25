@@ -37,8 +37,10 @@ const COLUMNS = [
 export default function PublicFooter() {
   return (
     <footer className="bg-black text-white">
-      <div className="mx-auto grid max-w-6xl gap-8 px-5 py-10 sm:px-6 lg:grid-cols-[1.35fr_1fr_1fr_1fr]">
-        <div>
+      {/* Two link columns side by side on phones - stacked, these thirteen
+          links alone ran longer than the screen. */}
+      <div className="mx-auto grid max-w-6xl grid-cols-2 gap-x-4 gap-y-7 px-5 py-8 sm:gap-8 sm:px-6 sm:py-10 lg:grid-cols-[1.35fr_1fr_1fr_1fr]">
+        <div className="col-span-2 lg:col-span-1">
           <Link href="/" className="flex items-center gap-2.5">
             <Image src="/logo.png" alt="Rewally" width={36} height={36} className="rounded-lg bg-white" />
             <span className="text-base font-extrabold tracking-tight">Rewally</span>
@@ -49,12 +51,13 @@ export default function PublicFooter() {
           </p>
 
           <div className="mt-5 flex flex-wrap items-center gap-3">
+            {/* No QR on a phone: nothing there can scan its own screen. */}
             <Image
               src="/play-store-qr.png"
               alt="Mã QR tải app Rewally"
               width={68}
               height={68}
-              className="rounded-xl border border-white/12 bg-white p-1"
+              className="hidden rounded-xl border border-white/12 bg-white p-1 sm:block"
             />
             <Link
               href={PLAY_STORE_URL}
@@ -71,7 +74,7 @@ export default function PublicFooter() {
         {COLUMNS.map((column) => (
           <div key={column.title}>
             <h3 className="text-sm font-extrabold">{column.title}</h3>
-            <ul className="mt-4 flex flex-col gap-2.5">
+            <ul className="mt-3 flex flex-col gap-2.5 sm:mt-4">
               {column.links.map((link) => (
                 <li key={link.label}>
                   {"external" in link && link.external ? (

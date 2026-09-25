@@ -36,7 +36,7 @@ export default async function WalletPage() {
     <div className="flex flex-col gap-6">
       <PageHeading title="Rút tiền" description="Nhập số tiền muốn rút về tài khoản ngân hàng đã thiết lập." />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="Số dư khả dụng" value={formatVnd(wallet.availableAmount)} tone="accent" hint="Có thể rút ngay" />
         <StatTile label="Chờ xác nhận" value={formatVnd(wallet.pendingAmount)} hint={`${wallet.pendingOrders} đơn`} />
         <StatTile label="Đã rút về ngân hàng" value={formatVnd(wallet.paidAmount)} hint={`${wallet.paidOrders} đơn`} />
@@ -49,15 +49,17 @@ export default async function WalletPage() {
         />
       </div>
 
+      {/* The withdrawal form is what this page is for, so it goes first; the
+          daily check-in is a side errand and sits below it. */}
+      <SectionCard title="Tạo yêu cầu rút tiền">
+        <WithdrawForm wallet={wallet} user={user} />
+      </SectionCard>
+
       {coins && coins.enabled && (
         <SectionCard title="Điểm danh nhận xu">
           <CoinCheckin initial={coins} />
         </SectionCard>
       )}
-
-      <SectionCard title="Tạo yêu cầu rút tiền">
-        <WithdrawForm wallet={wallet} user={user} />
-      </SectionCard>
 
       <SectionCard title="Lịch sử rút tiền">
         {withdrawals.length === 0 ? (

@@ -46,11 +46,36 @@ export default async function AccountOverviewPage() {
         </div>
       )}
 
+      {/* On phones the balance card at the top of this page already shows the
+          available, pending and withdrawn totals, so only the two figures it
+          does not carry stay visible there. */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Số dư khả dụng" value={formatVnd(wallet.availableAmount)} tone="accent" hint="Có thể rút ngay" />
-        <StatTile label="Chờ đối soát" value={formatVnd(wallet.pendingAmount)} hint={`${wallet.pendingOrders} đơn`} />
-        <StatTile label="Đã nhận" value={formatVnd(wallet.paidAmount)} hint={`${wallet.paidOrders} đơn đã thanh toán`} />
-        <StatTile label="Nhận trong tháng" value={formatVnd(wallet.paidThisMonth)} />
+        <StatTile
+          className="hidden lg:block"
+          label="Số dư khả dụng"
+          value={formatVnd(wallet.availableAmount)}
+          tone="accent"
+          hint="Có thể rút ngay"
+        />
+        <StatTile
+          className="hidden lg:block"
+          label="Chờ đối soát"
+          value={formatVnd(wallet.pendingAmount)}
+          hint={`${wallet.pendingOrders} đơn`}
+        />
+        <StatTile
+          className="hidden lg:block"
+          label="Đã nhận"
+          value={formatVnd(wallet.paidAmount)}
+          hint={`${wallet.paidOrders} đơn đã thanh toán`}
+        />
+        <StatTile label="Nhận trong tháng" value={formatVnd(wallet.paidThisMonth)} tone="accent" />
+        <StatTile
+          className="lg:hidden"
+          label="Đơn chờ đối soát"
+          value={`${wallet.pendingOrders}`}
+          hint="Chờ sàn xác nhận"
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -132,14 +157,14 @@ export default async function AccountOverviewPage() {
           </Link>
         }
       >
-        <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-8">
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-[var(--muted)]">Mã giới thiệu của bạn</p>
-            <p className="mt-1 text-2xl font-extrabold tracking-[0.2em] text-[var(--accent-dark)]">
+            <p className="mt-1 text-xl font-extrabold tracking-[0.15em] text-[var(--accent-dark)] sm:text-2xl sm:tracking-[0.2em]">
               {referral?.referralCode ?? user?.referralCode ?? "------"}
             </p>
           </div>
-          <div className="flex gap-8">
+          <div className="grid grid-cols-3 gap-3 sm:flex sm:gap-8">
             <div>
               <p className="text-lg font-extrabold text-[var(--foreground)]">{referral?.stats.totalInvited ?? 0}</p>
               <p className="text-xs text-[var(--muted)]">Đã mời</p>

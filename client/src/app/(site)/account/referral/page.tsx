@@ -86,7 +86,7 @@ export default async function ReferralPage() {
         </SectionCard>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="Đã mời" value={String(stats?.totalInvited ?? 0)} />
         <StatTile label="Đã mua hàng" value={String(stats?.qualified ?? 0)} hint={`${stats?.orderCount ?? 0} đơn hoàn thành`} />
         <StatTile label="Hoa hồng tích luỹ" value={formatVnd(stats?.commissionTotal)} tone="accent" hint="Đã cộng vào số dư khả dụng" />

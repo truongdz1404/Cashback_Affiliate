@@ -25,10 +25,17 @@ export default async function OrdersPage() {
         description="Đơn mua qua Rewally được ghi nhận sau khoảng 6 giờ, kèm số tiền hoàn của từng đơn."
       />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      {/* Two per row on phones, with the money - the reason anyone opens this
+          page - full width and first. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <StatTile
+          className="order-first col-span-2 sm:order-none sm:col-span-1"
+          label="Tiền hoàn từ đơn hoàn thành"
+          value={formatVnd(totalCashback)}
+          tone="accent"
+        />
         <StatTile label="Tổng đơn" value={String(orders.length)} />
         <StatTile label="Hoàn thành" value={String(completed.length)} />
-        <StatTile label="Tiền hoàn từ đơn hoàn thành" value={formatVnd(totalCashback)} tone="accent" />
       </div>
 
       <OrdersList orders={orders} capped={orders.length >= LIMIT} />

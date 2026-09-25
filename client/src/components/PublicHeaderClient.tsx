@@ -176,14 +176,14 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
         </nav>
 
         <form onSubmit={submitSearch} className="relative min-w-0 flex-1">
-          <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)] sm:left-3.5" />
           <input
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Tìm sản phẩm..."
+            placeholder="Tìm kiếm"
             aria-label="Tìm sản phẩm hoàn tiền"
-            className="h-10 w-full rounded-full border border-[var(--border)] bg-[var(--background)] pl-10 pr-3 text-sm font-medium text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:bg-white sm:pr-20"
+            className="h-10 w-full rounded-full border border-[var(--border)] bg-[var(--background)] pl-9 pr-3 sm:pl-10 text-sm font-medium text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:bg-white sm:pr-20"
           />
           {/* On phones the field is only a few characters wide, so the
               keyboard's search key submits instead of a visible button. */}

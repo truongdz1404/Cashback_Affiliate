@@ -43,11 +43,13 @@ export function StatTile({
   value,
   tone = "default",
   hint,
+  className = "",
 }: {
   label: string;
   value: string;
   tone?: "default" | "accent" | "muted" | "danger";
   hint?: string;
+  className?: string;
 }) {
   const valueColor =
     tone === "accent"
@@ -59,10 +61,12 @@ export function StatTile({
           : "text-[var(--foreground)]";
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
-      <p className="text-xs font-bold uppercase tracking-wide text-[var(--muted)]">{label}</p>
-      <p className={`mt-1.5 text-xl font-extrabold tabular-nums ${valueColor}`}>{value}</p>
-      {hint && <p className="mt-1 text-xs text-[var(--muted)]">{hint}</p>}
+    // Tighter on phones: these sit two-per-row there, so the label has to
+    // survive a ~160px card without wrapping into three lines.
+    <div className={`rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3.5 sm:p-4 ${className}`}>
+      <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--muted)] sm:text-xs">{label}</p>
+      <p className={`mt-1 text-lg font-extrabold tabular-nums sm:mt-1.5 sm:text-xl ${valueColor}`}>{value}</p>
+      {hint && <p className="mt-0.5 text-[11px] text-[var(--muted)] sm:mt-1 sm:text-xs">{hint}</p>}
     </div>
   );
 }

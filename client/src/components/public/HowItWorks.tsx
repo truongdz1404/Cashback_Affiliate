@@ -32,9 +32,11 @@ export default function HowItWorks({ className = "" }: { className?: string }) {
   const current = STEPS[active];
 
   return (
-    <section className={`py-14 sm:py-16 ${className}`}>
-      <div className="grid min-h-[430px] items-center gap-10 lg:grid-cols-[0.98fr_1fr] lg:gap-16">
-        <div className="relative mx-auto aspect-[440/350] w-full max-w-[440px]">
+    <section className={`py-10 sm:py-14 lg:py-16 ${className}`}>
+      {/* On phones the heading comes first and the illustration follows it;
+          side by side, the illustration goes back to the left column. */}
+      <div className="grid items-center gap-6 lg:min-h-[430px] lg:grid-cols-[0.98fr_1fr] lg:gap-16">
+        <div className="relative order-2 mx-auto aspect-[440/350] w-full max-w-[320px] sm:max-w-[440px] lg:order-none">
           <Image
             key={current.image}
             src={current.image}
@@ -46,10 +48,10 @@ export default function HowItWorks({ className = "" }: { className?: string }) {
           />
         </div>
 
-        <div className="lg:pl-4">
+        <div className="order-1 lg:order-none lg:pl-4">
           <h2 className="text-2xl font-extrabold leading-tight text-[var(--foreground)] sm:text-3xl">Cách hoạt động</h2>
 
-          <div className="mt-7">
+          <div className="mt-5 sm:mt-7">
             {STEPS.map((step, index) => {
               const isActive = active === index;
 
