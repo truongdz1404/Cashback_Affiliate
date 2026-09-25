@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/appApi";
-import { formatDate, formatPct } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { PageHeading, SectionCard, StatusPill } from "@/components/account/ui";
 import ProfileForm from "@/components/account/ProfileForm";
 
@@ -22,21 +22,16 @@ export default async function ProfilePage() {
         <ProfileForm
           user={user}
           facts={[
-            { label: "Mã thành viên", value: `#${user.id}` },
             { label: "Ngày tham gia", value: formatDate(user.createdAt) },
             { label: "Mã giới thiệu", value: user.referralCode ?? "—" },
-            {
-              label: "Tỷ lệ hoàn tiền",
-              value: user.commissionPct != null ? formatPct(user.commissionPct) : "Theo mặc định hệ thống",
-            },
           ]}
         />
       </SectionCard>
 
       <SectionCard title="Tài khoản liên kết">
         <ul className="divide-y divide-[var(--border)]">
-          <LinkedRow label="Google" badge="G" badgeClass="bg-[#EA4335] text-white" linked={Boolean(user.googleId)} />
-          <LinkedRow label="Facebook" badge="f" badgeClass="bg-[#1877F2] text-white" linked={Boolean(user.facebookId)} />
+          <LinkedRow label="Google" badge="G" badgeClass="bg-[#EA4335] text-white" linked={user.googleLinked} />
+          <LinkedRow label="Facebook" badge="f" badgeClass="bg-[#1877F2] text-white" linked={user.facebookLinked} />
         </ul>
         <p className="mt-4 text-xs text-[var(--muted)]">
           Liên kết được tạo tự động khi bạn đăng nhập bằng Google hoặc Facebook với cùng email.

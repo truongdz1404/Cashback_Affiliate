@@ -230,14 +230,41 @@ async function verifyPassword(userId, password) {
   return passwordHash.verifyPassword(password, user.passwordHash);
 }
 
-// App-facing responses must never leak passwordHash - strip it rather than
-// remembering to omit it at every call site. `role` is deliberately kept:
-// the website reads it to decide whether to show the admin entry point at
-// all (it's not a secret - the /admin/* API re-checks the DB on every call).
+// App-facing responses list what goes out rather than what stays in. Spreading
+// the row and deleting passwordHash meant every column added to User since
+// then shipped to the client by default, which is how googleId, facebookId and
+// zaloUserId - the identifiers our OAuth providers key accounts on - ended up
+// in a response the account screen renders. Nothing here is rendered as an id:
+// the screens that used to read those fields only ever asked "is this account
+// linked?", so they get that answer as a boolean instead.
+//
+// commissionPct is left out for a different reason: it is this user's own
+// cashback rate, set per account by an operator, and showing it invites
+// "why does he get more than me". referredByUserId is left out because it is
+// somebody else's row id.
+//
+// `role` is deliberately kept: the website reads it to decide whether to show
+// the admin entry point at all (it's not a secret - the /admin/* API re-checks
+// the DB on every call).
 function toPublicAppUser(user) {
   if (!user) return null;
-  const { passwordHash: _passwordHash, ...rest } = user;
-  return { ...rest, role: user.role || 'user', hasPassword: Boolean(_passwordHash) };
+  return {
+    id: user.id,
+    phone: user.phone,
+    email: user.email,
+    fullName: user.fullName,
+    bankName: user.bankName,
+    bankAccountNumber: user.bankAccountNumber,
+    bankAccountHolder: user.bankAccountHolder,
+    referralCode: user.referralCode,
+    role: user.role || 'user',
+    coinStreak: user.coinStreak,
+    lastCheckinDate: user.lastCheckinDate,
+    createdAt: user.createdAt,
+    hasPassword: Boolean(user.passwordHash),
+    googleLinked: Boolean(user.googleId),
+    facebookLinked: Boolean(user.facebookId),
+  };
 }
 
 module.exports = {

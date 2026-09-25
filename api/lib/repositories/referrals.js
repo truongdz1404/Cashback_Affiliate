@@ -1,5 +1,6 @@
 const prisma = require('../prisma');
 const settingsRepo = require('./settings');
+const { maskPhone } = require('../maskPhone');
 
 // Called right after a new app user registers with a valid referral code
 // (see server.js POST /app/register). referred_user_id is UNIQUE so a user
@@ -96,7 +97,14 @@ async function listForReferrer(referrerUserId, { limit, offset } = {}) {
     ...(offset !== undefined ? { skip: offset } : {}),
     include: { referred: { select: { phone: true } } },
   });
-  return rows.map(({ referred, ...referral }) => ({ ...referral, referredPhone: referred.phone }));
+  // referrer_user_id is the reader's own id and referred_user_id is somebody
+  // else's; qualifying_order_id points at an order that is not theirs either.
+  // The screen needs none of the three - it lists a masked phone, a status and
+  // an amount.
+  return rows.map(({ referred, referrerUserId: _referrer, referredUserId: _referred, qualifyingOrderId: _order, ...referral }) => ({
+    ...referral,
+    referredPhone: maskPhone(referred.phone),
+  }));
 }
 
 // Revoked bonuses are excluded from both numbers. Filtering on `status` alone

@@ -2,23 +2,24 @@
 // app's src/lib/types.ts so the website and the app stay in step. Keep the
 // two in sync when the backend changes.
 
+// The backend sends exactly these fields (usersRepo.toPublicAppUser) - the
+// provider ids it keys OAuth accounts on, this account's own cashback rate and
+// the id of whoever referred it all stay server-side. googleLinked /
+// facebookLinked answer the only question the account screen ever asked of
+// googleId / facebookId.
 export type AppUser = {
   id: number;
-  zaloUserId: string | null;
   phone: string | null;
   bankName: string | null;
   bankAccountNumber: string | null;
   bankAccountHolder: string | null;
   createdAt: string | null;
-  updatedAt: string | null;
-  commissionPct: number | null;
   referralCode: string | null;
-  referredByUserId: number | null;
   email: string | null;
   fullName: string | null;
-  googleId: string | null;
-  facebookId: string | null;
   hasPassword: boolean;
+  googleLinked: boolean;
+  facebookLinked: boolean;
   // "admin" unlocks the dashboard at /admin for this same account; the
   // backend re-checks users.role on every /admin/* call, so this is only a
   // hint for what to render, never the thing that grants access.
@@ -68,14 +69,13 @@ export type CoinStatus = {
 // display_order_status: 1=Pending, 2=Completed, 3=Cancelled, 4=Unpaid.
 export type DisplayOrderStatus = 1 | 2 | 3 | 4;
 
+// totalCommission (what Shopee paid) and operatorCommission (what we kept)
+// are deliberately absent: they are our margin. userCommission is the only
+// commission figure a shopper has any use for.
 export type Order = {
   id: number;
   orderSn: string;
-  userId: number | null;
-  subId: string | null;
-  totalCommission: number | null;
   userCommission: number | null;
-  operatorCommission: number | null;
   displayOrderStatus: DisplayOrderStatus | null;
   payoutStatus: "paid" | "unpaid" | "cancelled" | null;
   paidAt: string | null;
@@ -198,14 +198,12 @@ export type Campaign = {
   rewardsEarned: CampaignReward[];
 };
 
-// referrals.listForReferrer returns the whole Referral row with the invitee's
-// phone folded in as referredPhone - not a `phone` field. commissionTotal /
-// orderCount are the per-order referral commissions this invitee has earned
-// the referrer so far (revoked rows excluded).
+// One person this user invited: a masked phone, how far along they are and
+// what they have earned the referrer so far (revoked rows excluded). The
+// invitee's own row id and phone digits stay on the server.
 export type ReferralInvitee = {
   id: number;
-  referrerUserId: number;
-  referredUserId: number;
+  // Already masked by the backend; masking it again is a no-op.
   referredPhone: string | null;
   status: "pending" | "qualified" | "rewarded";
   // Legacy fixed first-order bonus snapshotted at registration; 0 when the
@@ -222,10 +220,6 @@ export type ReferralInvitee = {
 // referrer: `pct` % of the invitee's cashback (`baseAmount`) = `amount`.
 export type ReferralCommission = {
   id: number;
-  referralId: number;
-  referrerUserId: number;
-  referredUserId: number;
-  orderId: number;
   pct: number;
   baseAmount: number;
   amount: number;
@@ -278,9 +272,7 @@ export type LinkResult = {
 
 export type LinkHistoryItem = {
   id: number;
-  userId: number;
   itemId: string | null;
-  subId: string | null;
   shopeeUrl: string | null;
   affiliateUrl: string | null;
   estimatedAmount: number | null;

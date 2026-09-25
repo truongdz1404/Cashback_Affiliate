@@ -160,6 +160,18 @@ async function withItems(rows, userId) {
   });
 }
 
+// What an order row looks like once it leaves for the app or the website.
+// The full row carries totalCommission and operatorCommission - what Shopee
+// paid us and what we kept - which is our margin, not the customer's business,
+// and it carries subId, an internal tracking token that was being printed on
+// the order detail screen under a label no shopper could act on. The admin
+// dashboard reads the same repository and still gets every column; only the
+// two /app routes go through here.
+function toPublicAppOrder(order) {
+  const { totalCommission: _total, operatorCommission: _operator, subId: _subId, userId: _userId, ...rest } = order;
+  return rest;
+}
+
 function affiliateKey(subId, itemId) {
   return `${subId ?? ''}::${itemId ?? ''}`;
 }
@@ -325,4 +337,5 @@ module.exports = {
   customerSummary,
   setPayoutStatus,
   summaryForUser,
+  toPublicAppOrder,
 };

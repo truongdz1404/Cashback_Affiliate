@@ -1,4 +1,5 @@
 const prisma = require('../prisma');
+const { maskPhone } = require('../maskPhone');
 const settingsRepo = require('./settings');
 
 // Referral programme v2 (see prisma/schema.prisma ReferralCommission): the
@@ -175,9 +176,9 @@ async function listForReferrer(referrerUserId, { limit = 20, offset = 0 } = {}) 
       order: { select: { orderSn: true, productName: true, purchaseTime: true } },
     },
   });
-  return rows.map(({ referral, order, ...row }) => ({
+  return rows.map(({ referral, order, referrerUserId: _referrer, referredUserId: _referred, referralId: _referralId, orderId: _orderId, ...row }) => ({
     ...row,
-    referredPhone: referral.referred.phone,
+    referredPhone: maskPhone(referral.referred.phone),
     orderSn: order.orderSn,
     productName: order.productName,
     purchaseTime: order.purchaseTime,

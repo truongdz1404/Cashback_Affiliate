@@ -150,7 +150,6 @@ export default function OrdersList({ orders, capped }: { orders: Order[]; capped
                       }
                     />
                     {order.paidAt && <Detail label="Ngày nhận tiền" value={formatDateTime(order.paidAt)} />}
-                    {order.subId && <Detail label="Sub ID" value={order.subId} mono />}
                   </dl>
                 )}
               </li>

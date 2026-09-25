@@ -135,7 +135,7 @@ export default function ProfileForm({ user, facts }: { user: AppUser; facts: Fac
               </p>
             ) : (
               <p className="text-sm font-medium text-[var(--muted)]">
-                Chưa có. Tài khoản này đăng nhập bằng {user.googleId ? "Google" : user.facebookId ? "Facebook" : "email"}.
+                Chưa có. Tài khoản này đăng nhập bằng {user.googleLinked ? "Google" : user.facebookLinked ? "Facebook" : "email"}.
               </p>
             )}
           </Row>

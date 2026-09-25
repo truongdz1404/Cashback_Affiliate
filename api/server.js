@@ -646,7 +646,10 @@ app.get('/app/links', appAuth.requireAppUser, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 20, 100);
     const offset = parseOffset(req.query.offset);
-    res.json(await linksRepo.listByUser(req.appUserId, { limit, offset }));
+    const links = await linksRepo.listByUser(req.appUserId, { limit, offset });
+    // sub_id is the tracking token we hand Shopee and user_id is this user's
+    // own row id - neither is anything the app draws, so neither leaves here.
+    res.json(links.map(({ subId: _subId, userId: _userId, ...link }) => link));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -656,7 +659,8 @@ app.get('/app/orders', appAuth.requireAppUser, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 50, 200);
     const offset = parseOffset(req.query.offset);
-    res.json(await ordersRepo.listByUser(req.appUserId, { limit, offset }));
+    const orders = await ordersRepo.listByUser(req.appUserId, { limit, offset });
+    res.json(orders.map(ordersRepo.toPublicAppOrder));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
