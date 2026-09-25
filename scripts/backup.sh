@@ -76,8 +76,16 @@ env_get() {
 POSTGRES_USER="$(env_get POSTGRES_USER)"
 POSTGRES_DB="$(env_get POSTGRES_DB)"
 # The environment wins, so a one-off run can aim somewhere else without editing
-# the file every service on the box reads.
+# the file every service on the box reads; .env still overrides the built-in for
+# a box that wants somewhere different. The destination itself is not a secret -
+# only the key pair is, and that lives in the rclone config - so the default
+# belongs in git, where a replacement VPS reads it without being told.
+#
+# The `/shopee-affiliate` prefix is not decoration. The upload is an rclone sync,
+# which deletes whatever it finds at the destination that is not here, so aiming
+# at the bucket root would empty the rest of the bucket on the first run.
 BACKUP_REMOTE="${BACKUP_REMOTE:-$(env_get BACKUP_REMOTE)}"
+BACKUP_REMOTE="${BACKUP_REMOTE:-r2:rewally/shopee-affiliate}"
 [ -n "$POSTGRES_USER" ] || die "khong doc duoc POSTGRES_USER trong .env"
 [ -n "$POSTGRES_DB" ] || die "khong doc duoc POSTGRES_DB trong .env"
 
@@ -123,13 +131,20 @@ for v in $VOLUMES; do PRUNE+=( -o -name "${v}_${LABEL}[0-9]*.tgz" ); done
 find "$DEST" -maxdepth 1 -type f \( "${PRUNE[@]}" \) \
   -mtime "+$KEEP_DAYS" -print -delete | sed 's/^/[backup] xoa cu: /'
 
-if [ -n "$BACKUP_REMOTE" ]; then
+# --local is checked first, and before rclone is looked for at all. A deploy
+# happens on a box that may not have been provisioned yet, and the pre-deploy
+# snapshot has to survive that: it is on disk either way, and the nightly sync
+# carries it off-site later. Asking for rclone here would abort the deploy over
+# a backup that had already succeeded.
+if [ "$LOCAL_ONLY" = 1 ]; then
+  log "bo qua upload (--local); ban nightly se dong bo len $BACKUP_REMOTE"
+elif [ -n "$BACKUP_REMOTE" ]; then
   command -v rclone >/dev/null || die "BACKUP_REMOTE dat roi nhung chua cai rclone"
   log "day len $BACKUP_REMOTE ..."
+  # sync, not copy: retention is decided here, and this is what carries the
+  # deletions over so the bucket does not grow without limit.
   rclone sync "$DEST" "$BACKUP_REMOTE" --stats-one-line --stats=0
   log "da dong bo off-site"
-elif [ "$LOCAL_ONLY" = 1 ]; then
-  log "CHU Y: chua dat BACKUP_REMOTE, ban sao chi nam tren chinh con VPS nay"
 else
   log "tong: $(du -sh "$DEST" | cut -f1) tai $DEST"
   die "CHUA DAT BACKUP_REMOTE - ban sao chi nam tren chinh con VPS nay, VPS chet la mat theo"
