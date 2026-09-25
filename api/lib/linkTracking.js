@@ -1,6 +1,7 @@
 const { LINK_SOURCES } = require('./linkSources');
 const users = require('./repositories/users');
 const linksRepo = require('./repositories/links');
+const shopsRepo = require('./repositories/shops');
 const recommendationsRepo = require('./repositories/recommendations');
 const prisma = require('./prisma');
 
@@ -73,7 +74,7 @@ async function recordLink(tracking, productLinks, result, fallbackItemId, estima
     catId: meta ? meta.catId : null,
     catName: meta ? meta.catName : null,
     shopName: meta ? meta.shopName : null,
-    shopId: (meta && meta.shopId) || (await resolveShopId(itemId)),
+    shopId: await resolveLinkShopId(meta, itemId),
     priceValue: meta ? meta.priceValue : null,
     imageUrl: meta ? meta.imageUrl : null,
   });
@@ -81,6 +82,42 @@ async function recordLink(tracking, productLinks, result, fallbackItemId, estima
   // so any ordering cached before it is out of date. Suggestions are a feed the
   // user scrolls now; they should reflect what was just tapped.
   recommendationsRepo.invalidateFeedOrder(userId);
+}
+
+// links.shop_id is a foreign key onto shops.shop_id (added in
+// migrations/20260924000000_add_link_shop_and_hot_path_indexes), so a shop id
+// we cannot vouch for is not a worse row - it is a failed INSERT, and the user
+// gets a 502 on a link that was already built. That is what this guards: the
+// commission lookup hands back the shop of ANY product a user pastes, and most
+// of those shops have never been crawled, so they are not in `shops` yet.
+//
+// repositories/shops.js#ensureFromProduct exists for exactly this situation on
+// the shopping_products side and is reused verbatim here: it creates the bare
+// id+name row from what the commission lookup already gave us for free, leaves
+// an existing row untouched, and defaults to status 'discovered' so a shop with
+// no avatar never surfaces in the app.
+//
+// Anything it cannot vouch for degrades to null rather than throwing. A null
+// shop_id costs the recommendation engine one join; a throw costs the user
+// their link.
+async function resolveLinkShopId(meta, itemId) {
+  const fromMeta = meta && meta.shopId ? String(meta.shopId) : null;
+  if (fromMeta) {
+    const ensured = await shopsRepo
+      .ensureFromProduct({ shopId: fromMeta, name: meta.shopName })
+      .catch(() => null);
+    if (ensured) return fromMeta;
+
+    // No shop name to create the row with - only usable if it is already known.
+    const known = await prisma.shop
+      .findUnique({ where: { shopId: fromMeta }, select: { shopId: true } })
+      .catch(() => null);
+    if (known) return fromMeta;
+  }
+
+  // The catalog is populated through the same foreign key, so a shop id read
+  // back out of it is always present in `shops`.
+  return resolveShopId(itemId);
 }
 
 // Callers that already know the shop (the Shopping tab, where the product row
