@@ -108,7 +108,19 @@ done
 
 # Rotate before uploading, so the remote mirror ends up with the same retention
 # without needing a second rule over there.
-find "$DEST" -maxdepth 1 -type f \( -name '*.dump' -o -name '*.tgz' \) \
+#
+# Matched by label, not by extension. The two kinds of run keep different
+# numbers of days - a pre-deploy snapshot piles up per push and is worthless
+# once the deploy is known good, a nightly one is the actual safety net - and a
+# pattern of `*.dump` would let whichever ran last impose its retention on the
+# other. The pre-deploy run keeps three days; it would have been deleting the
+# nightly backups from day four.
+#
+# `[0-9]` after the label is what separates them: an unlabelled nightly file is
+# `db_2026-09-25_0300.dump`, so matching `db_[0-9]*` cannot reach `db_predeploy_*`.
+PRUNE=( -name "db_${LABEL}[0-9]*.dump" )
+for v in $VOLUMES; do PRUNE+=( -o -name "${v}_${LABEL}[0-9]*.tgz" ); done
+find "$DEST" -maxdepth 1 -type f \( "${PRUNE[@]}" \) \
   -mtime "+$KEEP_DAYS" -print -delete | sed 's/^/[backup] xoa cu: /'
 
 if [ -n "$BACKUP_REMOTE" ]; then
