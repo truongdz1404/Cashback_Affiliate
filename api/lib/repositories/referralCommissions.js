@@ -34,7 +34,14 @@ function withinWindow(referral, order, months) {
 // (display_order_status 2). Idempotent: keyed on order_id, so re-processing
 // the same order on a later reconcile run refreshes the amount (the referee's
 // commission can be corrected by Shopee, or the admin can change the %)
-// while it is still unpaid, and leaves paid/revoked rows alone.
+// while it is still unpaid, and leaves paid rows alone.
+//
+// "No commission is due" and "there is a commission row to fix" are handled
+// together rather than as an early return. The three reasons a commission can
+// come out at nothing - the rate turned off, the order falling outside the
+// referral window, Shopee revising the underlying cashback away - used to
+// return before the existing row was ever looked at, so a row written earlier
+// kept its stale amount and stayed withdrawable.
 async function syncForCompletedOrder(order) {
   if (!order || !order.userId || !order.id) return null;
   const referral = await prisma.referral.findUnique({ where: { referredUserId: Number(order.userId) } });
@@ -44,20 +51,33 @@ async function syncForCompletedOrder(order) {
     settingsRepo.getReferralCommissionPct(),
     settingsRepo.getReferralCommissionMonths(),
   ]);
-  if (!(pct > 0)) return null;
-  if (!withinWindow(referral, order, months)) return null;
 
+  const eligible = pct > 0 && withinWindow(referral, order, months);
   const baseAmount = Number(order.userCommission) || 0;
-  const amount = Math.round((baseAmount * pct) / 100);
-  if (amount <= 0) return null;
+  const amount = eligible ? Math.round((baseAmount * pct) / 100) : 0;
 
   const existing = await prisma.referralCommission.findUnique({ where: { orderId: Number(order.id) } });
-  if (existing) {
+
+  if (amount <= 0) {
+    if (!existing) return null;
     if (existing.payoutStatus !== 'unpaid') return existing;
-    if (existing.amount === amount && existing.pct === pct && existing.baseAmount === baseAmount) return existing;
     return prisma.referralCommission.update({
       where: { id: existing.id },
-      data: { pct, baseAmount, amount },
+      data: { pct, baseAmount, amount: 0, payoutStatus: 'revoked' },
+    });
+  }
+
+  if (existing) {
+    if (existing.payoutStatus === 'paid') return existing;
+    // A revoked row becoming due again means Shopee reported this order
+    // Completed after having cancelled it, the same un-cancel the order's own
+    // payout status is reset for in lib/repositories/orders.js#upsertOrder.
+    if (existing.amount === amount && existing.pct === pct && existing.baseAmount === baseAmount && existing.payoutStatus === 'unpaid') {
+      return existing;
+    }
+    return prisma.referralCommission.update({
+      where: { id: existing.id },
+      data: { pct, baseAmount, amount, payoutStatus: 'unpaid' },
     });
   }
 
@@ -94,8 +114,8 @@ async function revokeForOrder(orderId, tx = prisma) {
   return { commission: updated, needsClawback: false };
 }
 
-async function unpaidTotalForReferrer(referrerUserId) {
-  const result = await prisma.referralCommission.aggregate({
+async function unpaidTotalForReferrer(referrerUserId, tx = prisma) {
+  const result = await tx.referralCommission.aggregate({
     where: { referrerUserId: Number(referrerUserId), payoutStatus: 'unpaid' },
     _sum: { amount: true },
   });

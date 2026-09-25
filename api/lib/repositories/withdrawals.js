@@ -1,6 +1,7 @@
 const { Prisma } = require('@prisma/client');
 const prisma = require('../prisma');
 const coinsRepo = require('./coins');
+const { settleWithdrawal } = require('./withdrawalSettlement');
 
 // Requests still in 'pending' or already 'approved' both hold the user's
 // money reserved - only 'paid'/'rejected' release it. Filtering on
@@ -48,8 +49,8 @@ async function latestPendingForUser(userId) {
   });
 }
 
-async function pendingTotalForUser(userId) {
-  const result = await prisma.withdrawalRequest.aggregate({
+async function pendingTotalForUser(userId, tx = prisma) {
+  const result = await tx.withdrawalRequest.aggregate({
     where: { userId: Number(userId), status: { in: RESERVED_STATUSES } },
     _sum: { amount: true },
   });
@@ -84,29 +85,45 @@ const VALID_TRANSITIONS = {
 };
 
 async function setStatus(id, status) {
-  const current = await prisma.withdrawalRequest.findUnique({ where: { id: Number(id) } });
-  if (!current) throw new Error('withdrawal request not found');
-  const allowed = VALID_TRANSITIONS[current.status] ?? [];
-  if (current.status !== status && !allowed.includes(status)) {
-    throw new Error(`cannot transition withdrawal request from '${current.status}' to '${status}'`);
-  }
-  // Cash needs no refund: it is never deducted, only reserved by the row's
-  // own status. Coins are a ledger, so a rejection has to write the money
-  // back. Same transaction as the status change, and the refund is keyed by
-  // the request id so a double click cannot pay it twice.
-  const refundCoins = status === 'rejected' && current.status !== 'rejected' && current.coinAmount > 0;
   return prisma.$transaction(async (tx) => {
-    const updated = await tx.withdrawalRequest.update({
-      where: { id: Number(id) },
+    const current = await tx.withdrawalRequest.findUnique({ where: { id: Number(id) } });
+    if (!current) throw new Error('withdrawal request not found');
+    if (current.status === status) return current;
+
+    const allowed = VALID_TRANSITIONS[current.status] ?? [];
+    if (!allowed.includes(status)) {
+      throw new Error(`cannot transition withdrawal request from '${current.status}' to '${status}'`);
+    }
+
+    // Compare-and-swap on the status we just read. The read used to happen
+    // outside any transaction and the write was by id alone, so two admins
+    // clicking at once both passed the check above and both acted on it -
+    // refunding the same coins twice. Losing the race now updates no row.
+    const { count } = await tx.withdrawalRequest.updateMany({
+      where: { id: Number(id), status: current.status },
       data: { status, processedAt: new Date().toISOString() },
     });
-    if (refundCoins) {
+    if (count !== 1) {
+      throw new Error('withdrawal request was changed by someone else - reload and try again');
+    }
+
+    // Cash needs no refund: it is never deducted, only reserved by the row's
+    // own status. Coins are a ledger, so a rejection has to write the money
+    // back.
+    if (status === 'rejected' && current.coinAmount > 0) {
       await coinsRepo.refundWithdrawal(
         { userId: current.userId, coinAmount: current.coinAmount, withdrawalId: current.id },
         tx,
       );
     }
-    return updated;
+
+    // The payout and the settlement of the rows behind it are one act, not
+    // two - see lib/repositories/withdrawalSettlement.js for why that matters.
+    if (status === 'paid') {
+      await settleWithdrawal(current, tx);
+    }
+
+    return tx.withdrawalRequest.findUnique({ where: { id: Number(id) } });
   });
 }
 

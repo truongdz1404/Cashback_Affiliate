@@ -24,9 +24,20 @@ async function findByReferredUser(referredUserId) {
 // Completed. Moves a still-pending referral to 'qualified' the first time
 // the referred user completes any order - only fires once since the second
 // call finds status already 'qualified' and no-ops.
+//
+// It also picks up a referral that qualified and was then revoked because the
+// qualifying order got cancelled. The invitee completing a different order
+// later is a fresh, perfectly good qualification, but the row was no longer
+// 'pending' so nothing could ever move it back and the referrer lost the bonus
+// for good. A bonus already paid out is deliberately not matched here: its
+// payout status stays 'paid' and it is settled through a clawback flag
+// instead, so this cannot hand out the same money twice.
 async function qualifyIfEligible(referredUserId, orderId) {
   const referral = await prisma.referral.findFirst({
-    where: { referredUserId: Number(referredUserId), status: 'pending' },
+    where: {
+      referredUserId: Number(referredUserId),
+      OR: [{ status: 'pending' }, { status: 'qualified', payoutStatus: 'revoked' }],
+    },
   });
   if (!referral) return null;
 
@@ -34,14 +45,15 @@ async function qualifyIfEligible(referredUserId, orderId) {
     where: { id: referral.id },
     data: {
       status: 'qualified',
+      payoutStatus: 'unpaid',
       qualifiedAt: new Date().toISOString(),
       qualifyingOrderId: orderId != null ? Number(orderId) : null,
     },
   });
 }
 
-async function unpaidTotalForReferrer(referrerUserId) {
-  const result = await prisma.referral.aggregate({
+async function unpaidTotalForReferrer(referrerUserId, tx = prisma) {
+  const result = await tx.referral.aggregate({
     where: { referrerUserId: Number(referrerUserId), status: 'qualified', payoutStatus: 'unpaid' },
     _sum: { rewardAmount: true },
   });
@@ -87,12 +99,16 @@ async function listForReferrer(referrerUserId, { limit, offset } = {}) {
   return rows.map(({ referred, ...referral }) => ({ ...referral, referredPhone: referred.phone }));
 }
 
+// Revoked bonuses are excluded from both numbers. Filtering on `status` alone
+// left a bonus that was cancelled and taken back still adding to the "Tong
+// thuong" the user reads on the referral page - a figure larger than anything
+// they could actually withdraw.
 async function statsForReferrer(referrerUserId) {
   const rows = await prisma.$queryRaw`
     SELECT
       COUNT(*) AS "totalInvited",
-      COUNT(*) FILTER (WHERE status = 'qualified' OR status = 'rewarded') AS "qualified",
-      COALESCE(SUM(reward_amount) FILTER (WHERE status = 'qualified' OR status = 'rewarded'), 0) AS "totalReward"
+      COUNT(*) FILTER (WHERE status IN ('qualified', 'rewarded') AND payout_status <> 'revoked') AS "qualified",
+      COALESCE(SUM(reward_amount) FILTER (WHERE status IN ('qualified', 'rewarded') AND payout_status <> 'revoked'), 0) AS "totalReward"
     FROM referrals WHERE referrer_user_id = ${Number(referrerUserId)}
   `;
   const row = rows[0];

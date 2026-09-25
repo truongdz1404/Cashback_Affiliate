@@ -50,6 +50,7 @@ model User {
   referralAsReferred  Referral?            @relation("ReferralReferred")
   referralCommissions ReferralCommission[] @relation("ReferralCommissionReferrer")
   withdrawalRequests  WithdrawalRequest[]
+  walletAdjustments   WalletAdjustment[]
   clawbackFlags       ClawbackFlag[]
   emailVerifications  EmailVerification[]
   coinTransactions    CoinTransaction[]
@@ -331,6 +332,7 @@ model WithdrawalRequest {
   clientRequestId String?  @unique @map("client_request_id")
 
   user            User     @relation(fields: [userId], references: [id])
+  items           WithdrawalItem[]
 
   // The wallet screen asks "this user's requests, newest first" and "how much
   // of their balance is already reserved" on every load; the admin queue asks
@@ -721,4 +723,54 @@ model CoinTransaction {
   // the same slice.
   @@index([userId, id])
   @@map("coin_transactions")
+}
+
+// The audit trail a payout never had: exactly which entitlement rows one
+// withdrawal settled. Written in the same transaction that marks the request
+// 'paid', so releasing the reserve and taking the rows out of the balance can
+// no longer happen apart. They used to: the admin marked the request paid,
+// the reserve was released immediately, and every order/referral/reward
+// behind it stayed 'unpaid' until someone clicked them one at a time - so any
+// row missed became withdrawable a second time, for the same money.
+model WithdrawalItem {
+  id           Int      @id @default(autoincrement())
+  withdrawalId Int      @map("withdrawal_id")
+  // 'order' | 'referral' | 'referralCommission' | 'campaignReward' | 'adjustment'
+  sourceType   String   @map("source_type")
+  sourceId     Int      @map("source_id")
+  amount       Float
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  withdrawal   WithdrawalRequest @relation(fields: [withdrawalId], references: [id])
+
+  // Belt and braces. Even if the settlement logic is ever wrong, the database
+  // itself refuses to let one entitlement row be settled by two withdrawals.
+  @@unique([sourceType, sourceId])
+  @@index([withdrawalId])
+  @@map("withdrawal_items")
+}
+
+// Cash owed (or owing) that belongs to no order. Settlement consumes whole
+// entitlement rows, so covering a 200,000d request out of rows adding up to
+// 210,000d would quietly cost the user 10,000d - that 10,000d is written back
+// here as a credit instead, and counts towards their balance like any other
+// unpaid entitlement. The mirror case, rows that no longer cover a request
+// approved earlier, is written as a negative row and comes off future
+// earnings. Both clear themselves out on the next withdrawal.
+model WalletAdjustment {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  // Signed: positive is owed to the user, negative is owed back to us.
+  amount       Float
+  reason       String
+  withdrawalId Int?     @map("withdrawal_id")
+  payoutStatus String   @default("unpaid") @map("payout_status")
+  paidAt       String?  @map("paid_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user         User     @relation(fields: [userId], references: [id])
+
+  // The balance sums one user's still-unpaid rows on every wallet load.
+  @@index([userId, payoutStatus])
+  @@map("wallet_adjustments")
 }

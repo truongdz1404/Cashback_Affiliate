@@ -1,7 +1,13 @@
 const prisma = require('../prisma');
 const clawbackRepo = require('./clawback');
+const campaignsRepo = require('./campaigns');
 const { decodeOrderItems } = require('../orderItems');
 const { parseSubId } = require('../subId');
+
+// Money columns are double precision, so "did the commission change" can never
+// be an equality test. Half a dong is well under anything transferable and well
+// over the representation error.
+const COMMISSION_EPSILON = 0.5;
 
 // display_order_status 3 = Cancelled. When an order Shopee previously
 // reported as something else (often 2/Completed) flips to Cancelled, any
@@ -28,6 +34,26 @@ async function upsertOrder(order, tx = prisma) {
     data.payoutStatus = 'cancelled';
   }
 
+  // Shopee does occasionally report a cancelled order as Completed again. The
+  // 'cancelled' payout status was never cleared, so the order stayed out of
+  // the balance for good and the user simply never got paid for it.
+  if (existing && existing.payoutStatus === 'cancelled' && order.displayOrderStatus === 2) {
+    data.payoutStatus = 'unpaid';
+  }
+
+  // Shopee can also revise the commission on an order it already reported,
+  // without cancelling it. Revised down on an order we have already paid out,
+  // that difference is money gone, so it gets the same manual-review flag a
+  // cancellation does - for the difference alone, not the whole order. Nothing
+  // is flagged for a revision upwards: the operator's share absorbs it and
+  // nobody is out of pocket. On an order not yet paid, neither direction needs
+  // a flag - the new figure is simply what the balance now shows.
+  const previousCommission = existing?.userCommission ?? 0;
+  const nextCommission = order.userCommission ?? 0;
+  const shortfall = previousCommission - nextCommission;
+  const wasPaidAndRevisedDown =
+    Boolean(existing) && existing.payoutStatus === 'paid' && !wasNewlyCancelled && shortfall > COMMISSION_EPSILON;
+
   const saved = await tx.order.upsert({
     where: { orderSn: order.orderSn },
     create: { orderSn: order.orderSn, ...data },
@@ -45,9 +71,22 @@ async function upsertOrder(order, tx = prisma) {
       },
       tx,
     );
+  } else if (wasPaidAndRevisedDown) {
+    // Flagged once, not on every run: the row now holds the revised figure, so
+    // the next reconcile compares equal and finds nothing to report.
+    await clawbackRepo.flag(
+      {
+        userId: existing.userId,
+        sourceType: 'order',
+        sourceId: existing.id,
+        previousPayoutStatus: existing.payoutStatus,
+        amount: shortfall,
+      },
+      tx,
+    );
   }
 
-  return { ...saved, wasNewlyCancelled };
+  return { ...saved, wasNewlyCancelled, wasPaidAndRevisedDown };
 }
 
 function buildWhere({ payoutStatus, displayStatus } = {}) {
@@ -228,18 +267,28 @@ async function customerSummary() {
   return rows.map(normalizeBigInts);
 }
 
+// Campaign tier progress is measured in commission already paid out, so this
+// is the moment a new tier can be reached - not reconciliation time, where the
+// order being completed is still unpaid and so cannot count towards its own
+// tier. Without this a user could cross a milestone and never be granted the
+// reward, because nothing re-checked after the only event that moves the number.
 async function setPayoutStatus(orderId, paid) {
-  return prisma.order.update({
+  const updated = await prisma.order.update({
     where: { id: Number(orderId) },
     data: { payoutStatus: paid ? 'paid' : 'unpaid', paidAt: paid ? new Date().toISOString() : null },
   });
+  if (updated.userId) {
+    if (paid) await campaignsRepo.grantRewardsForUser(updated.userId);
+    else await campaignsRepo.reevaluateRewardsForUser(updated.userId);
+  }
+  return updated;
 }
 
 // Wallet tab summary for one app user: paid/unpaid totals for completed
 // orders, still-pending count, and this-calendar-month paid total (for the
 // "earned this month" headline number).
-async function summaryForUser(userId) {
-  const rows = await prisma.$queryRaw`
+async function summaryForUser(userId, tx = prisma) {
+  const rows = await tx.$queryRaw`
     SELECT
       COUNT(*) FILTER (WHERE display_order_status = 2 AND payout_status = 'paid') AS "paidOrders",
       COALESCE(SUM(user_commission) FILTER (WHERE display_order_status = 2 AND payout_status = 'paid'), 0) AS "paidAmount",

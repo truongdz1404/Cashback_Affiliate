@@ -56,7 +56,9 @@ async function processWithdrawalRequest({ clientRequestId, userId, amount, metho
     const minWithdrawAmount = await settingsRepo.getMinWithdrawAmount();
     if (cash + coins < minWithdrawAmount) return reject();
 
-    const { available } = await availableAmountForUser(userId);
+    // Passed `tx` so the balance is read from inside the advisory lock this
+    // transaction holds, not through a second connection that cannot see it.
+    const { available } = await availableAmountForUser(userId, tx);
     if (cash > available) return reject();
 
     // Coins come out of their own ledger, so this is a separate check against

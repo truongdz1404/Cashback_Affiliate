@@ -188,7 +188,7 @@ export default function WithdrawalsPage() {
       </Card>
 
       <p className="text-xs text-[var(--muted)]">
-        Lưu ý: duyệt/đánh dấu đã thanh toán ở đây không tự động chuyển khoản — admin vẫn chuyển khoản thủ công và đánh dấu từng đơn hàng liên quan đã trả ở trang Đơn hàng. Số tiền cần chuyển là cột <strong>Tổng chuyển</strong> (tiền hoàn + xu, 1 xu = 1đ). Từ chối một yêu cầu sẽ tự hoàn xu về cho người dùng.
+        Lưu ý: duyệt/đánh dấu đã thanh toán ở đây không tự động chuyển khoản — admin vẫn chuyển khoản thủ công. Số tiền cần chuyển là cột <strong>Tổng chuyển</strong> (tiền hoàn + xu, 1 xu = 1đ). Khi bấm <strong>Đã thanh toán</strong>, hệ thống tự đánh dấu các đơn hàng, thưởng giới thiệu và thưởng sự kiện tương ứng là đã trả — không cần vào trang Đơn hàng bấm tay từng dòng nữa. Từ chối một yêu cầu sẽ tự hoàn xu về cho người dùng.
       </p>
     </div>
   );

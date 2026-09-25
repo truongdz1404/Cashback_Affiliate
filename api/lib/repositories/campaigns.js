@@ -74,6 +74,25 @@ async function update(id, { title, description, startsAt, endsAt, tiers, isActiv
   return getById(id);
 }
 
+// campaigns.starts_at/ends_at are admin-entered date strings ("2026-09-01
+// 00:00:00"), but orders.purchase_time is a TEXT column holding the Unix
+// timestamp Shopee reports ("1788887584"). Comparing the two as text is a
+// character-by-character comparison that says every order ever placed sorts
+// before every date this decade - so a campaign with a start date matched no
+// orders at all and one with only an end date matched every order in the
+// table, including orders from before the campaign existed. Both ends of the
+// window are converted to the epoch seconds the column actually stores.
+function toEpochSeconds(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const asNumber = Number(value);
+  if (Number.isFinite(asNumber) && asNumber > 0) {
+    return Math.floor(asNumber > 1e12 ? asNumber / 1000 : asNumber);
+  }
+  const text = String(value);
+  const parsed = Date.parse(text.includes('T') ? text : text.replace(' ', 'T'));
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+}
+
 // Progress toward a campaign's tiers is computed on the fly from this user's
 // paid-out commission within the campaign's date window, rather than
 // tracked in a running counter - avoids a second source of truth to keep in
@@ -81,16 +100,30 @@ async function update(id, { title, description, startsAt, endsAt, tiers, isActiv
 // track money the user has definitely already received, not merely
 // Completed-but-unpaid or still-Pending amounts (which can still be
 // cancelled/reversed by Shopee).
+//
+// Raw SQL rather than a Prisma aggregate because the window needs the column
+// cast to a number, and the CASE keeps a row with a non-numeric purchase_time
+// from turning the whole query into a cast error.
 async function sumPaidAmountForUser(userId, campaign, tx = prisma) {
-  const where = { userId: Number(userId), displayOrderStatus: 2, payoutStatus: 'paid' };
-  if (campaign.starts_at || campaign.startsAt) {
-    where.purchaseTime = { ...(where.purchaseTime || {}), gte: campaign.starts_at || campaign.startsAt };
-  }
-  if (campaign.ends_at || campaign.endsAt) {
-    where.purchaseTime = { ...(where.purchaseTime || {}), lte: campaign.ends_at || campaign.endsAt };
-  }
-  const result = await tx.order.aggregate({ where, _sum: { userCommission: true } });
-  return result._sum.userCommission ?? 0;
+  const startsAt = toEpochSeconds(campaign.starts_at ?? campaign.startsAt);
+  const endsAt = toEpochSeconds(campaign.ends_at ?? campaign.endsAt);
+
+  const rows = await tx.$queryRaw`
+    SELECT COALESCE(SUM(user_commission), 0) AS total
+    FROM orders
+    WHERE user_id = ${Number(userId)}
+      AND display_order_status = 2
+      AND payout_status = 'paid'
+      AND (
+        ${startsAt}::bigint IS NULL
+        OR (CASE WHEN purchase_time ~ '^[0-9]+$' THEN purchase_time::bigint END) >= ${startsAt}::bigint
+      )
+      AND (
+        ${endsAt}::bigint IS NULL
+        OR (CASE WHEN purchase_time ~ '^[0-9]+$' THEN purchase_time::bigint END) <= ${endsAt}::bigint
+      )
+  `;
+  return Number(rows[0]?.total ?? 0);
 }
 
 // Generates an evenly-spaced tiers array to seed/preview a campaign's
@@ -113,8 +146,8 @@ function buildStepTiers({ stepAmount, rewardPerStep, steps }) {
 // Completed. Grants any newly-reached tier for every active campaign,
 // relying on campaign_rewards' UNIQUE(campaign_id, user_id, threshold_amount)
 // to make this idempotent if reconciliation re-processes the same order.
-async function grantRewardsForUser(userId) {
-  const campaigns = await prisma.campaign.findMany({ where: { isActive: true } });
+async function grantRewardsForUser(userId, tx = prisma) {
+  const campaigns = await tx.campaign.findMany({ where: { isActive: true } });
   const granted = [];
   for (const campaign of campaigns) {
     let tiers = [];
@@ -123,11 +156,11 @@ async function grantRewardsForUser(userId) {
     } catch (err) {
       continue;
     }
-    const paidAmount = await sumPaidAmountForUser(userId, campaign);
+    const paidAmount = await sumPaidAmountForUser(userId, campaign, tx);
     for (const tier of tiers) {
       if (paidAmount < Number(tier.amount)) continue;
       try {
-        const reward = await prisma.campaignReward.create({
+        const reward = await tx.campaignReward.create({
           data: {
             campaignId: campaign.id,
             userId: Number(userId),
@@ -144,8 +177,8 @@ async function grantRewardsForUser(userId) {
   return granted;
 }
 
-async function unpaidTotalForUser(userId) {
-  const result = await prisma.campaignReward.aggregate({
+async function unpaidTotalForUser(userId, tx = prisma) {
+  const result = await tx.campaignReward.aggregate({
     where: { userId: Number(userId), payoutStatus: 'unpaid' },
     _sum: { rewardAmount: true },
   });
