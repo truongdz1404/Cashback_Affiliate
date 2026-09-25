@@ -9,7 +9,7 @@ const { getCustomLinks } = require('./lib/customLink');
 const { getCommission } = require('./lib/commission');
 const { getLinkAndCommission } = require('./lib/linkAndCommission');
 const linkTracking = require('./lib/linkTracking');
-const { LINK_SOURCES, productTapSource } = require('./lib/linkSources');
+const { LINK_SOURCES, GUEST_SUB_ID, productTapSource } = require('./lib/linkSources');
 const usersRepo = require('./lib/repositories/users');
 const linksRepo = require('./lib/repositories/links');
 const ordersRepo = require('./lib/repositories/orders');
@@ -1106,11 +1106,13 @@ app.post('/app/shops/:shopId/open', appAuth.optionalAppUser, async (req, res) =>
     const shop = await shopsRepo.getByShopId(req.params.shopId, { visibleOnly: true });
     if (!shop) return res.status(404).json({ error: 'not_found' });
 
-    // Logged out - the website serves guests. No sub id means no cashback for
-    // anyone, but the operator's commission still rides on the affiliate id in
-    // the link, so this is strictly better than the bare storefront URL.
+    // Logged out - the website serves guests. Slot 1 carries GUEST_SUB_ID
+    // rather than a real one, so no cashback can be paid, but the operator's
+    // commission still rides on the affiliate id in the link and the report
+    // can tell guest-sourced orders apart. `tracked` stays false: it means
+    // "attributable to a user", which this is not.
     if (!req.appUserId) {
-      const guest = await buildShopLink(shop, { subIds: ['', LINK_SOURCES.SHOPFRONT] });
+      const guest = await buildShopLink(shop, { subIds: [GUEST_SUB_ID, LINK_SOURCES.SHOPFRONT] });
       return res.json({ affiliateUrl: guest.url, tracked: false, reused: false });
     }
 
@@ -1282,13 +1284,51 @@ async function buildProductLink(product, tracking) {
   return getCustomLinks([product.productUrl], tracking.finalSubIds);
 }
 
-app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRateLimit, async (req, res) => {
+/**
+ * The same link for a visitor who is not signed in.
+ *
+ * Guests used to be handed product.productUrl - shopee.vn/product/<ids>, a URL
+ * with no affiliate id anywhere on it - so every order that followed a
+ * logged-out tap paid nobody at all. This builds a real affiliate link
+ * instead, marked GUEST_SUB_ID in slot 1: the operator's commission is earned
+ * and countable, and only the cashback half is missing, because there is
+ * nobody to attribute it to.
+ *
+ * Deliberately NOT routed through buildProductLink. That one can fall back to
+ * getCustomLinks(), which drives a real browser out of the Playwright pool,
+ * and a pool slot is not something to spend on a visitor who has not signed
+ * in - the pool is what keeps signed-in taps fast. Both branches here are
+ * string building on top of an affiliate id that is already cached, so a
+ * guest tap costs no network call. The an_redir rollout dial does not gate
+ * them either: it exists to compare attribution between the two link shapes,
+ * and a guest link has no attribution to compare.
+ *
+ * Returns null if the ids or the affiliate id are missing, and the caller
+ * falls back to the plain URL - exactly what guests got before this existed.
+ */
+async function buildGuestProductLink(product, source) {
+  if (!product.shopId || !product.productId) return null;
+  try {
+    const affiliateId = await shopeeAffiliateApi.getAffiliateId();
+    const target = { kind: 'product', shopId: String(product.shopId), itemId: String(product.productId) };
+    const subIds = [GUEST_SUB_ID, source];
+    return buildAnRedirLink({ target, affiliateId, subIds }) || buildAffiliateLink({ target, affiliateId, subIds });
+  } catch (err) {
+    console.error(`[open] link cho khách chưa đăng nhập không dựng được (${err.message}).`);
+    return null;
+  }
+}
+
+app.post('/app/shopping-products/:id/open', appAuth.optionalAppUser, linkMintRateLimit, async (req, res) => {
   try {
     const product = await shoppingProductsRepo.getById(req.params.id);
     if (!product) return res.status(404).json({ error: 'not_found' });
     if (!product.productUrl) return res.status(422).json({ error: 'product has no source url' });
 
-    const user = await usersRepo.getById(req.appUserId);
+    // The screen the card was tapped on, as the app reports it. Validated
+    // rather than trusted - it goes into a URL Shopee will see.
+    const source = productTapSource(req.body && req.body.source);
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
     const pct = await getEffectivePct(user);
     const estimate = product.commissionValue != null
       ? {
@@ -1297,14 +1337,25 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRate
         }
       : null;
 
-    const reused = await linksRepo.findRecentByUserAndItem(req.appUserId, product.productId, SHOPPING_LINK_REUSE_WINDOW_MS);
-    if (reused && reused.affiliateUrl) {
-      return res.json({ affiliateUrl: reused.affiliateUrl, estimate, reused: true });
+    // Logged out - the website serves guests, and their orders still earn the
+    // operator's half. `tracked` says which half is missing, so the client can
+    // tell them the cashback is the part that needs an account.
+    if (!req.appUserId) {
+      const guestUrl = await buildGuestProductLink(product, source);
+      return res.json({
+        affiliateUrl: guestUrl || product.productUrl,
+        estimate,
+        tracked: Boolean(guestUrl),
+        reused: false,
+      });
     }
 
-    // The screen the card was tapped on, as the app reports it. Validated
-    // rather than trusted - it goes into a URL Shopee will see.
-    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, productTapSource(req.body && req.body.source));
+    const reused = await linksRepo.findRecentByUserAndItem(req.appUserId, product.productId, SHOPPING_LINK_REUSE_WINDOW_MS);
+    if (reused && reused.affiliateUrl) {
+      return res.json({ affiliateUrl: reused.affiliateUrl, estimate, tracked: true, reused: true });
+    }
+
+    const tracking = linkTracking.prepareSubIdForUser(req.appUserId, undefined, source);
     const result = await buildProductLink(product, tracking);
     const first = (result.results || [])[0] || null;
     const affiliateUrl = first ? first.shortLink || first.longLink : null;
@@ -1322,7 +1373,7 @@ app.post('/app/shopping-products/:id/open', appAuth.requireAppUser, linkMintRate
     }
 
     if (!affiliateUrl) return res.status(502).json({ error: 'could not generate affiliate link' });
-    res.json({ affiliateUrl, estimate, reused: false });
+    res.json({ affiliateUrl, estimate, tracked: true, reused: false });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }

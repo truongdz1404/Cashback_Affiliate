@@ -155,6 +155,10 @@ export type ShopOpenResult = { affiliateUrl: string; tracked: boolean; reused: b
 export type ShoppingProductOpenResult = {
   affiliateUrl: string;
   estimate: { userAmount: number; userPct: number | null } | null;
+  // Same meaning as ShopOpenResult.tracked: the link always carries the
+  // affiliate id, this says whether it also carries a sub id that can pay
+  // cashback back to someone. False for a guest.
+  tracked: boolean;
   reused: boolean;
 };
 

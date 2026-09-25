@@ -30,6 +30,23 @@ const LINK_SOURCES = Object.freeze({
   ZALO: 'zalo',
 });
 
+// Slot 1 for a visitor who is not signed in.
+//
+// Slot 1 is the identity slot, and a guest has none - but leaving it empty
+// was costing real money: the website used to send a logged-out tap straight
+// to shopee.vn, a URL with no affiliate id on it at all, so an order placed
+// after that tap paid nobody. A guest link carries the affiliate id like any
+// other; only the cashback half is missing, because there is no one to pay it
+// to. One shared marker rather than a per-visitor id on purpose: we do not
+// want to identify anybody who has not signed in, and nothing downstream
+// could use it if we did - reconciliation.js looks slot 1 up in `links`, and
+// no guest row is ever written there.
+//
+// It does earn its keep in Shopee's own conversion report, where utm_content
+// starting with "guest" is how much of the operator's commission came from
+// visitors who never signed in.
+const GUEST_SUB_ID = 'guest';
+
 const PRODUCT_TAP_SOURCES = new Set([LINK_SOURCES.HOME, LINK_SOURCES.SHOPPING, LINK_SOURCES.SHOPDETAIL]);
 
 /**
@@ -46,4 +63,4 @@ function productTapSource(value) {
   return PRODUCT_TAP_SOURCES.has(value) ? value : LINK_SOURCES.SHOPPING;
 }
 
-module.exports = { LINK_SOURCES, productTapSource };
+module.exports = { LINK_SOURCES, GUEST_SUB_ID, productTapSource };

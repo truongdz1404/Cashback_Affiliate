@@ -16,8 +16,12 @@ import { ArrowRightIcon, ExternalLinkIcon, ImageIcon, StoreIcon } from "@/compon
 // Shopee. They are separate elements rather than one button with a nested
 // button inside it, which is invalid HTML and behaves unpredictably.
 //
-// A guest still gets the product (plain Shopee URL in a new tab) and the
-// sign-in dialog on this tab explaining why the tap did not earn cashback.
+// A guest goes through the same round trip as anyone else. The backend
+// answers with the operator's affiliate link marked as a guest tap, so the
+// commission survives a logged-out order - a plain shopee.vn URL would have
+// paid nobody at all. The sign-in dialog then opens on this tab to say that
+// the cashback half is the part that needs an account, without blocking the
+// jump, which has already happened.
 export default function ProductCard({
   product,
   isAuthenticated,
@@ -45,18 +49,6 @@ export default function ProductCard({
   async function open() {
     if (loading) return;
 
-    if (!isAuthenticated) {
-      const plainUrl = product.productUrl ?? product.offerUrl;
-      if (plainUrl) window.open(plainUrl, "_blank", "noopener,noreferrer");
-      openAuthDialog({
-        title: "Đăng nhập để đơn này được hoàn tiền",
-        description: plainUrl
-          ? "Shopee đã mở ở tab mới, nhưng đơn mua qua link đó chưa được hoàn tiền. Đăng nhập rồi bấm lại sản phẩm để mua qua link hoàn tiền của bạn."
-          : "Đăng nhập để mua sản phẩm qua link hoàn tiền của bạn.",
-      });
-      return;
-    }
-
     // Minting a cashback link takes a few seconds (a real browser on the server
     // has to ask Shopee for it), so the tab is opened first - inside the click
     // handler, or the popup blocker eats it - and pointed at the URL after.
@@ -66,6 +58,14 @@ export default function ProductCard({
       const result = await appClient.post<ShoppingProductOpenResult>(`/shopping-products/${product.id}/open`);
       if (tab) tab.location.href = result.affiliateUrl;
       else window.location.href = result.affiliateUrl;
+
+      if (!isAuthenticated) {
+        openAuthDialog({
+          title: "Đăng nhập để đơn này được hoàn tiền",
+          description:
+            "Shopee đã mở ở tab mới. Đơn mua lúc chưa đăng nhập sẽ không được hoàn tiền - đăng nhập rồi bấm lại sản phẩm để mua qua link hoàn tiền của bạn.",
+        });
+      }
     } catch (err) {
       if (tab) tab.close();
       const message = err instanceof AppRequestError ? err.message : "Không mở được liên kết hoàn tiền.";
