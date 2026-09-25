@@ -44,14 +44,25 @@ die() { log "LOI: $*" >&2; exit 1; }
 
 mkdir -p "$DEST"
 
-# Credentials live in the compose env file and nowhere else. Sourcing it rather
-# than hardcoding means a rotated password never silently breaks the backups -
-# the thing you only find out about on the day you need to restore.
+# Credentials live in the compose env file and nowhere else. Reading them from
+# there rather than hardcoding means a rotated password never silently breaks
+# the backups - the thing you only find out about on the day you need to restore.
+#
+# Read, not sourced. A compose .env is not shell: values go in raw and unquoted,
+# so `ALERT_EMAIL_FROM=Rewally <no-reply@...>` is a perfectly valid line there
+# and a redirection here. Sourcing it aborts on that line, which is both nowhere
+# near the database settings and nowhere near obvious.
 [ -f "$COMPOSE_DIR/.env" ] || die "khong thay $COMPOSE_DIR/.env"
-# shellcheck disable=SC1091
-set -a; . "$COMPOSE_DIR/.env"; set +a
-: "${POSTGRES_USER:?POSTGRES_USER trong .env}"
-: "${POSTGRES_DB:?POSTGRES_DB trong .env}"
+env_get() {
+  sed -n -E "s/^[[:space:]]*$1=//p" "$COMPOSE_DIR/.env" | tail -n 1     | sed -E 's/^"(.*)"$//; s/^'"'"'(.*)'"'"'$//'
+}
+POSTGRES_USER="$(env_get POSTGRES_USER)"
+POSTGRES_DB="$(env_get POSTGRES_DB)"
+# The environment wins, so a one-off run can aim somewhere else without editing
+# the file every service on the box reads.
+BACKUP_REMOTE="${BACKUP_REMOTE:-$(env_get BACKUP_REMOTE)}"
+[ -n "$POSTGRES_USER" ] || die "khong doc duoc POSTGRES_USER trong .env"
+[ -n "$POSTGRES_DB" ] || die "khong doc duoc POSTGRES_DB trong .env"
 
 docker inspect "$DB_CONTAINER" >/dev/null 2>&1 || die "container $DB_CONTAINER khong chay"
 
@@ -83,7 +94,7 @@ done
 find "$DEST" -maxdepth 1 -type f \( -name '*.dump' -o -name '*.tgz' \) \
   -mtime "+$KEEP_DAYS" -print -delete | sed 's/^/[backup] xoa cu: /'
 
-if [ -n "${BACKUP_REMOTE:-}" ]; then
+if [ -n "$BACKUP_REMOTE" ]; then
   command -v rclone >/dev/null || die "BACKUP_REMOTE dat roi nhung chua cai rclone"
   log "day len $BACKUP_REMOTE ..."
   rclone sync "$DEST" "$BACKUP_REMOTE" --stats-one-line --stats=0
