@@ -16,6 +16,7 @@
 const { buildAffiliateLink, encodeSubIds } = require('./affiliateLink');
 const { buildAnRedirLink, useAnRedir } = require('./anRedirLink');
 const shopeeAffiliateApi = require('./shopeeAffiliateApi');
+const settingsRepo = require('./repositories/settings');
 
 /**
  * Swaps our sub ids into the `long_link` Shopee itself generated for this shop.
@@ -52,7 +53,8 @@ async function buildShopLink(shop, { subIds = [] } = {}) {
   // first because it is the branch under test and the two below are the
   // ones already believed to work - if an_redir cannot be built we simply
   // get the old behaviour, which is the point of trying it here first.
-  if (useAnRedir(subIds[0])) {
+  const anRedirPercent = await settingsRepo.getAnRedirPercent();
+  if (useAnRedir(subIds[0], anRedirPercent)) {
     try {
       const affiliateId = await shopeeAffiliateApi.getAffiliateId();
       const url = buildAnRedirLink({ target: { kind: 'shop', shopId: String(shop.shopId) }, affiliateId, subIds });

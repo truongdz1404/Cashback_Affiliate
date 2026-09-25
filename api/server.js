@@ -1241,7 +1241,8 @@ const SHOPPING_LINK_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 async function buildProductLink(product, tracking) {
   const key = tracking.subId || String(product.productId || '');
-  if (product.shopId && product.productId && useAnRedir(key)) {
+  const percent = await settingsRepo.getAnRedirPercent();
+  if (product.shopId && product.productId && useAnRedir(key, percent)) {
     try {
       const affiliateId = await shopeeAffiliateApi.getAffiliateId();
       const url = buildAnRedirLink({
@@ -1690,6 +1691,7 @@ app.get('/admin/settings', adminAuth.requireAdmin, async (_req, res) => {
       shopDetailBatchSize: await settingsRepo.getShopDetailBatchSize(),
       jobMode: await settingsRepo.getJobMode(),
       continuousGaps: await settingsRepo.getContinuousGaps(),
+      anRedirPercent: await settingsRepo.getAnRedirPercent(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1793,6 +1795,16 @@ app.put('/admin/settings', adminAuth.requireAdmin, async (req, res) => {
         return res.status(400).json({ error: `body.jobMode must be one of ${settingsRepo.JOB_MODES.join(', ')}` });
       }
       response.jobMode = await settingsRepo.setJobMode(mode);
+    }
+    // Share of new links minted through an_redir. Takes effect on the very
+    // next link - it is read per mint, not cached - so this is also the
+    // rollback: set it to 0 and nothing else has to happen.
+    if (req.body.anRedirPercent !== undefined) {
+      const percent = Number(req.body.anRedirPercent);
+      if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+        return res.status(400).json({ error: 'body.anRedirPercent must be an integer between 0 and 100' });
+      }
+      response.anRedirPercent = await settingsRepo.setAnRedirPercent(percent);
     }
     if (req.body.continuousGaps !== undefined) {
       const gaps = req.body.continuousGaps || {};

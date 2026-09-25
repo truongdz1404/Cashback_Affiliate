@@ -78,16 +78,6 @@ function buildAnRedirLink({ target, affiliateId, subIds = [] }) {
   return `${AN_REDIR_ORIGIN}/an_redir?${query}`;
 }
 
-// Rollout dial, 0-100. Off by default: until a real order placed through an
-// an_redir link shows its sub id in the conversion report, this is a promising
-// format and not a proven one, and the link that pays today is the one the
-// Playwright path mints.
-function anRedirPercent() {
-  const raw = Number(process.env.SHOPEE_AN_REDIR_PERCENT);
-  if (!Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(100, Math.trunc(raw)));
-}
-
 /**
  * Decides the branch for one link, deterministically from `key` (the sub id).
  *
@@ -99,11 +89,19 @@ function anRedirPercent() {
  * Which branch a link took is recoverable without storing a flag - an
  * an_redir row's affiliate_url starts with s.shopee.vn/an_redir - so there is
  * no schema change here and no marker burned into a sub id slot.
+ *
+ * `percent` is passed in rather than read here so this module stays a pure
+ * builder with no database behind it - the caller has already had to await
+ * settingsRepo.getAnRedirPercent() to know the live value, and reading it a
+ * second time could only disagree with the first.
+ *
+ * @param {string|null} key  the link's sub id
+ * @param {number} percent   0-100, from settingsRepo.getAnRedirPercent()
  */
-function useAnRedir(key) {
-  const percent = anRedirPercent();
-  if (percent <= 0) return false;
-  if (percent >= 100) return true;
+function useAnRedir(key, percent) {
+  const share = Number.isFinite(Number(percent)) ? Math.max(0, Math.min(100, Math.trunc(Number(percent)))) : 0;
+  if (share <= 0) return false;
+  if (share >= 100) return true;
   if (!key) return false;
 
   let hash = 0;
@@ -111,7 +109,7 @@ function useAnRedir(key) {
   for (let i = 0; i < text.length; i += 1) {
     hash = (hash * 31 + text.charCodeAt(i)) % 1000003;
   }
-  return hash % 100 < percent;
+  return hash % 100 < share;
 }
 
-module.exports = { buildAnRedirLink, useAnRedir, anRedirPercent, AN_REDIR_ORIGIN };
+module.exports = { buildAnRedirLink, useAnRedir, AN_REDIR_ORIGIN };
