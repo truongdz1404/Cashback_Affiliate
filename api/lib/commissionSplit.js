@@ -29,3 +29,55 @@ function estimateFromResult(result, pct) {
 }
 
 module.exports = { getEffectivePct, splitAmount, estimateFromResult };
+
+// Shopee's own numbers are the operator's business, not the shopper's. Every
+// route that hands a catalogue row to a client runs it through one of these
+// first: the raw rate/amount columns come off the object and only the split
+// the user actually receives goes out. Stripping rather than whitelisting is
+// deliberate - the five product queries behind these routes return five
+// different field sets (findMany vs POOL_SELECT in ./repositories/
+// recommendations.js), and a whitelist would quietly drop whichever fields a
+// future query adds.
+function toPublicProduct(product, pct) {
+  if (!product) return null;
+  const {
+    commissionRateText: _rateText,
+    commissionText: _text,
+    commissionRateValue: rateValue,
+    commissionValue: value,
+    shop,
+    ...rest
+  } = product;
+  return {
+    ...rest,
+    ...(shop === undefined ? {} : { shop: toPublicEmbeddedShop(shop) }),
+    userCommissionRateValue: rateValue != null ? (rateValue * pct) / 100 : null,
+    userCommissionValue: value != null ? (value * pct) / 100 : null,
+  };
+}
+
+function toPublicProducts(products, pct) {
+  return (products || []).map((p) => toPublicProduct(p, pct));
+}
+
+// The shop summary embedded in a product row (SHOP_INCLUDE) never carried a
+// rate the client drew, but it carried Shopee's, so it goes the same way.
+function toPublicEmbeddedShop(shop) {
+  if (!shop) return shop ?? null;
+  const { commissionRateText: _rateText, commissionRateValue: _rateValue, ...rest } = shop;
+  return rest;
+}
+
+// "15,1%" the way the rest of the UI writes a percentage - comma decimal,
+// one place, no trailing ",0". Built here rather than on the client because
+// the client must never see the number this is derived from.
+function formatUserPct(value) {
+  if (value == null) return null;
+  const rounded = Math.round(value * 10) / 10;
+  return `${String(rounded).replace('.', ',')}%`;
+}
+
+module.exports.toPublicProduct = toPublicProduct;
+module.exports.toPublicProducts = toPublicProducts;
+module.exports.toPublicEmbeddedShop = toPublicEmbeddedShop;
+module.exports.formatUserPct = formatUserPct;

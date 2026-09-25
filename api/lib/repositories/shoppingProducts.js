@@ -51,6 +51,10 @@ async function upsertMany(products, { createOnly = {} } = {}) {
  *
  * Cost is ~120 bytes a row (~12KB on a 100-item page), against an N+1
  * /app/shops/:shopId per card if the client had to fetch it itself.
+ *
+ * No commission field here. The card draws the product's own cashback, and
+ * the shop's rate on this object was Shopee's raw one - see toPublicProduct
+ * in ../commissionSplit.js.
  */
 const SHOP_INCLUDE = {
   shop: {
@@ -59,7 +63,6 @@ const SHOP_INCLUDE = {
       name: true,
       imageUrl: true,
       portraitUrl: true,
-      commissionRateText: true,
       isFeatured: true,
     },
   },

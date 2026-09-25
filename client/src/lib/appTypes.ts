@@ -85,9 +85,9 @@ export type Order = {
   updatedAt: string | null;
 };
 
-// userCommissionRateValue / userCommissionValue are what THIS user actually
-// receives. Never display the raw commissionRateValue / commissionValue -
-// those are the operator-side gross figures and overstate the cashback.
+// Every commission figure below is already this user's share. Shopee's own
+// rate never reaches a client - the API multiplies it by the user's split and
+// sends only the result, so there is no raw field here to display by mistake.
 // A shop in Shopee's affiliate programme. Only shops that are active, resolved
 // to a real shop_id and actually holding products are ever served here, so the
 // site can render one without checking whether it leads anywhere.
@@ -98,8 +98,8 @@ export type Shop = {
   imageUrl: string | null;
   portraitUrl: string | null;
   coverUrl: string | null;
-  commissionRateText: string | null;
-  commissionRateValue: number | null;
+  userCommissionRateText: string | null;
+  userCommissionRateValue: number | null;
   rating: number | null;
   soldTotal: number | null;
   followerCount: number | null;
@@ -112,7 +112,7 @@ export type Shop = {
 // storefront without a request per product.
 export type EmbeddedShop = Pick<
   Shop,
-  "shopId" | "name" | "imageUrl" | "portraitUrl" | "commissionRateText" | "isFeatured"
+  "shopId" | "name" | "imageUrl" | "portraitUrl" | "isFeatured"
 >;
 
 export type ShoppingProduct = {
@@ -123,10 +123,6 @@ export type ShoppingProduct = {
   priceValue: number | null;
   revenueText: string | null;
   shopName: string | null;
-  commissionRateText: string | null;
-  commissionText: string | null;
-  commissionRateValue: number | null;
-  commissionValue: number | null;
   userCommissionRateValue: number | null;
   userCommissionValue: number | null;
   productUrl: string | null;

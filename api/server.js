@@ -54,7 +54,7 @@ const configStore = require('./lib/configStore');
 const { reconcileOrders } = require('./lib/reconciliation');
 const { runHealthCheck } = require('./lib/healthCheck');
 const { rateLimit } = require('./lib/simpleRateLimit');
-const { getEffectivePct, estimateFromResult } = require('./lib/commissionSplit');
+const { getEffectivePct, estimateFromResult, toPublicProducts } = require('./lib/commissionSplit');
 const { publishWithdrawalRequest } = require('./lib/queue/withdrawalQueue');
 const emailOtp = require('./lib/emailOtp');
 const { availableAmountForUser } = require('./lib/walletBalance');
@@ -629,7 +629,13 @@ app.post('/app/link', appAuth.requireAppUser, linkMintRateLimit, async (req, res
         .catch((err) => console.error('[shopping-product] ensureExists from /app/link failed:', err.message));
     }
 
-    res.json({ ...result, estimate });
+    // `result.commission.commissionTable` is Shopee's own rate and amount for
+    // this product, which is what `estimate` was computed FROM. Sending both
+    // would hand the user the gross alongside their share, so only the share
+    // leaves. The clients read `results`/`pid`/`estimate` and never read the
+    // table - see LinkResult in the app's src/lib/types.ts.
+    const { commission: _commission, ...publicResult } = result;
+    res.json({ ...publicResult, estimate });
   } catch (err) {
     // The only record this failure leaves. Minting walks through a commission
     // lookup, a resolver, a link builder and an INSERT, any of which can fail
@@ -992,11 +998,7 @@ async function listShoppingProductsHandler(req, res) {
       searchHistoryRepo.record(req.appUserId, search).catch(() => {});
     }
 
-    res.json(products.map((p) => ({
-      ...p,
-      userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,
-      userCommissionValue: p.commissionValue != null ? (p.commissionValue * pct) / 100 : null,
-    })));
+    res.json(toPublicProducts(products, pct));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1060,6 +1062,8 @@ app.get('/app/shops', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 20, 100);
     const offset = parseOffset(req.query.offset);
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
+    const pct = await getEffectivePct(user);
     res.json(shopsRepo.toAppShops(await shopsRepo.list({
       limit,
       offset,
@@ -1067,7 +1071,7 @@ app.get('/app/shops', appAuth.optionalAppUser, async (req, res) => {
       search: typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined,
       featuredOnly: req.query.featured === '1' || req.query.featured === 'true' ? true : undefined,
       visibleOnly: true,
-    })));
+    }), pct));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1095,7 +1099,9 @@ app.get('/app/shops/count', appAuth.optionalAppUser, async (req, res) => {
 app.get('/app/shops/featured', appAuth.optionalAppUser, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 10, 50);
-    res.json(shopsRepo.toAppShops(await shopsRepo.listFeatured({ limit })));
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
+    const pct = await getEffectivePct(user);
+    res.json(shopsRepo.toAppShops(await shopsRepo.listFeatured({ limit }), pct));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1109,7 +1115,9 @@ app.get('/app/shops/search', appAuth.optionalAppUser, async (req, res) => {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search : '';
     const limit = parseLimit(req.query.limit, 1, 5);
-    res.json(shopsRepo.toAppShops(await shopsRepo.searchRanked({ search, limit })));
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
+    const pct = await getEffectivePct(user);
+    res.json(shopsRepo.toAppShops(await shopsRepo.searchRanked({ search, limit }), pct));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1119,7 +1127,9 @@ app.get('/app/shops/:shopId', appAuth.optionalAppUser, async (req, res) => {
   try {
     const shop = await shopsRepo.getByShopId(req.params.shopId, { visibleOnly: true });
     if (!shop) return res.status(404).json({ error: 'not_found' });
-    res.json(shopsRepo.toAppShop(shop));
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
+    const pct = await getEffectivePct(user);
+    res.json(shopsRepo.toAppShop(shop, pct));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1233,11 +1243,13 @@ app.get('/app/search-suggestions', appAuth.optionalAppUser, async (req, res) => 
     const q = typeof req.query.q === 'string' ? req.query.q : '';
     const limit = parseLimit(req.query.limit, 10, 20);
     if (!q.trim()) return res.json({ terms: [], shops: [] });
-    const [terms, shops] = await Promise.all([
+    const user = req.appUserId ? await usersRepo.getById(req.appUserId) : null;
+    const [pct, terms, shops] = await Promise.all([
+      getEffectivePct(user),
       searchSuggestionsRepo.suggestTerms(req.appUserId, q, limit),
       shopsRepo.searchRanked({ search: q.trim(), limit: 2 }),
     ]);
-    res.json({ terms, shops: shopsRepo.toAppShops(shops) });
+    res.json({ terms, shops: shopsRepo.toAppShops(shops, pct) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1430,11 +1442,7 @@ app.get('/app/recommendations', appAuth.optionalAppUser, async (req, res) => {
     const items = req.appUserId
       ? (await recommendationsRepo.recommendForUser(req.appUserId, { limit, offset })).items
       : await shoppingProductsRepo.list({ limit, offset, sort: 'commission_desc' });
-    res.json(items.map((p) => ({
-      ...p,
-      userCommissionRateValue: p.commissionRateValue != null ? (p.commissionRateValue * pct) / 100 : null,
-      userCommissionValue: p.commissionValue != null ? (p.commissionValue * pct) / 100 : null,
-    })));
+    res.json(toPublicProducts(items, pct));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
