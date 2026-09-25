@@ -550,15 +550,22 @@ app.put('/app/password', appAuth.requireAppUser, async (req, res) => {
   }
 });
 
-// Minting one link occupies a tab from a pool of two (CUSTOM_LINK_POOL_SIZE in
-// lib/browserManager.js) for several seconds on a two-core box, so the two
-// routes that do it get a per-user budget. Twenty in five minutes is far more
-// than anyone creates by hand and still stops one account - or one retry loop
-// in a client - from starving everybody else's "Tạo link". Placed AFTER
+// A per-user budget on the two routes that mint links. Placed AFTER
 // requireAppUser so req.appUserId exists to key on.
+//
+// Twenty was sized for when minting always meant holding one of two Playwright
+// tabs (CUSTOM_LINK_POOL_SIZE in lib/browserManager.js) for several seconds on
+// a two-core box - there, one user's retry loop really could starve everyone
+// else's "Tạo link". lib/linkAndCommission.js now builds a pasted link from two
+// HTTP calls and no browser, so the scarce resource this was rationing is off
+// the hot path; the browser is only reached on the fallback.
+//
+// So this no longer protects the pool, it catches a client stuck in a retry
+// loop. Sixty in five minutes is still far more than anyone creates by hand,
+// and leaves the fallback bounded at a rate the pool absorbs.
 const linkMintRateLimit = rateLimit({
   windowMs: 5 * 60 * 1000,
-  max: 20,
+  max: 60,
   by: (req) => (req.appUserId != null ? `user:${req.appUserId}` : null),
 });
 
