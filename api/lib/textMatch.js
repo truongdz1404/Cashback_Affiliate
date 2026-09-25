@@ -65,4 +65,74 @@ function foldForSearch(s) {
   return stripDiacritics(String(s || '').toLowerCase()).trim().replace(/\s+/g, ' ');
 }
 
-module.exports = { STOPWORDS, stripDiacritics, normalizeName, tokenize, rawTokens, foldForSearch };
+// The words a *phrase* is built out of, which is a different cut than
+// tokenize(): the minimum length is 2, not 3.
+//
+// Three characters was the right floor when a token scored on its own - a
+// two-letter fragment matches far too much to mean anything by itself. It is
+// the wrong floor for building pairs, because Vietnamese writes its head
+// nouns short: "ao", "vi", "noi", "son", "tui". Dropping them did not just
+// lose those words, it broke every pair they belong to - "ao thun", "vi nam",
+// "noi chien" - which are exactly the phrases that say what a product IS.
+//
+// `accented` leaves the diacritics on, for the same reason rawTokens does:
+// folded text cannot be matched against Shopee's own titles in SQL.
+function contentWords(text, { accented = false } = {}) {
+  if (!text) return [];
+  const source = accented ? String(text) : foldForSearch(text);
+  return source
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length >= 2 && !STOPWORDS.has(foldForSearch(word)));
+}
+
+// Adjacent word pairs - the unit the recommender actually matches on.
+//
+// A single Vietnamese syllable is close to meaningless on its own once the
+// diacritics are folded away: "day" is both "dây" (cord) and "dày" (thick),
+// "the" is "thẻ"/"thế"/"thể", "vai" is "vải"/"vai"/"vài". Scoring products on
+// those was why a feed built from lipstick links filled up with phone cases -
+// every one of them shared a syllable with something. A pair has to agree on
+// two syllables in order, which is a claim about the product rather than a
+// coincidence of spelling.
+function bigrams(text, { accented = false } = {}) {
+  const parts = contentWords(text, { accented });
+  const out = [];
+  for (let i = 0; i + 1 < parts.length; i += 1) {
+    out.push(`${parts[i]} ${parts[i + 1]}`.toLowerCase());
+  }
+  return out;
+}
+
+// True when `needle` appears in `haystack` as a whole word (or whole phrase),
+// not merely as a substring. Both sides must already be in the same form -
+// both folded, or both merely lowercased.
+//
+// Substring matching is what made an "exact" search-term match useless:
+// "dep" is inside "depot" and "ao" is inside "bao", "gao", "cao"; the term
+// scored on products that have nothing to do with it. Checking the characters
+// on either side costs one test and removes the entire class.
+function containsWhole(haystack, needle) {
+  if (!haystack || !needle) return false;
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at < 0) return false;
+    const before = at === 0 ? ' ' : haystack[at - 1];
+    const end = at + needle.length;
+    const after = end >= haystack.length ? ' ' : haystack[end];
+    if (!/[\p{L}\p{N}]/u.test(before) && !/[\p{L}\p{N}]/u.test(after)) return true;
+    from = at + 1;
+  }
+}
+
+module.exports = {
+  STOPWORDS,
+  stripDiacritics,
+  normalizeName,
+  tokenize,
+  rawTokens,
+  foldForSearch,
+  contentWords,
+  bigrams,
+  containsWhole,
+};

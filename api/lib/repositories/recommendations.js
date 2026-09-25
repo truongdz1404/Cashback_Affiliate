@@ -3,7 +3,7 @@ const searchHistoryRepo = require('./searchHistory');
 // normalizeName/tokenize (and the STOPWORDS list they use)
 // moved to lib/textMatch.js unchanged so the shop search ranker could share
 // them - see the header there.
-const { normalizeName, tokenize, rawTokens } = require('../textMatch');
+const { normalizeName, rawTokens, foldForSearch, contentWords, bigrams, containsWhole } = require('../textMatch');
 // Every product this module hands back is serialized straight to a client, so
 // it must carry the same embedded shop summary the filtered listing does - see
 // the SHOP_INCLUDE comment in ./shoppingProducts.js for why all five query
@@ -114,10 +114,32 @@ const POOL_SELECT = {
 const PAGE_SLACK = 5;
 
 // Recent Shopping-tab search terms are a weaker, noisier signal than an
-// actual "Tạo link" action (a search doesn't mean a purchase), so they fold
-// into keywordWeights at the same tier as a link's own category tokens
-// rather than its item-name tokens.
+// actual "Tạo link" action (a search doesn't mean a purchase), so they weigh
+// half of what a link does at the same position in the timeline.
 const SEARCH_TERM_WEIGHT = 0.5;
+
+// How the three kinds of text evidence are priced, relative to the shop (x5)
+// and category (x3) matches that sit above them.
+//
+// A typed search term, matched whole, is the most explicit statement of
+// intent the app ever gets - somebody sat down and wrote "son kem li" - so it
+// outranks anything inferred from a product title. A phrase lifted out of a
+// title is the next best thing. A lone syllable is priced near zero and
+// capped, because it is a spelling coincidence far more often than it is a
+// match: measured on production, 49 of 60 recommended products "matched" the
+// user on nothing but one folded syllable - `day`, `the`, `vai`, `min` - and
+// that is what "too few relevant products" looked like from the outside.
+const EXACT_TERM_WEIGHT = 4;
+const PHRASE_WEIGHT = 2.5;
+const UNIGRAM_WEIGHT = 0.3;
+// Only the strongest few phrase hits count. A long Shopee title shares five
+// or six pairs with a big enough history, and letting all of them add up let
+// title length stand in for relevance.
+const PHRASE_MAX = 3;
+// ...and the syllables together may never add up to as much as a single
+// phrase, so they can only ever break a tie between two products that already
+// matched on something real.
+const UNIGRAM_MAX_TOTAL = 1;
 
 // "Trending" nudge for scoreProduct: freshly-scraped products get a small,
 // linearly-decaying bonus so new arrivals surface a bit above older items
@@ -345,10 +367,17 @@ async function buildAffinity(userId) {
   const catWeights = new Map();
   const shopWeights = new Map();
   const shopIdWeights = new Map();
-  const keywordWeights = new Map();
-  // Same three interests, but keyed for a DATABASE filter instead of for
-  // scoring: accented words, raw category names, raw shop ids. See
-  // candidatePool() for what they buy us.
+  // Three tiers of text evidence, strongest first: whole search terms the
+  // user typed, word pairs lifted out of titles they acted on, and bare
+  // syllables. See EXACT_TERM_WEIGHT for why they are not one map any more.
+  const exactTerms = new Map();
+  const phraseWeights = new Map();
+  const unigramWeights = new Map();
+  // The same interests, but keyed for a DATABASE filter instead of for
+  // scoring: accented phrases and words, raw search terms, raw category
+  // names, raw shop ids. See candidatePool() for what they buy us.
+  const hintPhrases = new Map();
+  const hintTerms = new Map();
   const hintWords = new Map();
   const hintCategories = new Map();
   const hintShopIds = new Map();
@@ -373,8 +402,24 @@ async function buildAffinity(userId) {
 
     if (signal.term) {
       const searchWeight = weight * SEARCH_TERM_WEIGHT;
-      for (const token of tokenize(signal.term)) bump(keywordWeights, token, searchWeight, index);
-      for (const word of rawTokens(signal.term)) bump(hintWords, word, searchWeight, index);
+      const term = String(signal.term).trim().replace(/\s+/g, ' ');
+      // The whole term, kept whole. Splitting "son kem li" into syllables and
+      // scoring each one separately is how a lipstick search started matching
+      // "kem chống nắng" and "áo thun li" - the user asked for one thing and
+      // got the three unrelated things its syllables also spell.
+      //
+      // Accent-sensitive when they bothered to type the accents, folded when
+      // they didn't: foldForSearch("dép") and foldForSearch("đẹp") are both
+      // "dep", so someone who typed the marks has already told us which of
+      // the two they meant and we should not throw that away. Someone who
+      // typed "dep" bare gets both, which is the best we can do for them.
+      const folded = foldForSearch(term);
+      const exact = term.toLowerCase() === folded ? folded : term.toLowerCase();
+      if (exact.length >= 3) bump(exactTerms, exact, searchWeight, index);
+      for (const pair of bigrams(term)) bump(phraseWeights, pair, searchWeight, index);
+      if (term.length >= 3) bump(hintTerms, term, searchWeight, index);
+      for (const pair of bigrams(term, { accented: true })) bump(hintPhrases, pair, searchWeight, index);
+      for (const word of rawTokens(term)) bump(hintWords, word, searchWeight, index);
       return;
     }
 
@@ -382,8 +427,11 @@ async function buildAffinity(userId) {
     bump(shopIdWeights, link.shopId, weight, index);
     bump(catWeights, normalizeName(link.catName), weight, index);
     bump(shopWeights, normalizeName(link.shopName), weight, index);
-    for (const token of tokenize(link.itemName)) bump(keywordWeights, token, weight, index);
-    for (const token of tokenize(link.catName)) bump(keywordWeights, token, weight * 0.5, index);
+    for (const pair of bigrams(link.itemName)) bump(phraseWeights, pair, weight, index);
+    for (const pair of bigrams(link.catName)) bump(phraseWeights, pair, weight * 0.5, index);
+    for (const word of contentWords(link.itemName)) bump(unigramWeights, word, weight, index);
+    for (const pair of bigrams(link.itemName, { accented: true })) bump(hintPhrases, pair, weight, index);
+    for (const pair of bigrams(link.catName, { accented: true })) bump(hintPhrases, pair, weight * 0.5, index);
     for (const word of rawTokens(link.itemName)) bump(hintWords, word, weight, index);
     for (const word of rawTokens(link.catName)) bump(hintWords, word, weight * 0.5, index);
     bump(hintCategories, normalizeName(link.catName), weight, index);
@@ -407,7 +455,11 @@ async function buildAffinity(userId) {
     catWeights,
     shopWeights,
     shopIdWeights,
-    keywordWeights,
+    exactTerms,
+    phraseWeights,
+    unigramWeights,
+    hintPhrases,
+    hintTerms,
     hintWords,
     hintCategories,
     hintShopIds,
@@ -419,7 +471,8 @@ async function buildAffinity(userId) {
 
 /**
  * Same additive heuristic used by both callers: shop match (x5) + category
- * match (x3) + keyword overlap (x2/token) + price-band proximity (+1) + small
+ * match (x3) + whole search term (x4) + phrase overlap (x2.5, best three) +
+ * syllable overlap (x0.3, capped) + price-band proximity (+1) + small
  * commission and freshness tie-breakers.
  *
  * Returns { score, group, matched }. `group` names the single strongest
@@ -427,10 +480,28 @@ async function buildAffinity(userId) {
  * is what interleaveByGroup deals between; `matched` is false when the only
  * thing that scored was a tie-breaker, i.e. the product answers to nothing
  * the user has ever shown interest in.
+ *
+ * A bare syllable deliberately cannot set `matched`. It used to, and that is
+ * the whole of the "too few relevant products" complaint: `matched` read 100%
+ * on production while a human looking at the page counted one in five. A
+ * metric that is satisfied by "shares the letters d-a-y with something you
+ * once tapped" is not measuring relevance, and because interleaveByGroup
+ * sorts unmatched products to the back, a too-generous `matched` was also
+ * actively pushing the real matches down the page.
  */
 function scoreProduct(product, affinity) {
   if (!affinity.hasSignal) return { score: 0, group: null, matched: false };
-  const { shopWeights, shopIdWeights, catWeights, keywordWeights, avgPrice, priceLow, priceHigh } = affinity;
+  const {
+    shopWeights,
+    shopIdWeights,
+    catWeights,
+    exactTerms,
+    phraseWeights,
+    unigramWeights,
+    avgPrice,
+    priceLow,
+    priceHigh,
+  } = affinity;
   let score = 0;
   // Tracks the strongest single contribution so the product can be filed
   // under the interest that best explains it.
@@ -467,15 +538,41 @@ function scoreProduct(product, affinity) {
     claim(part, `cat:${productCategory}`, catEntry.index);
   }
 
-  for (const token of tokenize(product.name)) {
-    const entry = keywordWeights.get(token);
-    if (!entry) continue;
-    const part = 2 * entry.weight;
+  // A search term the user typed, found whole in the title.
+  const foldedName = foldForSearch(product.name);
+  const loweredName = String(product.name || '').toLowerCase();
+  for (const [term, entry] of exactTerms) {
+    // Terms stored folded are matched against the folded title, terms that
+    // kept their accents against the merely-lowercased one - see buildAffinity.
+    const haystack = term === foldForSearch(term) ? foldedName : loweredName;
+    if (!containsWhole(haystack, term)) continue;
+    const part = EXACT_TERM_WEIGHT * entry.weight;
     score += part;
-    claim(part, `kw:${token}`, entry.index);
+    claim(part, `tim:${term}`, entry.index);
   }
 
+  // Word pairs, strongest few only.
+  const phraseHits = [];
+  for (const pair of new Set(bigrams(product.name))) {
+    const entry = phraseWeights.get(pair);
+    if (entry) phraseHits.push([pair, entry]);
+  }
+  phraseHits.sort((a, b) => b[1].weight - a[1].weight);
+  for (const [pair, entry] of phraseHits.slice(0, PHRASE_MAX)) {
+    const part = PHRASE_WEIGHT * entry.weight;
+    score += part;
+    claim(part, `cum:${pair}`, entry.index);
+  }
+
+  // Everything above can explain why a product is here. Nothing below can.
   const matched = bestPart > 0;
+
+  let unigramPart = 0;
+  for (const word of new Set(contentWords(product.name))) {
+    const entry = unigramWeights.get(word);
+    if (entry) unigramPart += UNIGRAM_WEIGHT * entry.weight;
+  }
+  score += Math.min(unigramPart, UNIGRAM_MAX_TOTAL);
 
   if (avgPrice != null && product.priceValue != null && product.priceValue >= priceLow && product.priceValue <= priceHigh) {
     score += 1;
@@ -702,14 +799,23 @@ async function freshSlice(where, count) {
  * price of the whole thing is a handful of small scans. Products the user
  * already made a link for are excluded here rather than after scoring.
  *
- * Matching is by accented word (rawTokens) because this is a LIKE against
- * Shopee's own titles - see the note on rawTokens in lib/textMatch.js.
+ * Matching is by accented phrase and accented word because this is a LIKE
+ * against Shopee's own titles - see the note on rawTokens in
+ * lib/textMatch.js.
  *
  * Returns POOL_SELECT-shaped rows, NOT full products: callers rank these and
  * then hydrate the page they actually serve through productsInOrder.
  */
 async function candidatePool(affinity, { excludeLinked = true } = {}) {
-  const { alreadyLinkedItemIds, hintWords, hintCategories, hintShopIds, signalCount = 0 } = affinity;
+  const {
+    alreadyLinkedItemIds,
+    hintPhrases,
+    hintTerms,
+    hintWords,
+    hintCategories,
+    hintShopIds,
+    signalCount = 0,
+  } = affinity;
   // The Home feed hides what the user has already linked - suggesting it back
   // is noise. The Shopping tab must not: it is the catalogue, and a product
   // vanishing from browse because the user once made a link for it would look
@@ -723,13 +829,38 @@ async function candidatePool(affinity, { excludeLinked = true } = {}) {
   const strength = Math.min(1, signalCount / FULL_SIGNAL_AT);
   const freshCount = mix(POOL_FRESH_MAX, POOL_FRESH_MIN, strength);
 
-  const words = strongest(hintWords, POOL_WORDS);
+  // POOL_WORDS is a budget of concurrent scans, not a count of words - see
+  // its comment for why the number is what it is. What changed is how the
+  // budget is spent: phrases and whole search terms are bought first and
+  // single words only fill what is left.
+  //
+  // Scoring can only rank what the pool contains, so aiming the pool at
+  // syllables while scoring on phrases would have starved the new scorer: a
+  // pool assembled from `%son%`, `%kem%`, `%li%` is mostly rows that match no
+  // pair at all, and the page would fall back to the catalogue backdrop even
+  // though the right products exist. `%son kem%` returns fewer rows and
+  // nearly all of them score.
+  const needles = [];
+  const seen = new Set();
+  const addNeedle = (value) => {
+    if (needles.length >= POOL_WORDS) return;
+    const key = foldForSearch(value);
+    // A two-character needle is an ILIKE over most of the catalogue; leave
+    // those to the phrases that contain them.
+    if (!key || key.length < 3 || seen.has(key)) return;
+    seen.add(key);
+    needles.push(value);
+  };
+  for (const phrase of strongest(hintPhrases, 4)) addNeedle(phrase);
+  for (const term of strongest(hintTerms, 3)) addNeedle(term);
+  for (const word of strongest(hintWords, POOL_WORDS)) addNeedle(word);
+
   const categories = strongest(hintCategories, 8);
   const shopIds = strongest(hintShopIds, 8);
 
-  const idQueries = words.map((word) =>
+  const idQueries = needles.map((needle) =>
     prisma.shoppingProduct.findMany({
-      where: { ...notLinked, name: { contains: word, mode: 'insensitive' } },
+      where: { ...notLinked, name: { contains: needle, mode: 'insensitive' } },
       select: { id: true },
       orderBy: { id: 'desc' },
       take: mix(POOL_PER_WORD, POOL_PER_WORD_RICH, strength),
