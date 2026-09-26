@@ -17,6 +17,11 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Where the image optimiser writes its re-encoded copies. Created here, owned
+# by the runtime user, so the named volume mounted over it in compose inherits
+# that ownership - a volume Docker has to create itself comes out root-owned
+# and the server then silently re-encodes every image on every request.
+RUN mkdir -p .next/cache/images && chown -R nextjs:nodejs .next/cache
 
 USER nextjs
 EXPOSE 3000

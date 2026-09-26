@@ -105,6 +105,11 @@ services:
     environment:
       BACKEND_URL: http://shopee-affiliate:4000
       BACKEND_API_KEY: ${SERVICE_API_KEY}
+    # Optimised images live here. Without the volume the cache is inside the
+    # image layer, so every deploy throws it away and the first visitor after
+    # a push pays 1.5-3s per product image while the box re-encodes the lot.
+    volumes:
+      - shopee-affiliate-image-cache:/app/.next/cache/images
     depends_on:
       - shopee-affiliate
     networks:
@@ -120,3 +125,4 @@ volumes:
   shopee-affiliate-session:
   shopee-affiliate-bank-logos:
   shopee-affiliate-banner-uploads:
+  shopee-affiliate-image-cache:
