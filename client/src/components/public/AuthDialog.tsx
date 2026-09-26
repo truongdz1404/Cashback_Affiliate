@@ -10,11 +10,11 @@ import { openAuthDialog, subscribeAuthDialog, type AuthDialogMode, type AuthDial
 import { CheckIcon, CloseIcon } from "@/components/icons";
 
 // Sign-in/sign-up as a modal. Every "you need an account for this" moment on
-// the public site opens this instead of navigating to /login, so the visitor
-// keeps the page (and whatever they were doing) underneath. Only the explicit
-// Đăng nhập / Đăng ký buttons in the header and footer still go to the full
-// pages. Built on the native <dialog>: focus trap, Escape and the top layer
-// come for free, and there is no portal to manage.
+// the public site opens this instead of navigating away, so the visitor keeps
+// the page (and whatever they were doing) underneath. /login and /register
+// are no longer screens at all: proxy.js redirects both here. Built on the
+// native <dialog>: focus trap, Escape and the top layer come for free, and
+// there is no portal to manage.
 
 const PERKS = [
   "Hoàn tiền cho mọi đơn Shopee, rút thẳng về ngân hàng",
@@ -30,6 +30,33 @@ type DialogState = {
   title?: string;
   description?: string;
 };
+
+// What a guest clicking a link is really asking for. The /account area needs
+// a session, and /login and /register are no longer pages - proxy.js turns
+// both into a redirect home with the dialog open, which works but costs a
+// round trip and throws away the page they were reading. Caught here instead,
+// so a plain <Link> anywhere on the site - header, footer, hero banner, the
+// guide's call to action, a campaign card - opens the dialog in place without
+// every one of them having to become a client component.
+function authIntentOf(href: string): AuthDialogOptions | null {
+  if (!href.startsWith("/") || href.startsWith("//")) return null;
+  if (/^\/account(\/|\?|$)/.test(href)) {
+    return {
+      title: "Đăng nhập để vào tài khoản của bạn",
+      description: "Ví hoàn tiền, đơn hàng và link của bạn sẽ hiển thị ngay sau khi đăng nhập.",
+      redirectTo: href,
+    };
+  }
+  const url = new URL(href, window.location.origin);
+  if (url.pathname !== "/login" && url.pathname !== "/register") return null;
+  return { mode: url.pathname === "/register" ? "register" : "login", redirectTo: safePath(url.searchParams.get("next")) };
+}
+
+// A ?next= off the URL bar is attacker-controlled: only same-origin paths are
+// honoured, so signing in can never become an open redirect.
+function safePath(next: string | null): string | undefined {
+  return next && next.startsWith("/") && !next.startsWith("//") ? next : undefined;
+}
 
 export function AuthDialogProvider({ isAuthenticated, children }: { isAuthenticated: boolean; children: ReactNode }) {
   const router = useRouter();
@@ -61,30 +88,59 @@ export function AuthDialogProvider({ isAuthenticated, children }: { isAuthentica
     [isAuthenticated, router],
   );
 
-  // 2. A guest following any link into the account area gets the dialog and
-  // is taken there after signing in, instead of proxy.js bouncing them to
-  // /login. Capture phase + stopPropagation so next/link never sees the click.
+  // 2. Any link that used to lead to a sign-in screen opens the dialog
+  // instead. Capture phase + stopPropagation so next/link never sees the
+  // click.
   useEffect(() => {
     if (isAuthenticated) return;
     function onClick(event: MouseEvent) {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const anchor = (event.target as Element | null)?.closest?.("a[href]");
       if (!(anchor instanceof HTMLAnchorElement) || anchor.target === "_blank") return;
-      const href = anchor.getAttribute("href") ?? "";
-      if (!/^\/account(\/|\?|$)/.test(href)) return;
+      const intent = authIntentOf(anchor.getAttribute("href") ?? "");
+      if (!intent) return;
       event.preventDefault();
       event.stopPropagation();
-      openAuthDialog({
-        title: "Đăng nhập để vào tài khoản của bạn",
-        description: "Ví hoàn tiền, đơn hàng và link của bạn sẽ hiển thị ngay sau khi đăng nhập.",
-        redirectTo: href,
-      });
+      openAuthDialog(intent);
     }
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
   }, [isAuthenticated]);
 
-  // 3. React state → native <dialog>.
+  // 3. Arriving from /login or /register: proxy.js redirects both here with
+  // ?auth=, so a bookmark, an invite link or the dashboard's expired-session
+  // bounce still ends in the same dialog. window.location instead of
+  // useSearchParams: reading the hook here would push the whole site layout
+  // behind a Suspense boundary. ?ref= is left in the URL on purpose -
+  // ReferralCapture lives in the root layout, and a parent's effect runs
+  // after this one.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("auth");
+    if (mode !== "login" && mode !== "register") return;
+    const next = safePath(params.get("next"));
+
+    // Reloading the page should not reopen the dialog, and the querystring is
+    // plumbing the visitor never needs to see.
+    params.delete("auth");
+    params.delete("next");
+    const rest = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash);
+
+    if (isAuthenticated) return;
+    openAuthDialog(
+      next?.startsWith("/account")
+        ? {
+            mode,
+            title: "Đăng nhập để vào tài khoản của bạn",
+            description: "Ví hoàn tiền, đơn hàng và link của bạn sẽ hiển thị ngay sau khi đăng nhập.",
+            redirectTo: next,
+          }
+        : { mode, redirectTo: next },
+    );
+  }, [isAuthenticated]);
+
+  // 4. React state → native <dialog>.
   useEffect(() => {
     const el = dialogRef.current;
     if (!el) return;

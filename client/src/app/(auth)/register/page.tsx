@@ -1,11 +1,8 @@
-import type { Metadata } from "next";
-import AuthForm from "@/components/public/AuthForm";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "Đăng ký | Rewally",
-  description: "Tạo tài khoản Rewally miễn phí và nhận hoàn tiền cho mọi đơn hàng Shopee.",
-};
-
+// Same story as the login page next door: the screen is gone, the dialog took
+// over, and this stays as the redirect of last resort. The referral code has
+// to survive the hop - every invite link already in the wild points here.
 type SearchParams = Record<string, string | string[] | undefined>;
 
 function one(params: SearchParams, key: string): string | undefined {
@@ -16,7 +13,11 @@ function one(params: SearchParams, key: string): string | undefined {
 
 export default async function RegisterPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
+  const next = one(params, "next");
   // ?ref=CODE is what a referral link carries, ?referralCode= is accepted too.
   const referralCode = one(params, "ref") ?? one(params, "referralCode");
-  return <AuthForm mode="register" next={one(params, "next")} referralCode={referralCode} />;
+  const query = new URLSearchParams({ auth: "register" });
+  if (referralCode) query.set("ref", referralCode);
+  if (next && next.startsWith("/") && !next.startsWith("//")) query.set("next", next);
+  redirect(`/?${query.toString()}`);
 }

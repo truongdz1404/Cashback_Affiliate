@@ -8,6 +8,11 @@ const POINTS = [
   { icon: ShieldIcon, text: "Theo dõi từng đơn hàng và số tiền hoàn dự kiến" },
 ];
 
+// Unused while sign-in lives in a dialog: both pages under this layout are
+// redirects now (see ./login/page.tsx). Kept intact - it is the other half
+// of the standalone sign-in screen, and deleting it would make bringing
+// that screen back a rewrite rather than a revert.
+//
 // The auth pages deliberately skip the site header: nothing on them should
 // pull a visitor away mid-sign-in except the logo (back to home).
 export default function AuthLayout({ children }: { children: React.ReactNode }) {

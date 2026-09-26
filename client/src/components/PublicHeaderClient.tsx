@@ -6,6 +6,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { Button, Chip } from "@heroui/react";
+import { openAuthDialog } from "@/lib/authDialog";
 import type { WalletTotals } from "@/lib/wallet";
 import { formatVnd } from "@/lib/format";
 import BalanceCard from "@/components/account/BalanceCard";
@@ -299,16 +300,24 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-2">
-            <Link href="/login" className="hidden px-2 text-sm font-extrabold text-[var(--foreground)] transition hover:text-[var(--accent)] sm:inline">
+            {/* Buttons, not links: sign-in is a dialog over the current page
+                now, and an href to /login would only bounce through a redirect
+                (see proxy.js) to end up in the same place. */}
+            <button
+              type="button"
+              onClick={() => openAuthDialog({ mode: "login" })}
+              className="hidden px-2 text-sm font-extrabold text-[var(--foreground)] transition hover:text-[var(--accent)] sm:inline"
+            >
               Đăng nhập
-            </Link>
-            <Link
-              href="/register"
+            </button>
+            <button
+              type="button"
+              onClick={() => openAuthDialog({ mode: "register" })}
               className="inline-flex h-10 items-center gap-1.5 rounded-full bg-[var(--foreground)] px-4 text-sm font-extrabold text-white transition hover:opacity-90"
             >
               Đăng ký
               <ArrowRightIcon className="hidden h-4 w-4 sm:block" />
-            </Link>
+            </button>
           </div>
         )}
       </div>
@@ -406,12 +415,26 @@ export default function PublicHeaderClient({ user, categories }: { user: HeaderU
               </div>
             ) : (
               <div className="mt-5 flex flex-col gap-2 border-t border-[var(--border)] pt-4">
-                <Link href="/login" className="rounded-full border border-[var(--border)] px-4 py-2.5 text-center text-sm font-extrabold text-[var(--foreground)]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    openAuthDialog({ mode: "login" });
+                  }}
+                  className="rounded-full border border-[var(--border)] px-4 py-2.5 text-center text-sm font-extrabold text-[var(--foreground)]"
+                >
                   Đăng nhập
-                </Link>
-                <Link href="/register" className="rounded-full bg-[var(--foreground)] px-4 py-2.5 text-center text-sm font-extrabold text-white">
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    openAuthDialog({ mode: "register" });
+                  }}
+                  className="rounded-full bg-[var(--foreground)] px-4 py-2.5 text-center text-sm font-extrabold text-white"
+                >
                   Đăng ký miễn phí
-                </Link>
+                </button>
                 <Link href="/support" className="mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-[var(--foreground)]">
                   <InfoIcon className="h-4.5 w-4.5 text-[var(--muted)]" />
                   Hỗ trợ &amp; Hỏi đáp
