@@ -1,4 +1,6 @@
+const { Prisma } = require('@prisma/client');
 const prisma = require('../prisma');
+const { ORDER_AT, dayRange } = require('../sqlTime');
 const clawbackRepo = require('./clawback');
 const campaignsRepo = require('./campaigns');
 const { decodeOrderItems } = require('../orderItems');
@@ -89,36 +91,88 @@ async function upsertOrder(order, tx = prisma) {
   return { ...saved, wasNewlyCancelled, wasPaidAndRevisedDown };
 }
 
-function buildWhere({ payoutStatus, displayStatus } = {}) {
-  const where = {};
-  if (payoutStatus) where.payoutStatus = payoutStatus;
+// The admin order list is filtered in SQL rather than through a Prisma
+// `where`, because two of its filters can't be expressed as one: the date
+// window has to compare against the epoch stored in the TEXT purchase_time
+// column (see lib/sqlTime.js), and the search box spans the owning user's
+// phone/email/name as well as the order's own columns.
+function orderFilters({ payoutStatus, displayStatus, q, from, to } = {}) {
+  const parts = [Prisma.sql`TRUE`];
+  if (payoutStatus) parts.push(Prisma.sql`o.payout_status = ${String(payoutStatus)}`);
   if (displayStatus !== undefined && displayStatus !== null && displayStatus !== '') {
-    where.displayOrderStatus = Number(displayStatus);
+    parts.push(Prisma.sql`o.display_order_status = ${Number(displayStatus)}`);
   }
-  return where;
+  if (from || to) parts.push(dayRange(ORDER_AT, from || null, to || null));
+  const term = typeof q === 'string' ? q.trim() : '';
+  if (term) {
+    const like = `%${term}%`;
+    parts.push(Prisma.sql`(
+      o.order_sn ILIKE ${like}
+      OR o.product_name ILIKE ${like}
+      OR o.sub_id ILIKE ${like}
+      OR u.phone ILIKE ${like}
+      OR u.email ILIKE ${like}
+      OR u.full_name ILIKE ${like}
+      OR u.zalo_user_id ILIKE ${like}
+    )`);
+  }
+  return Prisma.join(parts, ' AND ');
 }
+
+// Sorting is whitelisted rather than interpolated: the value arrives straight
+// from a query string. "Ngày mua" sorts on the decoded timestamp, not on the
+// text column, where '9...' would sort after '17...'.
+const ORDER_SORTS = {
+  newest: Prisma.sql`o.id DESC`,
+  oldest: Prisma.sql`o.id ASC`,
+  purchase_desc: Prisma.sql`${ORDER_AT} DESC NULLS LAST`,
+  purchase_asc: Prisma.sql`${ORDER_AT} ASC NULLS LAST`,
+  commission_desc: Prisma.sql`o.user_commission DESC NULLS LAST`,
+  commission_asc: Prisma.sql`o.user_commission ASC NULLS LAST`,
+};
 
 // Joins in the owning user's zalo id + phone so the admin orders table can
-// show who an order belongs to without a second round trip per row.
-async function listOrders({ limit = 50, offset = 0, payoutStatus, displayStatus } = {}) {
-  const where = buildWhere({ payoutStatus, displayStatus });
+// show who an order belongs to without a second round trip per row. The SQL
+// pass only picks the page's ids; the rows themselves still come back through
+// Prisma so every caller keeps the same camelCase shape it always had.
+async function listOrders({ limit = 50, offset = 0, payoutStatus, displayStatus, q, from, to, sort } = {}) {
+  const where = orderFilters({ payoutStatus, displayStatus, q, from, to });
+  const orderBy = ORDER_SORTS[sort] || ORDER_SORTS.newest;
+  const idRows = await prisma.$queryRaw`
+    SELECT o.id FROM orders o
+    LEFT JOIN users u ON u.id = o.user_id
+    WHERE ${where}
+    ORDER BY ${orderBy}
+    LIMIT ${Number(limit)} OFFSET ${Number(offset)}
+  `;
+  const ids = idRows.map((row) => Number(row.id));
+  if (!ids.length) return [];
+
   const rows = await prisma.order.findMany({
-    where,
-    orderBy: { id: 'desc' },
-    take: limit,
-    skip: offset,
-    include: { user: { select: { zaloUserId: true, phone: true } } },
+    where: { id: { in: ids } },
+    include: { user: { select: { zaloUserId: true, phone: true, email: true, fullName: true } } },
   });
-  return rows.map(({ user, ...order }) => ({
-    ...order,
-    zaloUserId: user ? user.zaloUserId : null,
-    userPhone: user ? user.phone : null,
-  }));
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids
+    .map((id) => byId.get(id))
+    .filter(Boolean)
+    .map(({ user, ...order }) => ({
+      ...order,
+      zaloUserId: user ? user.zaloUserId : null,
+      userPhone: user ? user.phone : null,
+      userEmail: user ? user.email : null,
+      userName: user ? user.fullName : null,
+    }));
 }
 
-async function countOrders({ payoutStatus, displayStatus } = {}) {
-  const where = buildWhere({ payoutStatus, displayStatus });
-  return prisma.order.count({ where });
+async function countOrders({ payoutStatus, displayStatus, q, from, to } = {}) {
+  const where = orderFilters({ payoutStatus, displayStatus, q, from, to });
+  const rows = await prisma.$queryRaw`
+    SELECT COUNT(*) AS "total" FROM orders o
+    LEFT JOIN users u ON u.id = o.user_id
+    WHERE ${where}
+  `;
+  return Number(rows[0]?.total ?? 0);
 }
 
 // The app's order card shows the same detail Shopee's own order list does

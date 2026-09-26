@@ -1,27 +1,41 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
   Button,
-  Card,
   Checkbox,
   Chip,
   Input,
-  InputGroup,
   Label,
   ListBox,
   Select,
   Table,
+  Tabs,
   TextField,
   toast,
 } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
 import { formatDateTime } from "@/lib/format";
-import { ArrowRightIcon, RefreshIcon, SearchIcon, TrashIcon } from "@/components/icons";
-
-const PAGE_SIZE = 20;
+import { datedFilename, downloadCsv } from "@/lib/exportCsv";
+import { useDebounced } from "@/lib/useDebounced";
+import { ArrowRightIcon, DownloadIcon, RefreshIcon, TrashIcon } from "@/components/icons";
+import {
+  EmptyState,
+  ErrorBanner,
+  FilterChips,
+  PageHeader,
+  Pagination,
+  SearchInput,
+  SectionCard,
+  SelectFilter,
+  StatCard,
+  StatGrid,
+  TableShell,
+  Toolbar,
+  type FilterOption,
+} from "@/components/admin/ui";
 
 type Shop = {
   id: number;
@@ -142,28 +156,40 @@ type JobRun = {
   error?: string | null;
 };
 
-const STATUS_FILTERS = [
+type ShopCounts = { linked: number; discovered: number; hidden: number; featured: number };
+
+const STATUS_OPTIONS: FilterOption[] = [
   { value: "linked", label: "Đã link (hiện cho user)" },
   { value: "discovered", label: "Mới phát hiện (ẩn)" },
-  { value: "all", label: "Tất cả" },
+  { value: "all", label: "Tất cả trạng thái" },
 ];
+
+const VISIBILITY_OPTIONS: FilterOption[] = [
+  { value: "", label: "Hiện & ẩn" },
+  { value: "active", label: "Đang hiện" },
+  { value: "hidden", label: "Đang ẩn" },
+];
+
+// Cùng bộ khoá với SORTS trong api/lib/repositories/shops.js — đổi tên khoá ở
+// đây mà không đổi bên đó thì backend lặng lẽ rơi về "featured".
+const SORT_OPTIONS: FilterOption[] = [
+  { value: "featured", label: "Nổi bật trước" },
+  { value: "newest", label: "Mới thêm nhất" },
+  { value: "products_desc", label: "Nhiều sản phẩm nhất" },
+  { value: "commission_desc", label: "Hoa hồng cao nhất" },
+  { value: "sold_desc", label: "Bán chạy nhất" },
+];
+
+const EMPTY_FILTERS = { status: "linked", visibility: "", featured: false, sort: "featured" };
+
+function labelOf(options: FilterOption[], value: string) {
+  return options.find((o) => o.value === value)?.label ?? value;
+}
 
 const STATUS_LABELS: Record<string, { label: string; color: "success" | "warning" | "danger" }> = {
   linked: { label: "Đã link", color: "success" },
   discovered: { label: "Mới phát hiện", color: "warning" },
 };
-
-function SectionCard({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
-  return (
-    <Card>
-      <Card.Header>
-        <Card.Title>{title}</Card.Title>
-        {description && <Card.Description>{description}</Card.Description>}
-      </Card.Header>
-      <Card.Content>{children}</Card.Content>
-    </Card>
-  );
-}
 
 function ShopAvatar({ shop }: { shop: Shop }) {
   const src = shop.portraitUrl || shop.imageUrl;
@@ -903,38 +929,57 @@ function ShopRow({ shop, onChanged }: { shop: Shop; onChanged: () => void }) {
 export default function ShopsPage() {
   const [items, setItems] = useState<Shop[]>([]);
   const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<ShopCounts>({ linked: 0, discovered: 0, hidden: 0, featured: 0 });
   const [page, setPage] = useState(0);
-  const [status, setStatus] = useState("linked");
+  const [pageSize, setPageSize] = useState(20);
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const q = useDebounced(searchInput.trim());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const [ambiguous, setAmbiguous] = useState(0);
 
+  const query = useMemo(() => {
+    const p = new URLSearchParams({
+      limit: String(pageSize),
+      offset: String(page * pageSize),
+      status: filters.status,
+      sort: filters.sort,
+    });
+    if (q) p.set("search", q);
+    if (filters.visibility) p.set("visibility", filters.visibility);
+    if (filters.featured) p.set("featured", "1");
+    return p.toString();
+  }, [filters, page, pageSize, q]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({
-        limit: String(PAGE_SIZE),
-        offset: String(page * PAGE_SIZE),
-        status,
-      });
-      if (search) params.set("search", search);
-      const data = await clientApi.get<{ items: Shop[]; total: number }>(`/api/shops?${params.toString()}`);
+      const data = await clientApi.get<{ items: Shop[]; total: number; counts?: ShopCounts }>(
+        `/api/shops?${query}`,
+      );
       setItems(data.items || []);
       setTotal(data.total || 0);
+      if (data.counts) setCounts(data.counts);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không tải được danh sách shop");
     } finally {
       setLoading(false);
     }
-  }, [page, search, status]);
+  }, [query]);
 
   useEffect(() => {
     load();
   }, [load, reloadKey]);
+
+  // Any filter change restarts at page one: keeping the old offset after
+  // narrowing from 800 shops to 3 lands on page 12 of a one-page result and
+  // shows an empty table.
+  useEffect(() => {
+    setPage(0);
+  }, [q, filters.status, filters.visibility, filters.featured, filters.sort, pageSize]);
 
   // The ambiguous count drives the badge on the queue link - it is the only
   // state in this whole pipeline that cannot resolve itself and needs a person.
@@ -946,131 +991,189 @@ export default function ShopsPage() {
   }, [reloadKey]);
 
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const chips = [
+    q ? { label: `Tìm: ${q}`, onClear: () => setSearchInput("") } : null,
+    filters.status !== "linked"
+      ? {
+          label: labelOf(STATUS_OPTIONS, filters.status),
+          onClear: () => setFilters((f) => ({ ...f, status: "linked" })),
+        }
+      : null,
+    filters.visibility
+      ? {
+          label: labelOf(VISIBILITY_OPTIONS, filters.visibility),
+          onClear: () => setFilters((f) => ({ ...f, visibility: "" })),
+        }
+      : null,
+    filters.featured ? { label: "Chỉ shop nổi bật", onClear: () => setFilters((f) => ({ ...f, featured: false })) } : null,
+    filters.sort !== "featured"
+      ? { label: labelOf(SORT_OPTIONS, filters.sort), onClear: () => setFilters((f) => ({ ...f, sort: "featured" })) }
+      : null,
+  ].filter(Boolean) as { label: string; onClear: () => void }[];
+
+  function exportPage() {
+    downloadCsv(datedFilename("shop"), items, [
+      { header: "Shop ID", value: (s) => s.shopId },
+      { header: "Tên shop", value: (s) => s.name },
+      { header: "Trạng thái", value: (s) => STATUS_LABELS[s.status]?.label || s.status },
+      { header: "Sản phẩm", value: (s) => s.productCount },
+      { header: "Hoa hồng", value: (s) => s.commissionRateText || "" },
+      { header: "Đánh giá", value: (s) => (s.rating != null ? s.rating.toFixed(1) : "") },
+      { header: "Theo dõi", value: (s) => s.followerCount ?? "" },
+      { header: "Hiện", value: (s) => (s.isActive ? "Có" : "Không") },
+      { header: "Nổi bật", value: (s) => (s.isFeatured ? "Có" : "Không") },
+      { header: "Crawl lần cuối", value: (s) => (s.lastCrawledAt ? formatDateTime(s.lastCrawledAt) : "") },
+    ]);
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--foreground)]">Shop ({total})</h1>
-          <p className="mt-0.5 max-w-3xl text-xs text-[var(--muted)]">
-            Shop trong chương trình affiliate Shopee. Shop chỉ hiện cho user khi đang bật, ở trạng thái &quot;Đã link&quot;
-            và có ít nhất một sản phẩm — shop &quot;Mới phát hiện&quot; là shop tình cờ tìm thấy khi tra tên, chưa có sản
-            phẩm nào.
-          </p>
-        </div>
-        <Link
-          href="/admin/shops/resolutions"
-          className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--surface-secondary)]"
-        >
-          Hàng đợi tra tên
-          {ambiguous > 0 && <Chip color="warning">{ambiguous} cần chọn</Chip>}
-          <ArrowRightIcon className="h-4 w-4" />
-        </Link>
-      </div>
-
-      <OperationsSection onChanged={refresh} />
-      <JobLoopsSection reloadKey={reloadKey} />
-      <ManualRunSection onFinished={refresh} />
-      <JobRunsSection reloadKey={reloadKey} />
-
-      <SectionCard title="Danh sách shop">
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <div className="max-w-xs flex-1">
-            <TextField
-              name="search"
-              value={searchInput}
-              onChange={(v) => {
-                setPage(0);
-                setSearchInput(v);
-                setSearch(v.trim());
-              }}
-              aria-label="Tìm shop"
+      <PageHeader
+        title="Shop"
+        count={total}
+        description={
+          'Shop trong chương trình affiliate Shopee. Shop chỉ hiện cho user khi đang bật, ở trạng thái "Đã link" và có ít nhất một sản phẩm — shop "Mới phát hiện" là shop tình cờ tìm thấy khi tra tên, chưa có sản phẩm nào.'
+        }
+        actions={
+          <>
+            <Link
+              href="/admin/shops/resolutions"
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--surface-secondary)]"
             >
-              <Label className="sr-only">Tìm shop</Label>
-              <InputGroup>
-                <InputGroup.Prefix>
-                  <SearchIcon className="h-4 w-4 text-[var(--muted)]" />
-                </InputGroup.Prefix>
-                <InputGroup.Input placeholder="Tìm theo tên shop..." />
-              </InputGroup>
-            </TextField>
-          </div>
-          <Select
-            aria-label="Lọc theo trạng thái"
-            selectedKey={status}
-            onSelectionChange={(key) => {
-              setPage(0);
-              setStatus(String(key ?? "linked"));
-            }}
-          >
-            <Select.Trigger className="min-w-[220px]">
-              <Select.Value />
-              <Select.Indicator />
-            </Select.Trigger>
-            <Select.Popover>
-              <ListBox>
-                {STATUS_FILTERS.map((opt) => (
-                  <ListBox.Item key={opt.value} id={opt.value}>
-                    {opt.label}
-                  </ListBox.Item>
-                ))}
-              </ListBox>
-            </Select.Popover>
-          </Select>
-        </div>
-
-        {error && <p className="mb-3 text-sm text-[var(--danger)]">{error}</p>}
-
-        <Table>
-          <Table.ScrollContainer>
-            <Table.Content aria-label="Danh sách shop" className="min-w-[980px]">
-              <Table.Header>
-                <Table.Column isRowHeader>Shop</Table.Column>
-                <Table.Column>Trạng thái</Table.Column>
-                <Table.Column className="text-right">Sản phẩm</Table.Column>
-                <Table.Column className="text-right">Hoa hồng</Table.Column>
-                <Table.Column>Hiển thị</Table.Column>
-                <Table.Column>Crawl lần cuối</Table.Column>
-                <Table.Column className="text-right">Thao tác</Table.Column>
-              </Table.Header>
-              <Table.Body
-                renderEmptyState={() => (
-                  <span className="text-sm text-[var(--muted)]">{loading ? "Đang tải..." : "Chưa có shop nào"}</span>
-                )}
-              >
-                {items.map((s) => (
-                  <ShopRow key={s.id} shop={s} onChanged={refresh} />
-                ))}
-              </Table.Body>
-            </Table.Content>
-          </Table.ScrollContainer>
-        </Table>
-
-        <div className="mt-4 flex items-center justify-between text-sm text-[var(--muted)]">
-          <span>
-            Trang {page + 1} / {totalPages}
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onPress={() => setPage((p) => Math.max(0, p - 1))}
-              isDisabled={page === 0 || loading}
-            >
-              Trước
+              Hàng đợi tra tên
+              {ambiguous > 0 && <Chip color="warning">{ambiguous} cần chọn</Chip>}
+              <ArrowRightIcon className="h-4 w-4" />
+            </Link>
+            <Button variant="outline" size="sm" onPress={refresh} isPending={loading}>
+              <RefreshIcon className="h-4 w-4" />
+              Làm mới
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onPress={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              isDisabled={page >= totalPages - 1 || loading}
+          </>
+        }
+      />
+
+      <StatGrid>
+        <StatCard label="Đã link" value={counts.linked.toLocaleString("vi-VN")} hint="Đủ điều kiện hiện cho user" />
+        <StatCard
+          label="Mới phát hiện"
+          value={counts.discovered.toLocaleString("vi-VN")}
+          hint="Chưa có sản phẩm nào"
+          tone={counts.discovered > 0 ? "warning" : "default"}
+        />
+        <StatCard
+          label="Đang ẩn"
+          value={counts.hidden.toLocaleString("vi-VN")}
+          hint="Bị tắt thủ công"
+          tone={counts.hidden > 0 ? "danger" : "default"}
+        />
+        <StatCard label="Nổi bật" value={counts.featured.toLocaleString("vi-VN")} hint="Ưu tiên lên đầu trong app" />
+      </StatGrid>
+
+      <Tabs defaultSelectedKey="danh-sach">
+        <Tabs.List aria-label="Khu vực quản lý shop">
+          <Tabs.Tab id="danh-sach">Danh sách shop</Tabs.Tab>
+          <Tabs.Tab id="cao">Cào &amp; đồng bộ</Tabs.Tab>
+        </Tabs.List>
+
+        <Tabs.Panel id="danh-sach">
+          <SectionCard bodyClassName="space-y-4">
+            <Toolbar
+              trailing={
+                <>
+                  <Button variant="ghost" size="sm" onPress={exportPage} isDisabled={!items.length}>
+                    <DownloadIcon className="h-4 w-4" />
+                    Xuất CSV
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => {
+                      setFilters(EMPTY_FILTERS);
+                      setSearchInput("");
+                    }}
+                    isDisabled={!chips.length}
+                  >
+                    Xoá lọc
+                  </Button>
+                </>
+              }
             >
-              Sau
-            </Button>
-          </div>
-        </div>
-      </SectionCard>
+              <SearchInput value={searchInput} onChange={setSearchInput} placeholder="Tìm theo tên shop…" />
+              <SelectFilter
+                label="Trạng thái"
+                value={filters.status}
+                options={STATUS_OPTIONS}
+                onChange={(v) => setFilters((f) => ({ ...f, status: v }))}
+                className="min-w-[210px]"
+              />
+              <SelectFilter
+                label="Hiển thị"
+                value={filters.visibility}
+                options={VISIBILITY_OPTIONS}
+                onChange={(v) => setFilters((f) => ({ ...f, visibility: v }))}
+                className="min-w-[160px]"
+              />
+              <SelectFilter
+                label="Sắp xếp"
+                value={filters.sort}
+                options={SORT_OPTIONS}
+                onChange={(v) => setFilters((f) => ({ ...f, sort: v }))}
+                className="min-w-[190px]"
+              />
+              <Checkbox isSelected={filters.featured} onChange={(v) => setFilters((f) => ({ ...f, featured: v }))}>
+                <Checkbox.Control>
+                  <Checkbox.Indicator />
+                </Checkbox.Control>
+                <Checkbox.Content className="text-sm">Chỉ nổi bật</Checkbox.Content>
+              </Checkbox>
+            </Toolbar>
+
+            <FilterChips items={chips} />
+
+            <ErrorBanner message={error} onRetry={refresh} />
+
+            <TableShell isLoading={loading}>
+              <Table>
+                <Table.ScrollContainer>
+                  <Table.Content aria-label="Danh sách shop" className="min-w-[980px]">
+                    <Table.Header>
+                      <Table.Column isRowHeader>Shop</Table.Column>
+                      <Table.Column>Trạng thái</Table.Column>
+                      <Table.Column className="text-right">Sản phẩm</Table.Column>
+                      <Table.Column className="text-right">Hoa hồng</Table.Column>
+                      <Table.Column>Hiển thị</Table.Column>
+                      <Table.Column>Crawl lần cuối</Table.Column>
+                      <Table.Column className="text-right">Thao tác</Table.Column>
+                    </Table.Header>
+                    <Table.Body
+                      renderEmptyState={() => (
+                        <EmptyState
+                          title={loading ? "Đang tải…" : "Không có shop nào khớp"}
+                          description={loading ? undefined : "Thử bỏ bớt bộ lọc, hoặc chạy tra tên để tìm thêm shop."}
+                        />
+                      )}
+                    >
+                      {items.map((s) => (
+                        <ShopRow key={s.id} shop={s} onChanged={refresh} />
+                      ))}
+                    </Table.Body>
+                  </Table.Content>
+                </Table.ScrollContainer>
+              </Table>
+            </TableShell>
+
+            <Pagination page={page} pageSize={pageSize} total={total} onPage={setPage} onPageSize={setPageSize} />
+          </SectionCard>
+        </Tabs.Panel>
+
+        <Tabs.Panel id="cao" className="space-y-6">
+          <OperationsSection onChanged={refresh} />
+          <JobLoopsSection reloadKey={reloadKey} />
+          <ManualRunSection onFinished={refresh} />
+          <JobRunsSection reloadKey={reloadKey} />
+        </Tabs.Panel>
+      </Tabs>
     </div>
   );
 }

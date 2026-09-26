@@ -23,14 +23,6 @@ const STATUS_TONE: Record<ReferralInvitee["status"], PillTone> = {
 
 const EMPTY_PROGRAM: ReferralProgram = { commissionPct: 0, commissionMonths: 0, firstOrderBonus: 0 };
 
-// Order purchaseTime is a unix timestamp as a string (seconds, or ms for a
-// few older rows); formatDate cannot parse that shape on its own.
-function orderDate(purchaseTime: string | null, fallback: string | null): string {
-  const n = Number(purchaseTime);
-  if (purchaseTime && Number.isFinite(n) && n > 0) return formatDate(n > 1e12 ? n : n * 1000);
-  return formatDate(fallback);
-}
-
 function programTerm(program: ReferralProgram): string {
   return program.commissionMonths > 0 ? `trong ${program.commissionMonths} tháng` : "trọn đời";
 }
@@ -161,7 +153,7 @@ export default async function ReferralPage() {
                     {c.productName || `Đơn ${c.orderSn}`}
                   </p>
                   <p className="text-xs text-[var(--muted)]">
-                    {maskPhone(c.referredPhone)} · {orderDate(c.purchaseTime, c.createdAt)} · {formatPct(c.pct)} của {formatVnd(c.baseAmount)}
+                    {maskPhone(c.referredPhone)} · {formatDate(c.purchaseTime ?? c.createdAt)} · {formatPct(c.pct)} của {formatVnd(c.baseAmount)}
                   </p>
                 </div>
                 <p className="shrink-0 text-sm font-extrabold tabular-nums text-[var(--accent)]">+{formatVnd(c.amount)}</p>

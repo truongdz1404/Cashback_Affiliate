@@ -20,10 +20,23 @@ export function formatPct(value: number | string | null | undefined): string {
 // The backend hands back bare "YYYY-MM-DD HH:mm:ss" strings from the DB with
 // no zone marker; the mobile app reads those as UTC, so the web must too or
 // every timestamp shifts by the local offset.
+//
+// orders.purchase_time is a different animal: Shopee reports it as a Unix
+// timestamp and the column is TEXT, so it arrives as "1787855363". Passing
+// that digit string to `new Date()` yields Invalid Date, which is why every
+// "Ngày mua" column used to render "-". Seconds vs milliseconds is decided by
+// magnitude, the same rule the API uses in repositories/referralCommissions.js.
 function toDate(value: string | number | Date | null | undefined): Date | null {
   if (!value) return null;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   let raw = value;
+  if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
+    raw = Number(raw.trim());
+  }
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    raw = raw > 1e12 ? raw : raw * 1000;
+  }
   if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(raw)) {
     raw = `${raw.slice(0, 10)}T${raw.slice(11, 19)}Z`;
   }

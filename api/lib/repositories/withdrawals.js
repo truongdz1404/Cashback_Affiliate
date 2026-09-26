@@ -66,13 +66,33 @@ async function listForUser(userId, { limit, offset } = {}) {
   });
 }
 
+// The admin queue carries the payee's bank details with it. Paying a request
+// out is a manual transfer, and without these the admin had to leave the queue
+// and look the user up on the customers screen for every single row.
 async function listAll({ status } = {}) {
   const rows = await prisma.withdrawalRequest.findMany({
     where: status ? { status } : undefined,
     orderBy: { id: 'desc' },
-    include: { user: { select: { phone: true } } },
+    include: {
+      user: {
+        select: {
+          phone: true,
+          fullName: true,
+          bankName: true,
+          bankAccountNumber: true,
+          bankAccountHolder: true,
+        },
+      },
+    },
   });
-  return rows.map(({ user, ...withdrawal }) => ({ ...withdrawal, userPhone: user ? user.phone : null }));
+  return rows.map(({ user, ...withdrawal }) => ({
+    ...withdrawal,
+    userPhone: user ? user.phone : null,
+    userName: user ? user.fullName : null,
+    bankName: user ? user.bankName : null,
+    bankAccountNumber: user ? user.bankAccountNumber : null,
+    bankAccountHolder: user ? user.bankAccountHolder : null,
+  }));
 }
 
 // Only forward transitions out of a still-open state are allowed - a

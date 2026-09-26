@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { AlertDialog, Button, Card, Checkbox, Chip, Input, Label, ListBox, Select, Tabs, TextArea, TextField } from "@heroui/react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { AlertDialog, Button, Card, Checkbox, Chip, Input, Label, ListBox, Select, Tabs, TextArea, TextField, toast } from "@heroui/react";
 import HeroSlider from "@/components/public/HeroSlider";
 import { clientApi } from "@/lib/clientApi";
-import { PlusIcon, TrashIcon, UploadIcon } from "@/components/icons";
+import { ChevronDownIcon, ChevronUpIcon, PlusIcon, RefreshIcon, TrashIcon, UploadIcon } from "@/components/icons";
+import { EmptyState, ErrorBanner, PageHeader, SectionCard } from "@/components/admin/ui";
 
 // The app and the website keep separate banner lists: the app's carousel is a
 // phone-width card, the website's is a wide 2.4:1 strip, so an image that fits
@@ -116,17 +117,6 @@ const EMPTY_FORM: BannerFormState = {
   ...EMPTY_CONTENT,
   textAlign: "center",
 };
-
-function SectionCard({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Card>
-      <Card.Header>
-        <Card.Title>{title}</Card.Title>
-      </Card.Header>
-      <Card.Content>{children}</Card.Content>
-    </Card>
-  );
-}
 
 function BannerForm({
   platform,
@@ -441,8 +431,10 @@ function DeleteBannerButton({ banner, onDeleted }: { banner: Banner; onDeleted: 
     setDeleting(true);
     try {
       await clientApi.delete(`/api/banners/${banner.id}`);
+      toast.success("Đã xoá banner");
       onDeleted();
-    } catch {
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Xoá thất bại");
       setDeleting(false);
     }
   }
@@ -485,6 +477,7 @@ function BannerList({ platform, ratio, hint }: { platform: Platform; ratio: stri
   const [banners, setBanners] = useState<Banner[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<Banner["id"] | null>(null);
+  const [busyId, setBusyId] = useState<Banner["id"] | null>(null);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -503,22 +496,80 @@ function BannerList({ platform, ratio, hint }: { platform: Platform; ratio: stri
   function handleSaved() {
     setCreating(false);
     setEditingId(null);
+    toast.success("Đã lưu banner");
     load();
   }
 
+  async function toggleActive(b: Banner) {
+    setBusyId(b.id);
+    try {
+      await clientApi.put(`/api/banners/${b.id}`, { isActive: !b.isActive });
+      toast.success(b.isActive ? "Đã tắt banner" : "Đã bật banner");
+      await load();
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Đổi trạng thái thất bại");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Reordering used to mean opening two slides and editing two numbers by
+  // hand. Rather than swapping the pair's sortOrder - which does nothing at
+  // all when two rows already share a number, and duplicates are exactly what
+  // hand-editing produces - this renumbers the list 0..n-1 in its new order
+  // and writes only the rows whose number actually moved.
+  async function move(index: number, delta: number) {
+    if (!banners) return;
+    const moved = banners.slice();
+    const target = index + delta;
+    if (target < 0 || target >= moved.length) return;
+    [moved[index], moved[target]] = [moved[target], moved[index]];
+
+    setBusyId(banners[index].id);
+    try {
+      for (let i = 0; i < moved.length; i++) {
+        if (moved[i].sortOrder !== i) {
+          await clientApi.put(`/api/banners/${moved[i].id}`, { sortOrder: i });
+        }
+      }
+      await load();
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Đổi thứ tự thất bại");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const rows = banners || [];
+  const activeCount = rows.filter((b) => b.isActive).length;
+
   return (
     <div className="space-y-4 pt-4">
-      <div className="flex items-start justify-between gap-4">
-        <p className="text-xs text-[var(--muted)]">{hint}</p>
-        {!creating && (
-          <Button className="flex-none" onPress={() => setCreating(true)}>
-            <PlusIcon className="h-4 w-4" />
-            Thêm banner
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-[var(--muted)]">{hint}</p>
+          {banners && (
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              {rows.length} banner, {activeCount} đang hiển thị.
+              {rows.length > 0 && activeCount === 0 && " Đang chạy bộ ảnh mặc định."}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-none items-center gap-2">
+          <Button variant="outline" onPress={load}>
+            <RefreshIcon className="h-4 w-4" />
+            Làm mới
           </Button>
-        )}
+          {!creating && (
+            <Button onPress={() => setCreating(true)}>
+              <PlusIcon className="h-4 w-4" />
+              Thêm banner
+            </Button>
+          )}
+        </div>
       </div>
 
-      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
+      <ErrorBanner message={error} onRetry={load} />
 
       {creating && (
         <SectionCard title="Banner mới">
@@ -526,49 +577,85 @@ function BannerList({ platform, ratio, hint }: { platform: Platform; ratio: stri
         </SectionCard>
       )}
 
-      {banners && banners.length === 0 && !creating && (
-        <p className="text-sm text-[var(--muted)]">Chưa có banner nào cho phần này.</p>
+      {banners && rows.length === 0 && !creating && (
+        <Card>
+          <Card.Content>
+            <EmptyState
+              title="Chưa có banner nào cho phần này"
+              description='Bấm "Thêm banner" để tải ảnh lên. Khi danh sách trống, bộ ảnh mặc định vẫn hiển thị bình thường.'
+            />
+          </Card.Content>
+        </Card>
       )}
 
-      <div className="space-y-4">
-        {banners &&
-          banners.map((b) =>
-            editingId === b.id ? (
-              <SectionCard key={b.id} title={`Sửa banner #${b.id}`}>
-                <BannerForm
-                  platform={platform}
-                  ratio={ratio}
-                  initial={b}
-                  onSaved={handleSaved}
-                  onCancel={() => setEditingId(null)}
-                />
-              </SectionCard>
-            ) : (
-              <Card key={b.id}>
-                <Card.Content className="flex items-center gap-4">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={b.imageUrl} alt="" className="h-16 w-28 flex-none rounded-lg border border-[var(--border)] object-cover" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-[var(--foreground)]">Thứ tự {b.sortOrder}</span>
-                      <Chip color={b.isActive ? "success" : "danger"}>{b.isActive ? "Đang hiển thị" : "Tắt"}</Chip>
-                    </div>
-                    {b.title && (
-                      <p className="mt-0.5 truncate text-sm font-semibold text-[var(--foreground)]">{b.title}</p>
-                    )}
-                    <p className="mt-1 truncate text-xs text-[var(--muted)]">{b.imageUrl}</p>
-                    {b.linkUrl && <p className="mt-0.5 truncate text-xs text-[var(--muted)]">→ {b.linkUrl}</p>}
+      <div className="space-y-3">
+        {rows.map((b, i) =>
+          editingId === b.id ? (
+            <SectionCard key={b.id} title={`Sửa banner #${b.id}`}>
+              <BannerForm
+                platform={platform}
+                ratio={ratio}
+                initial={b}
+                onSaved={handleSaved}
+                onCancel={() => setEditingId(null)}
+              />
+            </SectionCard>
+          ) : (
+            <Card key={b.id}>
+              <Card.Content className="flex flex-wrap items-center gap-4">
+                <div className="flex flex-none flex-col gap-1">
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="ghost"
+                    aria-label="Đẩy lên trên"
+                    isDisabled={i === 0 || busyId !== null}
+                    onPress={() => move(i, -1)}
+                  >
+                    <ChevronUpIcon className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="ghost"
+                    aria-label="Đẩy xuống dưới"
+                    isDisabled={i === rows.length - 1 || busyId !== null}
+                    onPress={() => move(i, 1)}
+                  >
+                    <ChevronDownIcon className="h-4 w-4" />
+                  </Button>
+                </div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={b.imageUrl} alt="" className="h-16 w-28 flex-none rounded-lg border border-[var(--border)] object-cover" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-[var(--foreground)]">Thứ tự {b.sortOrder}</span>
+                    <Chip color={b.isActive ? "success" : "danger"}>{b.isActive ? "Đang hiển thị" : "Tắt"}</Chip>
                   </div>
-                  <div className="flex flex-none items-center gap-2">
-                    <Button size="sm" variant="outline" onPress={() => setEditingId(b.id)}>
-                      Sửa
-                    </Button>
-                    <DeleteBannerButton banner={b} onDeleted={load} />
-                  </div>
-                </Card.Content>
-              </Card>
-            )
-          )}
+                  {b.title && (
+                    <p className="mt-0.5 truncate text-sm font-semibold text-[var(--foreground)]">{b.title}</p>
+                  )}
+                  <p className="mt-1 truncate text-xs text-[var(--muted)]">{b.imageUrl}</p>
+                  {b.linkUrl && <p className="mt-0.5 truncate text-xs text-[var(--muted)]">→ {b.linkUrl}</p>}
+                </div>
+                <div className="flex flex-none items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant={b.isActive ? "outline" : "primary"}
+                    isPending={busyId === b.id}
+                    onPress={() => toggleActive(b)}
+                  >
+                    {b.isActive ? "Tắt" : "Bật"}
+                  </Button>
+                  <Button size="sm" variant="outline" onPress={() => setEditingId(b.id)}>
+                    Sửa
+                  </Button>
+                  <DeleteBannerButton banner={b} onDeleted={load} />
+                </div>
+              </Card.Content>
+            </Card>
+          ),
+        )}
       </div>
     </div>
   );
@@ -576,13 +663,11 @@ function BannerList({ platform, ratio, hint }: { platform: Platform; ratio: stri
 
 export default function BannersPage() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-[var(--foreground)]">Banner trang chủ</h1>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">
-          App và website dùng hai danh sách riêng. Sửa ở tab nào chỉ ảnh hưởng đúng nơi đó.
-        </p>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title="Banner trang chủ"
+        description="App và website dùng hai danh sách riêng. Sửa ở tab nào chỉ ảnh hưởng đúng nơi đó."
+      />
 
       <Tabs defaultSelectedKey="app">
         <Tabs.List aria-label="Nền tảng hiển thị banner">

@@ -1,8 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, Card, Chip, Input, Label, ListBox, Select, TextArea, TextField } from "@heroui/react";
+import { useCallback, useEffect, useState } from "react";
+import { Button, Chip, Input, Label, ListBox, Select, Tabs, TextArea, TextField } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
+import { PageHeader, SectionCard } from "@/components/admin/ui";
+
+// Ba nhóm cài đặt, mỗi nhóm một tab. Trang này gom bảy khối rất khác nhau, và
+// ba nhóm hỏng theo ba kiểu khác nhau — sai tiền, hết dữ liệu, chết đăng nhập
+// — nên tách ra vẫn dễ nhìn hơn là một cột dài bảy khối.
+const TABS: { id: string; label: string }[] = [
+  { id: "tien", label: "Tiền & hoa hồng" },
+  { id: "cao", label: "Cào dữ liệu & link" },
+  { id: "he-thong", label: "Hệ thống" },
+];
 
 type Settings = {
   commissionPct?: number | null;
@@ -57,18 +67,6 @@ const CONFIG_LABELS: Record<ConfigKey, string> = {
   facebookAppSecret: "Facebook App Secret",
 };
 
-function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
-  return (
-    <Card>
-      <Card.Header>
-        <Card.Title>{title}</Card.Title>
-        {description && <Card.Description>{description}</Card.Description>}
-      </Card.Header>
-      <Card.Content>{children}</Card.Content>
-    </Card>
-  );
-}
-
 function CommissionSection() {
   const [pct, setPct] = useState("");
   const [saving, setSaving] = useState(false);
@@ -102,6 +100,7 @@ function CommissionSection() {
 
   return (
     <SectionCard
+      id="hoa-hong"
       title="% Hoa hồng mặc định cho khách"
       description="Áp dụng cho khách chưa có mức riêng (tùy chỉnh theo từng khách ở trang Khách hàng)."
     >
@@ -182,6 +181,7 @@ function ReferralProgramSection() {
 
   return (
     <SectionCard
+      id="gioi-thieu"
       title="Chương trình giới thiệu bạn bè"
       description="Người giới thiệu nhận % trên số tiền hoàn của mỗi đơn hoàn thành do người được giới thiệu đặt. Khoản này lấy từ phần của hệ thống, không trừ vào hoàn tiền của người được giới thiệu."
     >
@@ -272,7 +272,7 @@ function MinWithdrawSection() {
   }
 
   return (
-    <SectionCard title="Số tiền rút tối thiểu" description="Áp dụng cho mọi yêu cầu thanh toán từ app, tính bằng đồng.">
+    <SectionCard id="rut-toi-thieu" title="Số tiền rút tối thiểu" description="Áp dụng cho mọi yêu cầu thanh toán từ app, tính bằng đồng.">
       <div className="flex items-center gap-2">
         <TextField
           name="minWithdrawAmount"
@@ -342,6 +342,7 @@ function AnRedirSection() {
 
   return (
     <SectionCard
+      id="an-redir"
       title="Link qua an_redir"
       description="Bao nhiêu phần trăm link MỚI được tạo bằng đường chuyển hướng chính thức của Shopee, thay cho cách tự dựng link. Link đã tạo rồi không đổi."
     >
@@ -485,6 +486,7 @@ function ProductOfferMaxPagesSection() {
 
   return (
     <SectionCard
+      id="cao-san-pham"
       title="Số trang cào sản phẩm Shopee (Mua sắm)"
       description="Số trang tối đa của affiliate.shopee.vn/offer/product_offer được cào mỗi lần chạy (20 sản phẩm/trang). Áp dụng cho cả lần chạy tự động 6h sáng và chạy tay bên dưới."
     >
@@ -600,6 +602,7 @@ function SecretsSection() {
 
   return (
     <SectionCard
+      id="env"
       title="Khoá cấu hình (env) có thể chỉnh sửa"
       description="Chỉ hiển thị 4 ký tự cuối. Nhập giá trị mới rồi bấm Cập nhật để đổi. Riêng SERVICE_API_KEY không quản lý ở đây vì đổi trực tiếp có thể khiến dashboard tự khoá quyền truy cập của chính nó (chỉ sửa được qua SSH)."
     >
@@ -678,6 +681,7 @@ function SessionSection() {
 
   return (
     <SectionCard
+      id="cookie"
       title="Phiên đăng nhập Shopee Affiliate (cookie)"
       description="Dán cookie đã đăng nhập affiliate.shopee.vn (chuỗi 'name=value; name2=value2' hoặc JSON mảng cookie) để cập nhật phiên khi cookie hết hạn."
     >
@@ -704,14 +708,36 @@ function SessionSection() {
 export default function SettingsPage() {
   return (
     <div className="space-y-6">
-      <h1 className="text-lg font-semibold text-[var(--foreground)]">Cài đặt</h1>
-      <CommissionSection />
-      <ReferralProgramSection />
-      <MinWithdrawSection />
-      <AnRedirSection />
-      <ProductOfferMaxPagesSection />
-      <SecretsSection />
-      <SessionSection />
+      <PageHeader
+        title="Cài đặt"
+        description="Các tham số vận hành của hệ thống. Mỗi khối lưu riêng, đổi xong là có hiệu lực ngay với app và website."
+      />
+
+      <Tabs defaultSelectedKey="tien">
+        <Tabs.List aria-label="Nhóm cài đặt">
+          {TABS.map((t) => (
+            <Tabs.Tab key={t.id} id={t.id}>
+              {t.label}
+            </Tabs.Tab>
+          ))}
+        </Tabs.List>
+
+        <Tabs.Panel id="tien" className="space-y-6">
+          <CommissionSection />
+          <ReferralProgramSection />
+          <MinWithdrawSection />
+        </Tabs.Panel>
+
+        <Tabs.Panel id="cao" className="space-y-6">
+          <AnRedirSection />
+          <ProductOfferMaxPagesSection />
+        </Tabs.Panel>
+
+        <Tabs.Panel id="he-thong" className="space-y-6">
+          <SecretsSection />
+          <SessionSection />
+        </Tabs.Panel>
+      </Tabs>
     </div>
   );
 }

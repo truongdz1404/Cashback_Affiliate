@@ -1,9 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, Card, Checkbox, Chip, Input, Label, TextArea, TextField } from "@heroui/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button, Card, Checkbox, Chip, Input, Label, TextArea, TextField, toast } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
-import { PlusIcon } from "@/components/icons";
+import { formatAmount } from "@/lib/format";
+import { useDebounced } from "@/lib/useDebounced";
+import { PlusIcon, RefreshIcon } from "@/components/icons";
+import {
+  EmptyState,
+  ErrorBanner,
+  FilterChips,
+  PageHeader,
+  SearchInput,
+  SectionCard,
+  SelectFilter,
+  StatCard,
+  StatGrid,
+  Toolbar,
+  type FilterOption,
+} from "@/components/admin/ui";
 
 type Tier = { amount: number; reward: number };
 
@@ -28,6 +43,13 @@ type CampaignFormState = {
 
 const EMPTY_FORM: CampaignFormState = { title: "", description: "", startsAt: "", endsAt: "", tiersJson: "[]", isActive: true };
 
+const STATUS_OPTIONS: FilterOption[] = [
+  { value: "", label: "Mọi trạng thái" },
+  { value: "active", label: "Đang chạy" },
+  { value: "inactive", label: "Đang tắt" },
+  { value: "ended", label: "Đã hết hạn" },
+];
+
 function toDateTimeLocal(value?: string | null) {
   if (!value) return "";
   return value.replace(" ", "T").slice(0, 16);
@@ -38,15 +60,18 @@ function fromDateTimeLocal(value: string) {
   return value.replace("T", " ") + ":00";
 }
 
-function SectionCard({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Card>
-      <Card.Header>
-        <Card.Title>{title}</Card.Title>
-      </Card.Header>
-      <Card.Content>{children}</Card.Content>
-    </Card>
-  );
+// "Đang chạy" on the app side means isActive AND inside the window, so the
+// admin list has to say the same thing - a campaign left switched on past its
+// end date shows as expired here rather than as running, because expired is
+// what the user actually sees.
+function hasEnded(c: Campaign) {
+  if (!c.endsAt) return false;
+  const end = new Date(c.endsAt.replace(" ", "T"));
+  return !Number.isNaN(end.getTime()) && end.getTime() < Date.now();
+}
+
+function totalReward(c: Campaign) {
+  return (c.tiers || []).reduce((sum, t) => sum + (Number(t.reward) || 0), 0);
 }
 
 function CampaignForm({
@@ -203,9 +228,14 @@ export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<Campaign["id"] | null>(null);
+  const [togglingId, setTogglingId] = useState<Campaign["id"] | null>(null);
   const [error, setError] = useState("");
+  const [filters, setFilters] = useState({ q: "", status: "" });
+
+  const q = useDebounced(filters.q).trim().toLowerCase();
 
   const load = useCallback(async () => {
+    setError("");
     try {
       setCampaigns(await clientApi.get<Campaign[]>("/api/campaigns"));
     } catch (err) {
@@ -220,22 +250,84 @@ export default function CampaignsPage() {
   function handleSaved() {
     setCreating(false);
     setEditingId(null);
+    toast.success("Đã lưu sự kiện");
     load();
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-[var(--foreground)]">Sự kiện</h1>
-        {!creating && (
-          <Button onPress={() => setCreating(true)}>
-            <PlusIcon className="h-4 w-4" />
-            Tạo sự kiện
-          </Button>
-        )}
-      </div>
+  async function toggleActive(c: Campaign) {
+    setTogglingId(c.id);
+    try {
+      await clientApi.put(`/api/campaigns/${c.id}`, { isActive: !c.isActive });
+      toast.success(c.isActive ? "Đã tắt sự kiện" : "Đã bật sự kiện");
+      await load();
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : "Đổi trạng thái thất bại");
+    } finally {
+      setTogglingId(null);
+    }
+  }
 
-      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
+  const rows = useMemo(() => campaigns || [], [campaigns]);
+
+  const filtered = useMemo(
+    () =>
+      rows.filter((c) => {
+        if (q && !`${c.title} ${c.description || ""}`.toLowerCase().includes(q)) return false;
+        if (filters.status === "active") return c.isActive && !hasEnded(c);
+        if (filters.status === "inactive") return !c.isActive;
+        if (filters.status === "ended") return hasEnded(c);
+        return true;
+      }),
+    [rows, q, filters.status],
+  );
+
+  const stats = useMemo(
+    () => ({
+      running: rows.filter((c) => c.isActive && !hasEnded(c)).length,
+      off: rows.filter((c) => !c.isActive).length,
+      tiers: rows.reduce((sum, c) => sum + (c.tiers || []).length, 0),
+    }),
+    [rows],
+  );
+
+  const chips = [
+    filters.q && { label: `Tìm: ${filters.q}`, onClear: () => setFilters((f) => ({ ...f, q: "" })) },
+    filters.status && {
+      label: STATUS_OPTIONS.find((o) => o.value === filters.status)!.label,
+      onClear: () => setFilters((f) => ({ ...f, status: "" })),
+    },
+  ].filter(Boolean) as { label: string; onClear: () => void }[];
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Sự kiện"
+        count={rows.length}
+        description='Mốc thưởng theo tổng tiền hoàn đã thanh toán trong khoảng thời gian của sự kiện. Hiển thị ở tab "Sự kiện" trong app.'
+        actions={
+          <>
+            <Button variant="outline" onPress={load}>
+              <RefreshIcon className="h-4 w-4" />
+              Làm mới
+            </Button>
+            {!creating && (
+              <Button onPress={() => setCreating(true)}>
+                <PlusIcon className="h-4 w-4" />
+                Tạo sự kiện
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      <ErrorBanner message={error} onRetry={load} />
+
+      <StatGrid>
+        <StatCard label="Tổng sự kiện" value={rows.length.toLocaleString("vi-VN")} />
+        <StatCard label="Đang chạy" value={stats.running.toLocaleString("vi-VN")} tone="success" />
+        <StatCard label="Đang tắt" value={stats.off.toLocaleString("vi-VN")} tone="muted" />
+        <StatCard label="Tổng số mốc thưởng" value={stats.tiers.toLocaleString("vi-VN")} />
+      </StatGrid>
 
       {creating && (
         <SectionCard title="Sự kiện mới">
@@ -243,40 +335,92 @@ export default function CampaignsPage() {
         </SectionCard>
       )}
 
-      {campaigns && campaigns.length === 0 && !creating && <p className="text-sm text-[var(--muted)]">Chưa có sự kiện nào.</p>}
+      <Toolbar>
+        <SearchInput
+          value={filters.q}
+          onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
+          placeholder="Tìm theo tiêu đề hoặc mô tả…"
+        />
+        <SelectFilter
+          label="Trạng thái"
+          value={filters.status}
+          options={STATUS_OPTIONS}
+          onChange={(v) => setFilters((f) => ({ ...f, status: v }))}
+        />
+        <Button variant="ghost" size="sm" onPress={() => setFilters({ q: "", status: "" })} isDisabled={!chips.length}>
+          Xoá lọc
+        </Button>
+      </Toolbar>
 
-      <div className="space-y-4">
-        {campaigns &&
-          campaigns.map((c) =>
-            editingId === c.id ? (
-              <SectionCard key={c.id} title={`Sửa: ${c.title}`}>
-                <CampaignForm initial={c} onSaved={handleSaved} onCancel={() => setEditingId(null)} />
-              </SectionCard>
-            ) : (
-              <Card key={c.id}>
-                <Card.Content>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-semibold text-[var(--foreground)]">{c.title}</h3>
-                        <Chip color={c.isActive ? "success" : "danger"}>{c.isActive ? "Đang chạy" : "Tắt"}</Chip>
-                      </div>
-                      {c.description && <p className="mt-1 text-xs text-[var(--muted)]">{c.description}</p>}
-                      <p className="mt-1 text-xs text-[var(--muted)]">
-                        {c.startsAt || "không giới hạn"} → {c.endsAt || "không giới hạn"}
-                      </p>
-                      <p className="mt-2 text-xs text-[var(--foreground)]">
-                        Mốc: {(c.tiers || []).map((t) => `hoàn ${t.amount}đ → thưởng ${t.reward}đ`).join(", ") || "chưa có"}
-                      </p>
+      <FilterChips items={chips} />
+
+      <div className="space-y-3">
+        {campaigns && filtered.length === 0 && !creating && (
+          <Card>
+            <Card.Content>
+              <EmptyState
+                title={rows.length ? "Không có sự kiện nào khớp bộ lọc" : "Chưa có sự kiện nào"}
+                description={rows.length ? "Thử xoá bớt bộ lọc." : 'Bấm "Tạo sự kiện" để thêm mốc thưởng đầu tiên.'}
+              />
+            </Card.Content>
+          </Card>
+        )}
+
+        {filtered.map((c) =>
+          editingId === c.id ? (
+            <SectionCard key={c.id} title={`Sửa: ${c.title}`}>
+              <CampaignForm initial={c} onSaved={handleSaved} onCancel={() => setEditingId(null)} />
+            </SectionCard>
+          ) : (
+            <Card key={c.id}>
+              <Card.Content>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-semibold text-[var(--foreground)]">{c.title}</h3>
+                      <Chip color={c.isActive ? "success" : "danger"}>{c.isActive ? "Đang chạy" : "Tắt"}</Chip>
+                      {hasEnded(c) && <Chip color="warning">Đã hết hạn</Chip>}
                     </div>
+                    {c.description && <p className="mt-1 text-xs text-[var(--muted)]">{c.description}</p>}
+                    <p className="mt-1 text-xs text-[var(--muted)]">
+                      {c.startsAt || "không giới hạn"} → {c.endsAt || "không giới hạn"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant={c.isActive ? "outline" : "primary"}
+                      isPending={togglingId === c.id}
+                      onPress={() => toggleActive(c)}
+                    >
+                      {c.isActive ? "Tắt" : "Bật"}
+                    </Button>
                     <Button size="sm" variant="outline" onPress={() => setEditingId(c.id)}>
                       Sửa
                     </Button>
                   </div>
-                </Card.Content>
-              </Card>
-            )
-          )}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-[var(--border)] pt-3">
+                  {(c.tiers || []).length === 0 ? (
+                    <span className="text-xs text-[var(--muted)]">Chưa có mốc thưởng nào.</span>
+                  ) : (
+                    <>
+                      {(c.tiers || []).map((t, i) => (
+                        <Chip key={i} size="sm">
+                          {formatAmount(t.amount)} → thưởng {formatAmount(t.reward)}
+                        </Chip>
+                      ))}
+                      <span className="ml-1 text-xs text-[var(--muted)]">
+                        tối đa {formatAmount(totalReward(c))} mỗi người
+                      </span>
+                    </>
+                  )}
+                </div>
+              </Card.Content>
+            </Card>
+          ),
+        )}
       </div>
     </div>
   );

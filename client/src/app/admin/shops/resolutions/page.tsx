@@ -2,12 +2,24 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card, Chip, InputGroup, Label, ListBox, Modal, Select, Table, TextField, toast } from "@heroui/react";
+import { Button, Chip, Modal, Table, toast } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
 import { formatDateTime } from "@/lib/format";
-import { ArrowRightIcon, SearchIcon } from "@/components/icons";
-
-const PAGE_SIZE = 50;
+import { datedFilename, downloadCsv } from "@/lib/exportCsv";
+import { useDebounced } from "@/lib/useDebounced";
+import { ArrowRightIcon, DownloadIcon, RefreshIcon } from "@/components/icons";
+import {
+  EmptyState,
+  ErrorBanner,
+  FilterChips,
+  PageHeader,
+  Pagination,
+  SearchInput,
+  SectionCard,
+  SelectFilter,
+  TableShell,
+  Toolbar,
+} from "@/components/admin/ui";
 
 type Candidate = {
   shop_id: string | null;
@@ -256,8 +268,10 @@ export default function ShopNameResolutionsPage() {
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [status, setStatus] = useState("ambiguous");
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const search = useDebounced(searchInput.trim());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -267,8 +281,8 @@ export default function ShopNameResolutionsPage() {
     setError("");
     try {
       const params = new URLSearchParams({
-        limit: String(PAGE_SIZE),
-        offset: String(page * PAGE_SIZE),
+        limit: String(pageSize),
+        offset: String(page * pageSize),
       });
       if (status !== "all") params.set("status", status);
       if (search) params.set("search", search);
@@ -285,44 +299,68 @@ export default function ShopNameResolutionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, status]);
+  }, [page, pageSize, search, status]);
 
   useEffect(() => {
     load();
   }, [load, reloadKey]);
 
+  // Đổi bộ lọc mà giữ nguyên offset thì rơi vào trang trống của kết quả mới.
+  useEffect(() => {
+    setPage(0);
+  }, [search, status, pageSize]);
+
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const chips = [
+    search ? { label: `Tìm: ${search}`, onClear: () => setSearchInput("") } : null,
+    status !== "ambiguous"
+      ? { label: STATUS_FILTERS.find((f) => f.value === status)?.label ?? status, onClear: () => setStatus("ambiguous") }
+      : null,
+  ].filter(Boolean) as { label: string; onClear: () => void }[];
+
+  function exportPage() {
+    downloadCsv(datedFilename("tra-ten-shop"), items, [
+      { header: "Tên shop", value: (r) => r.shopName },
+      { header: "Trạng thái", value: (r) => STATUS_META[r.status]?.label || r.status },
+      { header: "Sản phẩm", value: (r) => r.productCount },
+      { header: "shop_id", value: (r) => r.shopId || "" },
+      { header: "Số lần tra", value: (r) => r.attempts },
+      { header: "Tra lần cuối", value: (r) => (r.lastAttemptAt ? formatDateTime(r.lastAttemptAt) : "") },
+      { header: "Tra lại lúc", value: (r) => (r.nextAttemptAt ? formatDateTime(r.nextAttemptAt) : "") },
+      { header: "Lỗi", value: (r) => r.lastError || "" },
+    ]);
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--foreground)]">Hàng đợi tra tên shop</h1>
-          <p className="mt-0.5 max-w-3xl text-xs text-[var(--muted)]">
-            Mỗi dòng là một tên shop lấy từ bảng sản phẩm. Job nền so khớp <strong>chính xác từng ký tự</strong> với tên shop
-            Shopee trả về — không bỏ dấu, không cắt hậu tố. Khi có đúng một kết quả trùng khít thì tự gán; trùng từ hai trở
-            lên thì dừng lại chờ người chọn, vì gán nhầm shop còn tệ hơn để trống.
-          </p>
-        </div>
-        <Link
-          href="/admin/shops"
-          className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--surface-secondary)]"
-        >
-          Danh sách shop
-          <ArrowRightIcon className="h-4 w-4" />
-        </Link>
-      </div>
+      <PageHeader
+        title="Hàng đợi tra tên shop"
+        count={total}
+        description="Mỗi dòng là một tên shop lấy từ bảng sản phẩm. Job nền so khớp chính xác từng ký tự với tên shop Shopee trả về — không bỏ dấu, không cắt hậu tố. Khi có đúng một kết quả trùng khít thì tự gán; trùng từ hai trở lên thì dừng lại chờ người chọn, vì gán nhầm shop còn tệ hơn để trống."
+        actions={
+          <>
+            <Link
+              href="/admin/shops"
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--surface-secondary)]"
+            >
+              Danh sách shop
+              <ArrowRightIcon className="h-4 w-4" />
+            </Link>
+            <Button variant="outline" size="sm" onPress={refresh} isPending={loading}>
+              <RefreshIcon className="h-4 w-4" />
+              Làm mới
+            </Button>
+          </>
+        }
+      />
 
       <div className="flex flex-wrap gap-2">
         {STATUS_FILTERS.filter((f) => f.value !== "all").map((f) => (
           <button
             key={f.value}
             type="button"
-            onClick={() => {
-              setPage(0);
-              setStatus(f.value);
-            }}
+            onClick={() => setStatus(f.value)}
             className={`rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
               status === f.value
                 ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
@@ -334,55 +372,43 @@ export default function ShopNameResolutionsPage() {
         ))}
       </div>
 
-      <Card>
-        <Card.Content>
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <div className="max-w-xs flex-1">
-              <TextField
-                name="search"
-                value={search}
-                onChange={(v) => {
-                  setPage(0);
-                  setSearch(v);
+      <SectionCard bodyClassName="space-y-4">
+        <Toolbar
+          trailing={
+            <>
+              <Button variant="ghost" size="sm" onPress={exportPage} isDisabled={!items.length}>
+                <DownloadIcon className="h-4 w-4" />
+                Xuất CSV
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onPress={() => {
+                  setSearchInput("");
+                  setStatus("ambiguous");
                 }}
-                aria-label="Tìm tên shop"
+                isDisabled={!chips.length}
               >
-                <Label className="sr-only">Tìm tên shop</Label>
-                <InputGroup>
-                  <InputGroup.Prefix>
-                    <SearchIcon className="h-4 w-4 text-[var(--muted)]" />
-                  </InputGroup.Prefix>
-                  <InputGroup.Input placeholder="Tìm tên shop..." />
-                </InputGroup>
-              </TextField>
-            </div>
-            <Select
-              aria-label="Lọc theo trạng thái"
-              selectedKey={status}
-              onSelectionChange={(key) => {
-                setPage(0);
-                setStatus(String(key ?? "ambiguous"));
-              }}
-            >
-              <Select.Trigger className="min-w-[180px]">
-                <Select.Value />
-                <Select.Indicator />
-              </Select.Trigger>
-              <Select.Popover>
-                <ListBox>
-                  {STATUS_FILTERS.map((opt) => (
-                    <ListBox.Item key={opt.value} id={opt.value}>
-                      {opt.label}
-                    </ListBox.Item>
-                  ))}
-                </ListBox>
-              </Select.Popover>
-            </Select>
-            <span className="text-xs text-[var(--muted)]">{total.toLocaleString("vi-VN")} dòng</span>
-          </div>
+                Xoá lọc
+              </Button>
+            </>
+          }
+        >
+          <SearchInput value={searchInput} onChange={setSearchInput} placeholder="Tìm tên shop…" />
+          <SelectFilter
+            label="Lọc theo trạng thái"
+            value={status}
+            options={STATUS_FILTERS}
+            onChange={setStatus}
+            className="min-w-[180px]"
+          />
+        </Toolbar>
 
-          {error && <p className="mb-3 text-sm text-[var(--danger)]">{error}</p>}
+        <FilterChips items={chips} />
 
+        <ErrorBanner message={error} onRetry={refresh} />
+
+        <TableShell isLoading={loading}>
           <Table>
             <Table.ScrollContainer>
               <Table.Content aria-label="Hàng đợi tra tên shop" className="min-w-[1020px]">
@@ -397,9 +423,10 @@ export default function ShopNameResolutionsPage() {
                 </Table.Header>
                 <Table.Body
                   renderEmptyState={() => (
-                    <span className="text-sm text-[var(--muted)]">
-                      {loading ? "Đang tải..." : "Không có dòng nào ở trạng thái này"}
-                    </span>
+                    <EmptyState
+                      title={loading ? "Đang tải…" : "Không có dòng nào ở trạng thái này"}
+                      description={loading ? undefined : "Hàng đợi sạch, hoặc bộ lọc đang quá hẹp."}
+                    />
                   )}
                 >
                   {items.map((r) => (
@@ -409,32 +436,10 @@ export default function ShopNameResolutionsPage() {
               </Table.Content>
             </Table.ScrollContainer>
           </Table>
+        </TableShell>
 
-          <div className="mt-4 flex items-center justify-between text-sm text-[var(--muted)]">
-            <span>
-              Trang {page + 1} / {totalPages}
-            </span>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onPress={() => setPage((p) => Math.max(0, p - 1))}
-                isDisabled={page === 0 || loading}
-              >
-                Trước
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onPress={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                isDisabled={page >= totalPages - 1 || loading}
-              >
-                Sau
-              </Button>
-            </div>
-          </div>
-        </Card.Content>
-      </Card>
+        <Pagination page={page} pageSize={pageSize} total={total} onPage={setPage} onPageSize={setPageSize} />
+      </SectionCard>
     </div>
   );
 }

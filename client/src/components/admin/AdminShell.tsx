@@ -36,7 +36,7 @@ export default function AdminShell({ admin, children }: { admin: AdminIdentity; 
           <span className="text-sm font-semibold text-[var(--foreground)]">Rewally · Quản trị</span>
         </header>
 
-        <main className="mx-auto max-w-6xl px-4 py-6 md:px-8 md:py-8">{children}</main>
+        <main className="mx-auto max-w-[1400px] px-4 py-6 md:px-8 md:py-8">{children}</main>
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ const { LINK_SOURCES, GUEST_SUB_ID, productTapSource } = require('./lib/linkSour
 const usersRepo = require('./lib/repositories/users');
 const linksRepo = require('./lib/repositories/links');
 const ordersRepo = require('./lib/repositories/orders');
+const analyticsRepo = require('./lib/repositories/analytics');
 const settingsRepo = require('./lib/repositories/settings');
 const appConfigRepo = require('./lib/repositories/appConfig');
 const campaignsRepo = require('./lib/repositories/campaigns');
@@ -100,6 +101,27 @@ function sendShopeeApiError(res, err) {
  * silently returns the wrong end of the table - and throws outright on a
  * negative `skip`. Clamped here once instead of at seventeen call sites.
  */
+// Date params arrive as 'YYYY-MM-DD' from a date input. Anything else is
+// rejected rather than coerced: `new Date('last tuesday')` is Invalid Date,
+// and a silently-dropped filter is worse than an error.
+function parseDay(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const d = new Date(`${text}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : text;
+}
+
+// Reports are read in Vietnam, so "today" is today there - on a server running
+// in UTC, 07:00 Hanoi is still yesterday without the shift.
+function today() {
+  return new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+function daysBefore(day, n) {
+  return new Date(new Date(`${day}T00:00:00Z`).getTime() - n * 86400000).toISOString().slice(0, 10);
+}
+
 function parseLimit(value, fallback, max) {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -2016,12 +2038,20 @@ app.get('/admin/customers', adminAuth.requireAdmin, async (_req, res) => {
   }
 });
 
+// q searches the order's own columns plus the owning user's phone/email/name;
+// from/to are inclusive 'YYYY-MM-DD' days in Vietnamese local time; sort is
+// one of the keys in ordersRepo's whitelist. Everything is optional - with no
+// query string this is the same newest-first page it always was.
 app.get('/admin/orders', adminAuth.requireAdmin, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 50, 200);
     const offset = parseOffset(req.query.offset);
-    const { payoutStatus, displayStatus } = req.query;
-    const opts = { limit, offset, payoutStatus, displayStatus };
+    const { payoutStatus, displayStatus, q, sort } = req.query;
+    const from = parseDay(req.query.from);
+    const to = parseDay(req.query.to);
+    if (req.query.from && !from) return res.status(400).json({ error: 'query.from must be YYYY-MM-DD' });
+    if (req.query.to && !to) return res.status(400).json({ error: 'query.to must be YYYY-MM-DD' });
+    const opts = { limit, offset, payoutStatus, displayStatus, q, from, to, sort };
     res.json({ orders: await ordersRepo.listOrders(opts), total: await ordersRepo.countOrders(opts) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2083,6 +2113,22 @@ app.put('/admin/campaign-rewards/:id/payout', adminAuth.requireAdmin, async (req
 app.get('/admin/stats', adminAuth.requireAdmin, async (_req, res) => {
   try {
     res.json(await ordersRepo.statsSummary());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Everything the admin reports screen draws: daily series, window totals with
+// the same-length previous window to compare against, top products, top
+// customers and the order-status mix. One round trip rather than six, because
+// every panel on that screen shares the same date window.
+app.get('/admin/analytics', adminAuth.requireAdmin, async (req, res) => {
+  try {
+    const to = parseDay(req.query.to) || today();
+    const from = parseDay(req.query.from) || daysBefore(to, 29);
+    if (from > to) return res.status(400).json({ error: 'query.from must not be after query.to' });
+    const topLimit = parseLimit(req.query.topLimit, 8, 50);
+    res.json(await analyticsRepo.overview({ from, to, topLimit }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2189,18 +2235,27 @@ app.get('/admin/shops/resolve', adminAuth.requireAdmin, (_req, res) => {
 app.get('/admin/shops', adminAuth.requireAdmin, async (req, res) => {
   try {
     const status = req.query.status === 'all' ? undefined : req.query.status || 'linked';
+    const visibility = req.query.visibility;
     const filters = {
       search: req.query.search || undefined,
       status,
       featuredOnly: req.query.featured === '1' ? true : undefined,
+      isActive: visibility === 'active' ? true : visibility === 'hidden' ? false : undefined,
     };
     const limit = parseLimit(req.query.limit, 50, 100);
     const offset = parseOffset(req.query.offset);
-    const [items, total] = await Promise.all([
+    // The four counts are what the dashboard's summary cards show, and they
+    // deliberately ignore the current filters: they are the denominators the
+    // filtered total is read against.
+    const [items, total, linked, discovered, hidden, featured] = await Promise.all([
       shopsRepo.list({ ...filters, limit, offset, sort: req.query.sort }),
       shopsRepo.count(filters),
+      shopsRepo.count({ status: 'linked' }),
+      shopsRepo.count({ status: 'discovered' }),
+      shopsRepo.count({ isActive: false }),
+      shopsRepo.count({ featuredOnly: true }),
     ]);
-    res.json({ items, total });
+    res.json({ items, total, counts: { linked, discovered, hidden, featured } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2443,16 +2498,31 @@ app.delete('/admin/banners/:id', adminAuth.requireAdmin, async (req, res) => {
 // admin can also drop in the same list file by hand here - same
 // upsert-by-productId semantics either way, so a manual import never
 // duplicates rows the scraper already collected.
+// The admin catalogue gets the same filters the app's shopping tab has, so
+// "which imported rows have no price" or "what did this shop send us" can be
+// answered here instead of in psql. `categories` rides along on every response
+// because the dropdown that uses it changes only when the crawler runs.
+const ADMIN_PRODUCT_SORTS = ['newest', 'price_asc', 'price_desc', 'commission_desc', 'commission_asc'];
+
 app.get('/admin/shopping-products', adminAuth.requireAdmin, async (req, res) => {
   try {
     const limit = parseLimit(req.query.limit, 20, 100);
     const offset = parseOffset(req.query.offset);
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-    const [items, total] = await Promise.all([
-      shoppingProductsRepo.list({ limit, offset, search, sort: 'newest' }),
-      shoppingProductsRepo.count({ search }),
+    const sort = ADMIN_PRODUCT_SORTS.includes(req.query.sort) ? req.query.sort : 'newest';
+    const filters = {
+      search,
+      category: typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined,
+      shopId: typeof req.query.shopId === 'string' && req.query.shopId ? req.query.shopId : undefined,
+      isBestSeller: req.query.isBestSeller === 'true' ? true : undefined,
+      isXtraCommission: req.query.isXtraCommission === 'true' ? true : undefined,
+    };
+    const [items, total, categories] = await Promise.all([
+      shoppingProductsRepo.list({ limit, offset, sort, ...filters }),
+      shoppingProductsRepo.count(filters),
+      shoppingProductsRepo.listCategories(),
     ]);
-    res.json({ items, total });
+    res.json({ items, total, categories });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

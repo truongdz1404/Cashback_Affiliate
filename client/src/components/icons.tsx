@@ -61,6 +61,9 @@ export const CheckIcon = iconsax("tick");
 export const ChevronLeftIcon = iconsax("arrow-left-2");
 export const ChevronRightIcon = iconsax("arrow-right-2");
 export const ChevronDownIcon = iconsax("arrow-down-2");
+// Cùng nét với ChevronDownIcon, lật ngược 180° — vẽ riêng "arrow-up-2" thì hai
+// mũi tên đứng cạnh nhau sẽ lệch nhau vài pixel.
+export const ChevronUpIcon = iconsax("arrow-down-2", "rotate(180 12 12)");
 export const ArrowRightIcon = iconsax("arrow-right");
 export const ExternalLinkIcon = iconsax("export-square");
 export const LinkIcon = iconsax("link");

@@ -244,7 +244,7 @@ const SORTS = {
 
 // Shared by list() and count() so a filtered page and its total can never
 // disagree - same arrangement as lib/repositories/shoppingProducts.js:35-74.
-function buildWhere({ search, status, featuredOnly, visibleOnly } = {}) {
+function buildWhere({ search, status, featuredOnly, visibleOnly, isActive } = {}) {
   const where = visibleOnly ? { ...VISIBLE_WHERE } : {};
   if (search && search.trim()) {
     // Folded, like searchRanked below and the product list: this is the same
@@ -257,6 +257,9 @@ function buildWhere({ search, status, featuredOnly, visibleOnly } = {}) {
   // visibility default so admins can inspect `discovered` rows.
   if (status) where.status = status;
   if (featuredOnly === true) where.isFeatured = true;
+  // Admin-only: the kill switch is invisible in the app (a hidden shop simply
+  // is not there), so the dashboard is the only place it can be audited.
+  if (isActive === true || isActive === false) where.isActive = isActive;
   return where;
 }
 

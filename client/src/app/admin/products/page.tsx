@@ -1,37 +1,66 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { AlertDialog, Button, Card, InputGroup, Label, Table, TextField, toast } from "@heroui/react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { AlertDialog, Button, Card, Chip, Table, toast } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
 import { formatAmount, formatDateTime } from "@/lib/format";
-import { SearchIcon, TrashIcon, UploadIcon } from "@/components/icons";
-
-const PAGE_SIZE = 20;
+import { useDebounced } from "@/lib/useDebounced";
+import { datedFilename, downloadCsv } from "@/lib/exportCsv";
+import { DownloadIcon, RefreshIcon, TrashIcon, UploadIcon } from "@/components/icons";
+import {
+  EmptyState,
+  ErrorBanner,
+  FilterChips,
+  PageHeader,
+  Pagination,
+  SearchInput,
+  SectionCard,
+  SelectFilter,
+  StatCard,
+  StatGrid,
+  TableShell,
+  Toolbar,
+  type FilterOption,
+} from "@/components/admin/ui";
 
 type Product = {
   id: number | string;
   name: string;
   shopName?: string | null;
+  shopId?: string | null;
+  category?: string | null;
   priceValue?: number | null;
   priceText?: string | null;
   commissionRateText?: string | null;
   commissionText?: string | null;
+  isBestSeller?: boolean | null;
+  isXtraCommission?: boolean | null;
   scrapedAt?: string | null;
+};
+
+type ProductsResponse = {
+  items: Product[];
+  total: number;
+  categories?: { category: string; count: number }[];
 };
 
 type ImportResult = { rows: number; parsed: number; saved: number };
 
-function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
-  return (
-    <Card>
-      <Card.Header>
-        <Card.Title>{title}</Card.Title>
-        {description && <Card.Description>{description}</Card.Description>}
-      </Card.Header>
-      <Card.Content>{children}</Card.Content>
-    </Card>
-  );
-}
+const SORT_OPTIONS: FilterOption[] = [
+  { value: "newest", label: "Mới cào nhất" },
+  { value: "price_desc", label: "Giá cao → thấp" },
+  { value: "price_asc", label: "Giá thấp → cao" },
+  { value: "commission_desc", label: "Hoa hồng cao nhất" },
+  { value: "commission_asc", label: "Hoa hồng thấp nhất" },
+];
+
+const TAG_OPTIONS: FilterOption[] = [
+  { value: "", label: "Mọi sản phẩm" },
+  { value: "isBestSeller", label: "Bán chạy" },
+  { value: "isXtraCommission", label: "Hoa hồng Xtra" },
+];
+
+const EMPTY_FILTERS = { q: "", category: "", tag: "", sort: "newest" };
 
 function ImportSection({ onImported }: { onImported: () => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -78,10 +107,10 @@ function ImportSection({ onImported }: { onImported: () => void }) {
         />
         <Button onPress={() => fileInputRef.current?.click()} isDisabled={importing} isPending={importing}>
           <UploadIcon className="h-4 w-4" />
-          {importing ? "Đang import..." : "Chọn file để import"}
+          {importing ? "Đang import…" : "Chọn file để import"}
         </Button>
         {result && (
-          <p className="text-sm text-[var(--success-soft-foreground)]">
+          <p className="text-sm text-[var(--success)]">
             Đã đọc {result.rows} dòng, {result.parsed} sản phẩm hợp lệ, lưu {result.saved} sản phẩm.
           </p>
         )}
@@ -121,7 +150,9 @@ function DeleteProductButton({ product, onDeleted }: { product: Product; onDelet
             </AlertDialog.Header>
             <AlertDialog.Body>
               <p className="truncate">{product.name}</p>
-              <p className="mt-1 text-sm text-[var(--muted)]">Sản phẩm sẽ không còn hiển thị trong tab &quot;Mua sắm&quot; của app.</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                Sản phẩm sẽ không còn hiển thị trong tab &quot;Mua sắm&quot; của app.
+              </p>
             </AlertDialog.Body>
             <AlertDialog.Footer>
               <Button slot="close" variant="tertiary" isDisabled={deleting}>
@@ -141,136 +172,242 @@ function DeleteProductButton({ product, onDeleted }: { product: Product; onDelet
 export default function ShoppingProductsPage() {
   const [items, setItems] = useState<Product[]>([]);
   const [total, setTotal] = useState(0);
+  const [categories, setCategories] = useState<{ category: string; count: number }[]>([]);
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [page, setPage] = useState(0);
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  const q = useDebounced(filters.q).trim();
+
+  const params = useMemo(() => {
+    const p = new URLSearchParams({
+      limit: String(pageSize),
+      offset: String(page * pageSize),
+      sort: filters.sort,
+    });
+    if (q) p.set("search", q);
+    if (filters.category) p.set("category", filters.category);
+    if (filters.tag) p.set(filters.tag, "true");
+    return p.toString();
+  }, [pageSize, page, filters.sort, filters.category, filters.tag, q]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
-      if (search) params.set("search", search);
-      const data = await clientApi.get<{ items: Product[]; total: number }>(`/api/shopping-products?${params.toString()}`);
+      const data = await clientApi.get<ProductsResponse>(`/api/shopping-products?${params}`);
       setItems(data.items || []);
       setTotal(data.total || 0);
+      if (data.categories) setCategories(data.categories);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không tải được danh sách sản phẩm");
     } finally {
       setLoading(false);
     }
-  }, [page, search]);
+  }, [params]);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  // A filter change that kept the old offset would land on page 12 of a
+  // three-page result and show an empty table.
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setPage(0);
-      setSearch(searchInput.trim());
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [searchInput]);
+    setPage(0);
+  }, [q, filters.category, filters.tag, filters.sort, pageSize]);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const categoryOptions = useMemo<FilterOption[]>(
+    () => [
+      { value: "", label: "Mọi ngành hàng" },
+      ...categories.map((c) => ({ value: c.category, label: `${c.category} (${c.count})` })),
+    ],
+    [categories],
+  );
+
+  const pageStats = useMemo(() => {
+    const withPrice = items.filter((p) => p.priceValue != null);
+    return {
+      shops: new Set(items.map((p) => p.shopName).filter(Boolean)).size,
+      avgPrice: withPrice.length
+        ? withPrice.reduce((sum, p) => sum + (p.priceValue || 0), 0) / withPrice.length
+        : 0,
+      noPrice: items.length - withPrice.length,
+    };
+  }, [items]);
+
+  function setFilter<K extends keyof typeof EMPTY_FILTERS>(key: K, value: string) {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function exportPage() {
+    downloadCsv(
+      datedFilename("san-pham"),
+      items,
+      [
+        { header: "ID", value: (p) => p.id },
+        { header: "Tên sản phẩm", value: (p) => p.name },
+        { header: "Shop", value: (p) => p.shopName || "" },
+        { header: "Ngành hàng", value: (p) => p.category || "" },
+        { header: "Giá", value: (p) => p.priceValue ?? p.priceText ?? "" },
+        { header: "Tỷ lệ hoa hồng", value: (p) => p.commissionRateText || "" },
+        { header: "Hoa hồng", value: (p) => p.commissionText || "" },
+        { header: "Cào lúc", value: (p) => formatDateTime(p.scrapedAt) },
+      ],
+    );
+  }
+
+  const chips = [
+    filters.q && { label: `Tìm: ${filters.q}`, onClear: () => setFilter("q", "") },
+    filters.category && { label: filters.category, onClear: () => setFilter("category", "") },
+    filters.tag && {
+      label: TAG_OPTIONS.find((o) => o.value === filters.tag)!.label,
+      onClear: () => setFilter("tag", ""),
+    },
+  ].filter(Boolean) as { label: string; onClear: () => void }[];
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-[var(--foreground)]">Sản phẩm ({total})</h1>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">
-          Danh sách sản phẩm hoàn tiền hiển thị ở tab &quot;Mua sắm&quot; trong app. Được cào tự động hằng ngày, hoặc import thủ công bên dưới.
-        </p>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title="Sản phẩm"
+        count={total}
+        description='Danh sách sản phẩm hoàn tiền hiển thị ở tab "Mua sắm" trong app. Được cào tự động hằng ngày, hoặc import thủ công bên dưới.'
+        actions={
+          <>
+            <Button variant="outline" onPress={exportPage} isDisabled={!items.length}>
+              <DownloadIcon className="h-4 w-4" />
+              Xuất trang này
+            </Button>
+            <Button variant="outline" onPress={load} isDisabled={loading}>
+              <RefreshIcon className="h-4 w-4" />
+              Làm mới
+            </Button>
+          </>
+        }
+      />
 
       <ImportSection onImported={load} />
 
-      <SectionCard title="Danh sách sản phẩm">
-        <div className="mb-4 max-w-xs">
-          <TextField name="search" value={searchInput} onChange={setSearchInput} aria-label="Tìm sản phẩm">
-            <Label className="sr-only">Tìm sản phẩm</Label>
-            <InputGroup>
-              <InputGroup.Prefix>
-                <SearchIcon className="h-4 w-4 text-[var(--muted)]" />
-              </InputGroup.Prefix>
-              <InputGroup.Input placeholder="Tìm theo tên sản phẩm..." />
-            </InputGroup>
-          </TextField>
-        </div>
+      <ErrorBanner message={error} onRetry={load} />
 
-        {error && <p className="mb-3 text-sm text-[var(--danger)]">{error}</p>}
+      <StatGrid>
+        <StatCard label="Sản phẩm khớp bộ lọc" value={total.toLocaleString("vi-VN")} />
+        <StatCard label="Ngành hàng" value={categories.length.toLocaleString("vi-VN")} />
+        <StatCard label="Shop trong trang này" value={pageStats.shops.toLocaleString("vi-VN")} />
+        <StatCard
+          label="Thiếu giá trong trang này"
+          value={pageStats.noPrice.toLocaleString("vi-VN")}
+          tone={pageStats.noPrice ? "warning" : "muted"}
+          hint={pageStats.avgPrice ? `TB ${formatAmount(pageStats.avgPrice)}` : undefined}
+        />
+      </StatGrid>
 
-        <Table>
-          <Table.ScrollContainer>
-            <Table.Content aria-label="Danh sách sản phẩm" className="min-w-[720px]">
-              <Table.Header>
-                <Table.Column isRowHeader>Sản phẩm</Table.Column>
-                <Table.Column>Shop</Table.Column>
-                <Table.Column className="text-right">Giá</Table.Column>
-                <Table.Column className="text-right">Hoa hồng</Table.Column>
-                <Table.Column>Cập nhật</Table.Column>
-                <Table.Column className="text-right">Thao tác</Table.Column>
-              </Table.Header>
-              <Table.Body
-                renderEmptyState={() => (
-                  <span className="text-sm text-[var(--muted)]">
-                    {loading ? "Đang tải..." : "Chưa có sản phẩm nào"}
-                  </span>
-                )}
-              >
-                {items.map((p) => (
-                  <Table.Row key={p.id}>
-                    <Table.Cell>
-                      <span className="block max-w-[260px] truncate" title={p.name}>
-                        {p.name}
-                      </span>
-                    </Table.Cell>
-                    <Table.Cell>{p.shopName || "-"}</Table.Cell>
-                    <Table.Cell className="text-right">
-                      {p.priceValue != null ? formatAmount(p.priceValue) : p.priceText || "-"}
-                    </Table.Cell>
-                    <Table.Cell className="text-right">
-                      {p.commissionRateText || "-"}
-                      {p.commissionText ? ` · ${p.commissionText}` : ""}
-                    </Table.Cell>
-                    <Table.Cell>{formatDateTime(p.scrapedAt)}</Table.Cell>
-                    <Table.Cell className="text-right">
-                      <DeleteProductButton product={p} onDeleted={load} />
-                    </Table.Cell>
-                  </Table.Row>
-                ))}
-              </Table.Body>
-            </Table.Content>
-          </Table.ScrollContainer>
-        </Table>
+      <Toolbar>
+        <SearchInput
+          value={filters.q}
+          onChange={(v) => setFilter("q", v)}
+          placeholder="Tìm theo tên sản phẩm…"
+        />
+        <SelectFilter
+          label="Ngành hàng"
+          value={filters.category}
+          options={categoryOptions}
+          onChange={(v) => setFilter("category", v)}
+          className="min-w-[200px]"
+        />
+        <SelectFilter label="Nhãn" value={filters.tag} options={TAG_OPTIONS} onChange={(v) => setFilter("tag", v)} />
+        <SelectFilter
+          label="Sắp xếp"
+          value={filters.sort}
+          options={SORT_OPTIONS}
+          onChange={(v) => setFilter("sort", v)}
+          className="min-w-[190px]"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          onPress={() => setFilters(EMPTY_FILTERS)}
+          isDisabled={!chips.length && filters.sort === "newest"}
+        >
+          Xoá lọc
+        </Button>
+      </Toolbar>
 
-        <div className="mt-4 flex items-center justify-between text-sm text-[var(--muted)]">
-          <span>
-            Trang {page + 1} / {totalPages}
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onPress={() => setPage((p) => Math.max(0, p - 1))}
-              isDisabled={page === 0 || loading}
-            >
-              Trước
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onPress={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              isDisabled={page >= totalPages - 1 || loading}
-            >
-              Sau
-            </Button>
-          </div>
-        </div>
-      </SectionCard>
+      <FilterChips items={chips} />
+
+      <Card>
+        <Card.Content className="space-y-4">
+          <TableShell isLoading={loading}>
+            <Table>
+              <Table.ScrollContainer>
+                <Table.Content aria-label="Danh sách sản phẩm" className="min-w-[900px]">
+                  <Table.Header>
+                    <Table.Column isRowHeader>Sản phẩm</Table.Column>
+                    <Table.Column>Shop</Table.Column>
+                    <Table.Column>Ngành hàng</Table.Column>
+                    <Table.Column className="text-right">Giá</Table.Column>
+                    <Table.Column className="text-right">Hoa hồng</Table.Column>
+                    <Table.Column>Cập nhật</Table.Column>
+                    <Table.Column className="text-right">Thao tác</Table.Column>
+                  </Table.Header>
+                  <Table.Body
+                    renderEmptyState={() => (
+                      <EmptyState
+                        title={loading ? "Đang tải…" : "Không có sản phẩm nào"}
+                        description={loading ? undefined : "Thử đổi từ khoá, ngành hàng hoặc import thêm file."}
+                      />
+                    )}
+                  >
+                    {items.map((p) => (
+                      <Table.Row key={p.id}>
+                        <Table.Cell>
+                          <span className="flex items-center gap-1.5">
+                            <span className="block max-w-[280px] truncate font-medium text-[var(--foreground)]" title={p.name}>
+                              {p.name}
+                            </span>
+                            {p.isBestSeller && (
+                              <Chip size="sm" color="warning">
+                                Bán chạy
+                              </Chip>
+                            )}
+                            {p.isXtraCommission && (
+                              <Chip size="sm" color="accent">
+                                Xtra
+                              </Chip>
+                            )}
+                          </span>
+                        </Table.Cell>
+                        <Table.Cell className="text-[var(--muted)]">{p.shopName || "-"}</Table.Cell>
+                        <Table.Cell className="text-[var(--muted)]">{p.category || "-"}</Table.Cell>
+                        <Table.Cell className="text-right tabular-nums">
+                          {p.priceValue != null ? formatAmount(p.priceValue) : p.priceText || "-"}
+                        </Table.Cell>
+                        <Table.Cell className="text-right tabular-nums">
+                          {p.commissionRateText || "-"}
+                          {p.commissionText ? ` · ${p.commissionText}` : ""}
+                        </Table.Cell>
+                        <Table.Cell className="text-[var(--muted)]">{formatDateTime(p.scrapedAt)}</Table.Cell>
+                        <Table.Cell className="text-right">
+                          <DeleteProductButton product={p} onDeleted={load} />
+                        </Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Content>
+              </Table.ScrollContainer>
+            </Table>
+          </TableShell>
+
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPage={setPage}
+            onPageSize={setPageSize}
+          />
+        </Card.Content>
+      </Card>
     </div>
   );
 }
