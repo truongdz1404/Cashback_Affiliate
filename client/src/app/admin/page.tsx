@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Chip, Spinner, toast } from "@heroui/react";
 import { clientApi } from "@/lib/clientApi";
 import { formatAmount, formatDateTime } from "@/lib/format";
@@ -22,6 +22,7 @@ import {
   CoinIcon,
   ReceiptIcon,
   RefreshIcon,
+  ShieldIcon,
   StoreIcon,
   TrendUpIcon,
   UserPlusIcon,
@@ -56,6 +57,41 @@ type Withdrawal = {
 
 type Resolutions = { counts?: Record<string, number> };
 
+// GET /admin/shopee-api/health?probe=1 - what Shopee says about our affiliate
+// account right now, not what this service last assumed.
+type ShopeeProbe = {
+  ok?: boolean;
+  error?: string;
+  affiliateId?: string | null;
+  validAffiliateId?: string | null;
+  accountStatus?: number | null;
+  reviewStatus?: number | null;
+  stopCommissionCalculation?: boolean | null;
+  stopCommissionCalculationTime?: string | null;
+  frozenReason?: string | null;
+  banDate?: number | string | null;
+  allowToLogin?: boolean | null;
+  programType?: number | null;
+};
+
+type ShopeeHealth = {
+  transport?: string;
+  blocked?: boolean;
+  blockedUntil?: string | null;
+  probe?: ShopeeProbe;
+};
+
+type JobRun = {
+  id: number;
+  job: string;
+  status: string;
+  trigger: string;
+  startedAt: string;
+  durationMs?: number | null;
+  resultJson?: string | null;
+  error?: string | null;
+};
+
 type ReferralRow = { id: number; amount: number; payoutStatus: string };
 
 const moneyTick = (value: number) => compactNumber(value) + "đ";
@@ -80,6 +116,9 @@ export default function OverviewPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [reconciling, setReconciling] = useState(false);
+  // Bumped after a manual reconcile so the panel below re-reads "đối soát gần
+  // nhất" instead of still showing the previous run.
+  const [shopeeReloadKey, setShopeeReloadKey] = useState(0);
 
   const load = useCallback(async () => {
     setError("");
@@ -117,8 +156,13 @@ export default function OverviewPage() {
   async function runReconcile() {
     setReconciling(true);
     try {
-      await clientApi.post("/api/reconcile");
-      toast.success("Đã đối soát xong");
+      const result = await clientApi.post<{ skipped?: boolean; upserted?: number }>("/api/reconcile");
+      toast.success(
+        result?.skipped
+          ? "Một lượt đối soát khác đang chạy — đã bỏ qua lượt này"
+          : `Đã đối soát xong (${result?.upserted ?? 0} đơn được ghi)`,
+      );
+      setShopeeReloadKey((k) => k + 1);
       await load();
     } catch (err) {
       toast.danger(err instanceof Error ? err.message : "Đối soát thất bại");
@@ -419,6 +463,8 @@ export default function OverviewPage() {
         )}
       </SectionCard>
 
+      <ShopeeStatusSection reloadKey={shopeeReloadKey} />
+
       <SectionCard title="Luỹ kế toàn hệ thống" description="Không giới hạn theo ngày.">
         <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-5">
           {[
@@ -436,5 +482,258 @@ export default function OverviewPage() {
         </div>
       </SectionCard>
     </div>
+  );
+}
+
+// How long we let "đối soát gần nhất" get before saying so. The cron runs
+// hourly, so anything past three hours means two ticks went missing - which is
+// exactly the failure this panel exists to make visible, and exactly the one
+// that used to need an SSH session to notice.
+const RECONCILE_STALE_MS = 3 * 60 * 60 * 1000;
+
+function Field({ label, value, tone = "default" }: { label: string; value: ReactNode; tone?: "default" | "danger" }) {
+  return (
+    <div>
+      <p className="text-xs text-[var(--muted)]">{label}</p>
+      <p
+        className={`mt-0.5 text-sm font-medium tabular-nums ${
+          tone === "danger" ? "text-[var(--danger)]" : "text-[var(--foreground)]"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * "Is Shopee still paying us?" - one panel instead of a shell on the VPS.
+ *
+ * This exists because of a real incident: an order placed through one of our
+ * links never turned into commission, and answering "why" meant SSH-ing to the
+ * box, running a script inside the API container and reading Shopee's
+ * /user/status by hand. Everything that investigation needed is on screen here.
+ *
+ * The probe is a live call to Shopee on every mount, deliberately. A cached
+ * answer cannot tell you the account was frozen twenty minutes ago, and the
+ * whole class of problem this catches is silent - status: 1 with commission
+ * calculation quietly switched off looks identical to "nobody bought anything".
+ * The API client rate-limits and circuit-breaks its own calls, and this screen
+ * gets a few dozen views a day, so one call per mount is affordable.
+ */
+function ShopeeStatusSection({ reloadKey }: { reloadKey: number }) {
+  const [health, setHealth] = useState<ShopeeHealth | null>(null);
+  const [lastRun, setLastRun] = useState<JobRun | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      // Independent, and the probe is the slow one - no reason for the job-run
+      // row to wait behind a round trip to Shopee.
+      const [h, runs] = await Promise.all([
+        clientApi.get<ShopeeHealth>("/api/shopee-api/health?probe=1"),
+        clientApi.get<{ items: JobRun[] }>("/api/job-runs?job=order-reconcile&limit=1"),
+      ]);
+      setHealth(h);
+      setLastRun(runs.items?.[0] ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Không đọc được tình trạng Shopee");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load, reloadKey]);
+
+  const probe = health?.probe;
+
+  // Everything that would stop commission arriving, worst first. Each line
+  // names the raw field, because the next person debugging this will be
+  // comparing it against Shopee's own API response.
+  const problems = useMemo(() => {
+    const list: string[] = [];
+    if (!health) return list;
+    if (health.blocked) {
+      list.push(
+        `Cầu dao API đang mở — Shopee đang chặn, thử lại sau ${
+          health.blockedUntil ? formatDateTime(health.blockedUntil) : "ít phút"
+        }`,
+      );
+    }
+    if (!probe) return list;
+    if (probe.ok === false) {
+      list.push(`Không hỏi được Shopee: ${probe.error || "lỗi không rõ"}`);
+      return list;
+    }
+    if (probe.stopCommissionCalculation === true) {
+      list.push(
+        `Shopee đã NGỪNG tính hoa hồng cho tài khoản này${
+          probe.stopCommissionCalculationTime ? ` (từ ${probe.stopCommissionCalculationTime})` : ""
+        } — đơn mới sẽ không được ghi nhận`,
+      );
+    }
+    // The nastiest failure mode there is: links keep working, keep looking
+    // right, and credit somebody else's account.
+    if (probe.affiliateId && probe.validAffiliateId && probe.affiliateId !== probe.validAffiliateId) {
+      list.push(
+        `affiliate_id (${probe.affiliateId}) khác id Shopee sẽ ghi nhận (${probe.validAffiliateId}) — link đang trả hoa hồng về tài khoản khác`,
+      );
+    }
+    if (probe.accountStatus != null && probe.accountStatus !== 1) {
+      list.push(`Tài khoản không ở trạng thái hoạt động (status = ${probe.accountStatus})`);
+    }
+    if (probe.reviewStatus != null && probe.reviewStatus !== 1) {
+      list.push(`Tài khoản chưa được duyệt (review_status = ${probe.reviewStatus})`);
+    }
+    if (probe.frozenReason) list.push(`Tài khoản bị đóng băng: ${probe.frozenReason}`);
+    if (probe.banDate) list.push(`Tài khoản có ban_date = ${probe.banDate}`);
+    if (probe.allowToLogin === false) list.push("Shopee không cho tài khoản này đăng nhập (allow_to_login = false)");
+    return list;
+  }, [health, probe]);
+
+  const reconcileAgeMs = lastRun ? Date.now() - new Date(lastRun.startedAt).getTime() : null;
+  const reconcileStale = reconcileAgeMs != null && reconcileAgeMs > RECONCILE_STALE_MS;
+
+  // `{"processed":41,"upserted":7,"totalCount":7,"pages":1}` reads better as a
+  // sentence, but a job whose result shape changes must not crash the panel.
+  const lastResult = useMemo(() => {
+    if (!lastRun?.resultJson) return null;
+    try {
+      const r = JSON.parse(lastRun.resultJson) as { processed?: number; upserted?: number; totalCount?: number };
+      if (r.processed == null && r.upserted == null) return lastRun.resultJson;
+      return `${r.processed ?? 0} đơn đọc từ Shopee, ${r.upserted ?? 0} đơn ghi vào DB${
+        r.totalCount != null ? `, Shopee báo tổng ${r.totalCount}` : ""
+      }`;
+    } catch {
+      return lastRun.resultJson;
+    }
+  }, [lastRun]);
+
+  return (
+    <SectionCard
+      title="Tình trạng Shopee"
+      description="Hỏi thẳng Shopee về tài khoản affiliate, kèm lượt đối soát gần nhất. Đây là chỗ để biết vì sao đơn không lên hoa hồng."
+      actions={
+        <Button variant="outline" onPress={load} isDisabled={loading}>
+          <RefreshIcon className="h-4 w-4" />
+          Kiểm tra lại
+        </Button>
+      }
+    >
+      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
+
+      {loading && !health && (
+        <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
+          <Spinner size="sm" />
+          Đang hỏi Shopee…
+        </div>
+      )}
+
+      {health && (
+        <div className="space-y-4">
+          {problems.length > 0 ? (
+            <div className="rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/8 px-3 py-2.5">
+              <p className="text-sm font-semibold text-[var(--danger)]">Có vấn đề cần xử lý</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-[var(--danger)]">
+                {problems.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            probe?.ok && (
+              <p className="flex items-center gap-1.5 text-sm text-[var(--success)]">
+                <ShieldIcon className="h-4 w-4" />
+                Tài khoản affiliate đang hoạt động bình thường
+                {/* Only claim this when Shopee actually answered the flag. An
+                    older API build does not return it, and "vẫn đang tính hoa
+                    hồng" is the one sentence on this screen that must never be
+                    a guess - it is the exact thing someone comes here to check. */}
+                {probe.stopCommissionCalculation == null ? "." : ", Shopee vẫn đang tính hoa hồng."}
+              </p>
+            )
+          )}
+
+          <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
+            <Field label="affiliate_id" value={probe?.affiliateId || "-"} />
+            <Field
+              label="Trạng thái tài khoản"
+              value={
+                probe?.accountStatus == null
+                  ? "-"
+                  : probe.accountStatus === 1
+                    ? "Hoạt động (1)"
+                    : `Bất thường (${probe.accountStatus})`
+              }
+              tone={probe?.accountStatus != null && probe.accountStatus !== 1 ? "danger" : "default"}
+            />
+            <Field
+              label="Trạng thái duyệt"
+              value={
+                probe?.reviewStatus == null
+                  ? "-"
+                  : probe.reviewStatus === 1
+                    ? "Đã duyệt (1)"
+                    : `Chưa duyệt (${probe.reviewStatus})`
+              }
+              tone={probe?.reviewStatus != null && probe.reviewStatus !== 1 ? "danger" : "default"}
+            />
+            <Field
+              label="Shopee tính hoa hồng"
+              value={
+                probe?.stopCommissionCalculation == null
+                  ? "-"
+                  : probe.stopCommissionCalculation
+                    ? "ĐÃ NGỪNG"
+                    : "Đang tính"
+              }
+              tone={probe?.stopCommissionCalculation ? "danger" : "default"}
+            />
+          </div>
+
+          <div className="border-t border-[var(--border)] pt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Đối soát gần nhất</p>
+            {!lastRun ? (
+              <p className="mt-1.5 text-sm text-[var(--muted)]">
+                Chưa có lượt nào được ghi lại. Nhật ký đối soát bắt đầu từ bản deploy này — lượt đầu tiên sẽ xuất hiện ở
+                đây trong vòng một giờ.
+              </p>
+            ) : (
+              <div className="mt-1.5 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Chip
+                    color={lastRun.status === "done" ? "success" : lastRun.status === "error" ? "danger" : "warning"}
+                  >
+                    {lastRun.status === "done" ? "thành công" : lastRun.status === "error" ? "lỗi" : "đang chạy"}
+                  </Chip>
+                  <span className={reconcileStale ? "font-medium text-[var(--warning)]" : "text-[var(--foreground)]"}>
+                    {formatDateTime(lastRun.startedAt)}
+                  </span>
+                  <span className="text-xs text-[var(--muted)]">
+                    {lastRun.trigger === "cron" ? "tự động" : lastRun.trigger === "boot" ? "khi khởi động" : "bấm tay"}
+                    {lastRun.durationMs != null && ` · ${Math.max(1, Math.round(lastRun.durationMs / 1000))}s`}
+                  </span>
+                </div>
+                {lastRun.error ? (
+                  <p className="text-sm text-[var(--danger)]">{lastRun.error}</p>
+                ) : (
+                  lastResult && <p className="text-sm text-[var(--muted)]">{lastResult}</p>
+                )}
+                {reconcileStale && lastRun.status !== "running" && (
+                  <p className="text-sm text-[var(--warning)]">
+                    Đã quá 3 giờ chưa có lượt đối soát nào — cron chạy mỗi giờ, nên nhiều khả năng service đang gặp sự cố.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </SectionCard>
   );
 }

@@ -468,8 +468,23 @@ async function getApiHealth({ probe = false } = {}) {
     health.probe = {
       ok: true,
       affiliateId: status?.affiliate_id == null ? null : String(status.affiliate_id),
+      // Shopee answers with the id it will actually credit. If it ever differs
+      // from affiliate_id, every link already in the wild is paying someone
+      // else and nothing else in this service would notice.
+      validAffiliateId: status?.valid_affiliate_id == null ? null : String(status.valid_affiliate_id),
       accountStatus: status?.status ?? null,
       reviewStatus: status?.review_status ?? null,
+      // The quiet killer. An account can read status: 1 / review_status: 1 and
+      // still have commission calculation switched off, which looks exactly
+      // like "orders stopped arriving" - old orders intact, nothing new ever
+      // again. Tracking down one unrecorded order cost a shell on the VPS
+      // purely because this flag was not visible anywhere.
+      stopCommissionCalculation: status?.stop_commission_calculation ?? null,
+      stopCommissionCalculationTime: status?.stop_commission_calculation_time || null,
+      frozenReason: status?.frozen_reason || null,
+      banDate: status?.ban_date || null,
+      allowToLogin: status?.allow_to_login ?? null,
+      programType: status?.program_type ?? null,
     };
   } catch (err) {
     health.probe = { ok: false, error: `${err.name}: ${err.message}` };

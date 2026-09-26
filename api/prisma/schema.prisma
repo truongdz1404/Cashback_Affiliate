@@ -670,7 +670,8 @@ model ShopNameResolution {
 // block or an expired session needs to leave a trace that outlives a restart.
 model JobRun {
   id         Int       @id @default(autoincrement())
-  // product-offer-sync | category-backfill | shop-name-resolve | shop-product-crawl
+  // order-reconcile | product-offer-sync | category-backfill | shop-name-resolve
+  // | shop-product-crawl | shop-link-backfill | shop-detail-enrich
   job        String
   // running | done | error
   status     String    @default("running")

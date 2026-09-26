@@ -12,6 +12,7 @@ const { getEffectivePct, splitAmount } = require('./commissionSplit');
 // orders.raw_json for the app's order card - both must use the same scale.
 const { SHOPEE_AMOUNT_SCALE } = require('./orderItems');
 const { parseSubId } = require('./subId');
+const { withJobRun } = require('./jobRunner');
 
 const REPORT_LIST_URL = 'https://affiliate.shopee.vn/api/v3/report/list';
 const PAGE_SIZE = 50;
@@ -197,4 +198,32 @@ async function reconcileOrders({ extraParams = {} } = {}) {
   return { processed, upserted, totalCount, pages: pageNum };
 }
 
-module.exports = { reconcileOrders };
+/**
+ * The scheduled/admin entry point: reconcileOrders plus an audit row and a
+ * one-at-a-time guard.
+ *
+ * The audit row exists because "did the reconcile actually run?" used to be
+ * answerable only by SSH-ing to the box and reading container logs - and a
+ * deploy recreates the containers, so those logs are gone on every push. An
+ * order that never showed up as commission is exactly the moment someone needs
+ * that answer, and that is the moment the evidence was missing.
+ *
+ * The guard exists because this now runs hourly rather than every six hours, so
+ * a run that overruns its slot stopped being hypothetical. Two of them paging
+ * the same report would race on the same order rows and spend twice the Shopee
+ * calls to reach the same state. A skipped run deliberately leaves NO row: it
+ * did no work, and the point of the table is to show work.
+ */
+let running = null;
+
+async function runReconcile({ trigger = 'cron' } = {}) {
+  if (running) return { skipped: true, reason: `một lượt đối soát khác đang chạy (${running})` };
+  running = trigger;
+  try {
+    return await withJobRun('order-reconcile', trigger, () => reconcileOrders());
+  } finally {
+    running = null;
+  }
+}
+
+module.exports = { reconcileOrders, runReconcile };

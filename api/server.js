@@ -52,7 +52,7 @@ const adminAuth = require('./lib/adminAuth');
 const appAuth = require('./lib/appAuth');
 const oauthLogin = require('./lib/oauthLogin');
 const configStore = require('./lib/configStore');
-const { reconcileOrders } = require('./lib/reconciliation');
+const { runReconcile } = require('./lib/reconciliation');
 const { runHealthCheck } = require('./lib/healthCheck');
 const { rateLimit } = require('./lib/simpleRateLimit');
 const { getEffectivePct, estimateFromResult, toPublicProducts } = require('./lib/commissionSplit');
@@ -2136,7 +2136,7 @@ app.get('/admin/analytics', adminAuth.requireAdmin, async (req, res) => {
 
 app.post('/admin/reconcile', adminAuth.requireAdmin, async (_req, res) => {
   try {
-    const result = await reconcileOrders();
+    const result = await runReconcile({ trigger: 'admin' });
     res.json(result);
   } catch (err) {
     res.status(502).json({ error: err.message });
@@ -2644,6 +2644,20 @@ app.listen(PORT, () => {
     .then((count) => count > 0 && console.log(`job-runs: đánh dấu ${count} lượt chạy bị ngắt do restart`))
     .catch((err) => console.error('job-runs: zombie sweep failed', err.message));
 
+  // Reconcile once after boot instead of waiting up to an hour for the cron.
+  // This repo auto-deploys on every push, so a restart landing just after the
+  // hour used to mean the next sweep was a full cycle away; worse, a deploy
+  // that killed a run mid-sweep left that run's orders unrecorded until the
+  // cycle after. Delayed rather than immediate because boot is already the
+  // busiest moment for this process (browser warm-up, zombie sweep, bank seed)
+  // and reconcile needs a live Shopee session, which the browser is still
+  // bringing up.
+  setTimeout(() => {
+    runReconcile({ trigger: 'boot' })
+      .then((result) => console.log(`boot reconcile: ${JSON.stringify(result)}`))
+      .catch((err) => console.error('boot reconcile failed', err.message));
+  }, 90_000).unref();
+
   // One-time seed: only hits VietQR if the banks table is still empty (fresh
   // DB / first deploy after this migration), so normal restarts don't
   // re-download 65 logos every time.
@@ -2654,10 +2668,21 @@ app.listen(PORT, () => {
     .catch((err) => console.error('banks: initial sync failed', err.message));
 });
 
-// Order reconciliation, every 6 hours - also triggerable on demand via
-// POST /admin/reconcile.
-cron.schedule('0 */6 * * *', () => {
-  reconcileOrders()
+// Order reconciliation, hourly - also triggerable on demand via
+// POST /admin/reconcile, and once shortly after boot (see app.listen above).
+//
+// Was every 6 hours. Hourly because six hours is a long time to not know that
+// Shopee has stopped returning orders, and because the report endpoint is one
+// cheap JSON call per 50 orders - at the current volume the whole sweep is a
+// single page. Every run leaves a row in `job_runs` (lib/reconciliation.js),
+// which is what makes "has the reconcile been running?" answerable from the
+// dashboard instead of from a shell on the VPS.
+//
+// Minute 41 rather than :00 on purpose, same discipline as the jobs below:
+// :00 already carries the 6:00 offer scrape, the half-hourly health check and
+// the quarter-hourly category backfill, and this box has two cores.
+cron.schedule('41 * * * *', () => {
+  runReconcile({ trigger: 'cron' })
     .then((result) => console.log(`cron reconcile: ${JSON.stringify(result)}`))
     .catch((err) => console.error('cron reconcile failed', err.message));
 });
